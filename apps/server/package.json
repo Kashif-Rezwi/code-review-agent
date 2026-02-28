@@ -20,13 +20,17 @@
     "test:e2e": "jest --config ./test/jest-e2e.json"
   },
   "dependencies": {
+    "@ai-sdk/openai": "^3.0.37",
+    "@cra/ai": "workspace:*",
+    "@cra/types": "workspace:*",
     "@nestjs/common": "^11.0.1",
+    "@nestjs/config": "^4.0.3",
     "@nestjs/core": "^11.0.1",
     "@nestjs/platform-express": "^11.0.1",
+    "ai": "^6.0.105",
+    "openai": "^6.25.0",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.1",
-    "@cra/types": "workspace:*",
-    "@cra/ai": "workspace:*"
+    "rxjs": "^7.8.1"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",

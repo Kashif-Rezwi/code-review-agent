@@ -1,13 +1,14 @@
 {
   "name": "code-review-agent",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "private": true,
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "pnpm build:packages && concurrently \"pnpm --filter client dev\" \"pnpm --filter server start:dev\"",
+    "build:packages": "pnpm --filter @cra/types build && pnpm --filter @cra/ai build",
+    "build": "pnpm build:packages && pnpm --filter client build && pnpm --filter server build",
+    "lint": "pnpm -r lint",
+    "type-check": "pnpm -r type-check"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "packageManager": "pnpm@10.30.3"
+  "devDependencies": {
+    "concurrently": "^8.0.0"
+  }
 }

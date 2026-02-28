@@ -1,8 +1,16 @@
 {
     "name": "@cra/types",
     "version": "0.0.1",
-    "main": "src/index.ts",
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
     "scripts": {
-        "type-check": "tsc --noEmit"
+        "build": "tsc",
+        "dev": "tsc --watch"
+    },
+    "dependencies": {
+        "zod": "^3.25.76"
+    },
+    "devDependencies": {
+        "typescript": "^5.9.3"
     }
 }
