@@ -1,0 +1,17 @@
+# env files — never commit these
+apps/client/.env.local
+apps/client/.env
+apps/server/.env
+
+# dependencies
+node_modules/
+apps/*/node_modules/
+packages/*/node_modules/
+
+# build outputs
+apps/client/.next/
+apps/server/dist/
+packages/types/dist/
+packages/ai/dist/
+
+apps/client/package-lock.json
