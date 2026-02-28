@@ -19,10 +19,13 @@
    - [Week 6 — Auth, Payments & Database](#week-6--auth-payments--database)
    - [Week 7 — Production Hardening](#week-7--production-hardening)
    - [Week 8 — Launch](#week-8--launch)
-6. [Folder Structure](#folder-structure)
-7. [Environment Variables](#environment-variables)
-8. [How to Use This Document](#how-to-use-this-document)
-9. [Interview Cheat Sheet](#interview-cheat-sheet)
+6. [Architecture Overview](#architecture-overview)
+7. [NestJS Backend — Module Breakdown](#nestjs-backend--module-breakdown)
+8. [Folder Structure](#folder-structure)
+9. [Environment Variables](#environment-variables)
+10. [Deployment & CI/CD](#deployment--cicd)
+11. [How to Use This Document](#how-to-use-this-document)
+12. [Interview Cheat Sheet](#interview-cheat-sheet)
 
 ---
 
@@ -75,16 +78,18 @@ Every tool here was chosen because it is (a) what the market is actually hiring 
 
 | Layer | Technology | Why |
 |-------|-----------|-----|
-| Frontend | Next.js 14 (App Router) + TypeScript | Industry standard for AI SaaS frontends |
+| **Frontend** | Next.js 14 (App Router) + TypeScript | Industry standard for AI SaaS frontends; UI only — no business logic |
 | Styling | Tailwind CSS + shadcn/ui | Fast, professional UI without custom CSS overhead |
-| AI Orchestration | Vercel AI SDK | Best-in-class streaming, tool calling, and provider abstraction |
+| **Backend** | NestJS + TypeScript | Production-grade, modular API server — your existing strength |
+| AI Orchestration | Vercel AI SDK (used inside NestJS) | Best-in-class streaming, tool calling, and provider abstraction |
 | LLM Provider | OpenAI GPT-4o (primary) + Groq (fallback) | GPT-4o for quality, Groq for speed/cost |
 | Vector Database | Supabase pgvector | RAG without adding another service |
-| Database | PostgreSQL via Supabase | Auth + DB + vectors in one platform |
-| ORM | Prisma | Type-safe DB queries, great DX |
-| Auth | NextAuth.js v5 | GitHub OAuth (fits the dev audience perfectly) |
+| Database | PostgreSQL via Supabase | Single platform for DB + vectors |
+| ORM | Prisma (inside NestJS) | Type-safe DB queries, great DX |
+| Auth | NextAuth.js v5 (frontend) + JWT guards (NestJS) | GitHub OAuth on the frontend; JWT validates every NestJS request |
 | Payments | Stripe | Industry standard, well-documented |
-| Deployment | Vercel | Zero-config Next.js deployment |
+| Frontend Deploy | Vercel | Zero-config Next.js deployment |
+| Backend Deploy | Railway | Simple NestJS deployment, free tier available |
 | Observability | Helicone | LLM call logging, cost tracking, debugging |
 
 ---
@@ -126,26 +131,74 @@ Before writing code, understand these things deeply:
 
 #### 🔨 Build — Week 1
 
-**Day 1-2: Project setup**
-```
-- Initialize Next.js 14 with TypeScript and App Router
-- Set up Tailwind CSS + shadcn/ui
-- Configure environment variables
-- Set up Vercel project and connect GitHub repo
-- Install Vercel AI SDK: npm install ai openai
+**Day 1-2: Project setup — monorepo**
+```bash
+# 1. Create the monorepo structure
+mkdir code-review-agent && cd code-review-agent
+git init
+pnpm init
+
+# 2. Create workspace config
+cat > pnpm-workspace.yaml << EOF
+packages:
+  - 'apps/*'
+  - 'packages/*'
+EOF
+
+# 3. Scaffold the apps and packages directories
+mkdir -p apps packages/types/src packages/ai/src/prompts packages/ai/src/tools packages/ai/src/schemas
+
+# Next.js client
+cd apps && npx create-next-app@latest client --typescript --tailwind --app
+# NestJS server
+nest new server --package-manager pnpm
+cd ..
+
+# 4. Set up packages/types (Contract Layer)
+cd packages/types && pnpm init
+# Edit package.json: set name to "@cra/types", add "main": "src/index.ts"
+pnpm add zod
+cd ../..
+
+# 5. Set up packages/ai (Domain Layer)
+cd packages/ai && pnpm init
+# Edit package.json: set name to "@cra/ai", add "main": "src/index.ts"
+pnpm add ai openai zod
+cd ../..
+
+# 6. Wire up workspace dependencies
+# apps/client/package.json  → add: "@cra/types": "workspace:*"
+# apps/server/package.json  → add: "@cra/types": "workspace:*", "@cra/ai": "workspace:*"
+# packages/ai/package.json  → add: "@cra/types": "workspace:*"
+
+# 7. Install everything from root
+pnpm install
+
+# 8. Set up shadcn/ui in apps/client
+cd apps/client && npx shadcn-ui@latest init && cd ../..
+
+# 9. Configure platforms (Root Directory settings are critical)
+# Vercel  → Root Directory: apps/client
+# Railway → Root Directory: apps/server
+
+# 10. Confirm dev works
+pnpm dev   # starts Next.js on :3000 and NestJS on :4000 simultaneously
 ```
 
-**Day 3-4: Core streaming chat**
+**Day 3-4: Core streaming endpoint in NestJS**
 ```
-- Build the /api/chat route using streamText from Vercel AI SDK
-- Write your first system prompt (code reviewer persona)
-- Build the frontend chat UI with useChat hook
-- Implement streaming text display with a blinking cursor
+- Create ReviewModule, ReviewController, ReviewService
+- Build POST /review/stream endpoint using streamText from Vercel AI SDK
+- NestJS streaming response: use res.setHeader + res.write to pipe SSE
+- Write your first system prompt (code reviewer persona) in a prompts.ts file
+- Test with curl: confirm tokens stream back one by one
 ```
 
-**Day 5-6: Code input UX**
+**Day 5-6: Connect frontend to NestJS + Code input UX**
 ```
-- Add a code editor input (use Monaco Editor or CodeMirror)
+- Build the frontend chat UI — useChat hook pointing to NestJS URL
+  (NEXT_PUBLIC_API_URL=http://localhost:3000)
+- Add a code editor input (Monaco Editor or CodeMirror)
 - Support syntax highlighting for common languages
 - Add language auto-detection
 - Display a character/token count estimate
@@ -155,15 +208,16 @@ Before writing code, understand these things deeply:
 ```
 - Clean up UI, add loading states, error states
 - Write in your dev journal: what did you learn this week?
-- Push to GitHub with a proper README
+- Push both repos to GitHub with proper READMEs
 ```
 
 #### ✅ Done when
+- [ ] NestJS server runs locally and returns streaming SSE response
+- [ ] Next.js frontend connects to NestJS and displays streaming text
 - [ ] User can paste code into an editor
-- [ ] Clicking "Review" sends it to the API
-- [ ] Response streams back token by token (no spinner-then-dump)
+- [ ] Clicking "Review" sends it to NestJS and streams back token by token
 - [ ] Page looks clean and professional on both mobile and desktop
-- [ ] Deployed to Vercel and accessible via a URL
+- [ ] Both repos pushed to GitHub; frontend deployed to Vercel
 
 #### 💬 Come back to Claude when
 - The streaming isn't working (common issue: not setting the right headers)
@@ -223,9 +277,10 @@ interface CodeReview {
 }
 ```
 
-**Day 3-4: Implement structured output**
+**Day 3-4: Implement structured output in NestJS**
 ```
-- Use Vercel AI SDK's generateObject with Zod schema
+- Add POST /review/analyze endpoint in ReviewController
+- Use Vercel AI SDK's generateObject with Zod schema inside ReviewService
 - Rewrite system prompt to enforce the schema
 - Add few-shot examples of good reviews in the system prompt
 - Test with 10 different code snippets, verify consistent output
@@ -296,27 +351,30 @@ User sends message
 
 #### 🔨 Build — Week 3
 
-**Day 1-2: GitHub integration**
+**Day 1-2: GitHub integration in NestJS**
 ```
+- Create GithubModule, GithubService
 - Set up GitHub OAuth App (needed for private repos later)
 - Build fetchGithubPR tool: parse PR URL → call GitHub API → return structured diff
 - Test with public repos first
 - Handle pagination for large PRs
 ```
 
-**Day 3-4: Implement tool calling in the review flow**
+**Day 3-4: Implement tool calling in NestJS review flow**
 ```
-- Define tools using Vercel AI SDK's tool() function
-- Update the API route to use streamText with tools
+- Define tools in lib/tools.ts using Vercel AI SDK's tool() function
+- Update ReviewService to use streamText with tools
 - The model now automatically fetches the PR when given a URL
-- Add UI: "Analyzing PR..." state while tool calls happen
-- Show which files were reviewed
+- SSE stream now emits tool call events — handle them on the frontend
+- Show "Analyzing PR..." state while tool calls happen
+- Show which files were reviewed in the response
 ```
 
-**Day 5-6: Linter tool**
+**Day 5-6: Linter tool as a NestJS service**
 ```
-- Build a sandboxed linter tool using @typescript-eslint/parser
-- Run it on submitted code before the LLM review
+- Create LinterService inside a LinterModule
+- Build a sandboxed linter using @typescript-eslint/parser
+- Expose it as a tool the AI agent can call
 - Pass lint results to the model as additional context
 - The review now combines AI analysis + actual linter output
 ```
@@ -389,22 +447,22 @@ CREATE INDEX ON coding_standards
 USING ivfflat (embedding vector_cosine_ops);
 ```
 
-**Day 3-4: Document ingestion pipeline**
+**Day 3-4: Document ingestion pipeline in NestJS**
 ```
-- Build /api/upload endpoint that accepts PDF or text files
+- Create RagModule, RagService, RagController
+- Build POST /rag/upload endpoint that accepts PDF or text files (use Multer)
 - Split document into chunks (500 tokens each, 50 token overlap)
-- Generate embeddings using OpenAI text-embedding-3-small
-- Store chunks + embeddings in Supabase
-- Add an "Upload Coding Standards" UI in the dashboard
+- Generate embeddings using OpenAI text-embedding-3-small in RagService
+- Store chunks + embeddings in Supabase via Prisma
+- Add an "Upload Coding Standards" UI in the Next.js dashboard
 ```
 
-**Day 5-6: Retrieval + augmentation**
+**Day 5-6: Retrieval + augmentation in ReviewService**
 ```
-- When code is submitted for review:
-  1. Generate embedding of the code snippet
-  2. Query pgvector for top 5 most relevant standard chunks
-  3. Inject retrieved chunks into system prompt as "Your team's coding standards:"
-  4. Review is now personalized to the team's actual rules
+- When code is submitted for review, ReviewService calls RagService.retrieve()
+- RagService embeds the code snippet and queries pgvector for top 5 chunks
+- Retrieved chunks are injected into system prompt as "Your team's coding standards:"
+- Review is now personalized to the team's actual rules
 - Test: upload a standards doc that says "never use any" in TypeScript
   → verify the review catches `any` usage
 ```
@@ -529,30 +587,40 @@ This week is less about AI and more about turning your tool into a real product.
 
 #### 🔨 Build — Week 6
 
-**Day 1-2: Auth with NextAuth + GitHub OAuth**
+**Day 1-2: Auth — NextAuth on frontend, JWT guard on NestJS**
 ```
+Frontend:
 - Set up NextAuth.js v5 with GitHub provider
-- Store user in Prisma (id, name, email, githubToken, plan)
-- Protect all API routes with session check
-- Add sign in / sign out to the UI
-- Test: sign in, verify user is created in DB
+- On successful sign-in, NextAuth calls POST /auth/session on NestJS
+  to create/update the user and receive a signed JWT back
+- Store JWT in an httpOnly cookie
+- All subsequent frontend → NestJS requests send the JWT in Authorization header
+
+NestJS:
+- Create AuthModule with JwtStrategy (passport-jwt)
+- POST /auth/session — receives GitHub profile, upserts user in DB, returns JWT
+- @UseGuards(JwtAuthGuard) on all protected controllers
+- Store user in Prisma (id, name, email, githubToken, plan, reviewCount)
+- Test: sign in via GitHub, verify JWT is issued and guards work
 ```
 
-**Day 3: Usage limits**
+**Day 3: Usage limits in NestJS**
 ```
-- Add reviewCount and reviewResetDate to user schema
-- Middleware that checks usage before processing a review
-- Show usage counter in the UI: "7 of 10 reviews used this month"
-- Cron job (Vercel cron) to reset counts monthly
+- Add reviewCount and reviewResetDate to Prisma user schema
+- UsageGuard: a custom NestJS guard that checks usage before ReviewController runs
+- Return 403 with { message: 'limit_reached', upgradeUrl: '...' } when limit hit
+- Show usage counter in Next.js UI: "7 of 10 reviews used this month"
+- Vercel cron (or Railway cron job) hits POST /admin/reset-usage monthly
 ```
 
-**Day 4-5: Stripe integration**
+**Day 4-5: Stripe integration in NestJS**
 ```
-- Set up Stripe products and prices
-- Build /api/stripe/checkout — creates a Stripe Checkout session
-- Build /api/stripe/webhook — handles payment events, updates user plan
-- Add "Upgrade to Pro" button that redirects to Stripe Checkout
-- Test with Stripe test mode: complete a payment, verify plan updates
+- Create StripeModule, StripeService, StripeController
+- POST /stripe/checkout — creates Stripe Checkout session, returns URL
+- POST /stripe/webhook — receives Stripe events, updates user plan in DB
+  (use raw body middleware for Stripe signature verification)
+- Add "Upgrade to Pro" button in Next.js that calls /stripe/checkout
+- Test with Stripe CLI: stripe listen --forward-to localhost:3000/stripe/webhook
 ```
 
 **Day 6-7: Dashboard and account page**
@@ -604,21 +672,23 @@ This week is less about AI and more about turning your tool into a real product.
 - Set up cost alerts: email if daily spend exceeds $5
 ```
 
-**Day 3: Rate limiting**
+**Day 3: Rate limiting with NestJS Throttler**
 ```
-- Install @upstash/ratelimit + Vercel KV (or Redis)
-- Limit: 10 requests/minute per user on the review API
-- Limit: 100 requests/minute globally
-- Return proper 429 errors with retry-after headers
-- Show user-friendly "slow down" message in UI
+- Install @nestjs/throttler
+- Configure ThrottlerModule globally: 10 req/min per user, 100 req/min globally
+- Add @Throttle() decorator to ReviewController
+- Return proper 429 errors — NestJS handles this automatically
+- Show user-friendly "slow down" message in Next.js UI
 ```
 
-**Day 4: Error handling + retry logic**
+**Day 4: Error handling + retry logic in NestJS**
 ```
-- Wrap all LLM calls in try/catch with specific error types
-- Retry on rate limit errors (exponential backoff)
-- Fallback to Groq if OpenAI fails (Vercel AI SDK makes this easy)
-- Never show raw errors to users — map them to friendly messages
+- Create a global NestJS ExceptionFilter that maps errors to friendly responses
+- Wrap all LLM calls in try/catch with typed error handling
+- Retry on OpenAI rate limit errors (exponential backoff with a helper util)
+- Provider fallback: if OpenAI throws, ReviewService switches to Groq
+  (Vercel AI SDK makes switching providers a one-line change)
+- Never expose raw LLM errors to the frontend
 ```
 
 **Day 5: Token budgeting**
@@ -741,54 +811,320 @@ More professional tone than Twitter but still personal
 
 ---
 
-## Folder Structure
-
-This is what the final project folder looks like. Follow this from day one — don't reorganize later.
+## Architecture Overview
 
 ```
-reviewai/
+                    ┌─────────────────────────┐
+                    │     User's Browser      │
+                    └────────────┬────────────┘
+                                 │ HTTPS
+                    ┌────────────▼────────────┐
+                    │   Next.js Frontend       │
+                    │   (Vercel)               │
+                    │                          │
+                    │  - UI only               │
+                    │  - NextAuth session      │
+                    │  - Calls NestJS via JWT  │
+                    └────────────┬────────────┘
+                                 │ REST + SSE (JWT in header)
+                    ┌────────────▼────────────┐
+                    │   NestJS Backend API     │
+                    │   (Railway)              │
+                    │                          │
+                    │  - All business logic    │
+                    │  - All AI calls          │
+                    │  - Auth guards           │
+                    │  - Stripe webhooks       │
+                    └──┬──────────────────┬───┘
+                       │                  │
+          ┌────────────▼───┐    ┌─────────▼──────────┐
+          │ Supabase        │    │  External APIs      │
+          │ PostgreSQL +    │    │  - OpenAI / Groq    │
+          │ pgvector        │    │  - GitHub API       │
+          └─────────────────┘    │  - Stripe           │
+                                 │  - Helicone         │
+                                 └─────────────────────┘
+```
+
+**Key architectural rule:** Next.js has zero business logic. It renders UI and proxies user actions to NestJS. All AI, all database access, all auth validation happens in NestJS.
+
+---
+
+## NestJS Backend — Module Breakdown
+
+This is the complete NestJS module structure. Each module owns one domain.
+
+```
+src/
+├── app.module.ts                  ← root module, imports everything
+├── main.ts                        ← bootstrap, CORS, global pipes/filters
+│
+├── auth/                          ← AuthModule
+│   ├── auth.module.ts
+│   ├── auth.controller.ts         ← POST /auth/session
+│   ├── auth.service.ts            ← upsert user, issue JWT
+│   ├── jwt.strategy.ts            ← passport-jwt strategy
+│   ├── jwt-auth.guard.ts          ← @UseGuards(JwtAuthGuard)
+│   └── dto/
+│       └── create-session.dto.ts
+│
+├── review/                        ← ReviewModule (core of the product)
+│   ├── review.module.ts
+│   ├── review.controller.ts       ← POST /review/stream, POST /review/analyze
+│   ├── review.service.ts          ← orchestrates: RAG → tools → LLM → DB
+│   ├── review.prompts.ts          ← all system prompts live here
+│   ├── review.tools.ts            ← Vercel AI SDK tool() definitions
+│   ├── review.schemas.ts          ← Zod schemas for structured output
+│   └── dto/
+│       ├── create-review.dto.ts
+│       └── review-response.dto.ts
+│
+├── rag/                           ← RagModule
+│   ├── rag.module.ts
+│   ├── rag.controller.ts          ← POST /rag/upload, GET /rag/documents
+│   ├── rag.service.ts             ← chunk → embed → store → retrieve
+│   └── dto/
+│       └── upload-document.dto.ts
+│
+├── github/                        ← GithubModule
+│   ├── github.module.ts
+│   ├── github.service.ts          ← fetchPR, fetchFileContent, listChangedFiles
+│   └── github.types.ts
+│
+├── linter/                        ← LinterModule
+│   ├── linter.module.ts
+│   └── linter.service.ts          ← run ESLint programmatically, return typed results
+│
+├── stripe/                        ← StripeModule
+│   ├── stripe.module.ts
+│   ├── stripe.controller.ts       ← POST /stripe/checkout, POST /stripe/webhook
+│   └── stripe.service.ts          ← createCheckoutSession, handleWebhook
+│
+├── users/                         ← UsersModule
+│   ├── users.module.ts
+│   ├── users.service.ts           ← findById, updatePlan, incrementReviewCount
+│   └── guards/
+│       └── usage.guard.ts         ← blocks review if limit reached
+│
+├── common/                        ← shared utilities
+│   ├── filters/
+│   │   └── http-exception.filter.ts   ← global error handler
+│   ├── interceptors/
+│   │   └── logging.interceptor.ts
+│   └── utils/
+│       ├── retry.ts               ← exponential backoff helper
+│       └── tokens.ts              ← token counting with tiktoken
+│
+└── prisma/                        ← PrismaModule
+    ├── prisma.module.ts
+    └── prisma.service.ts          ← PrismaClient singleton
+```
+
+### Prisma Schema
+
+```prisma
+model User {
+  id              String    @id @default(cuid())
+  email           String    @unique
+  name            String?
+  githubId        String    @unique
+  githubToken     String
+  plan            Plan      @default(FREE)
+  reviewCount     Int       @default(0)
+  reviewResetDate DateTime  @default(now())
+  createdAt       DateTime  @default(now())
+
+  reviews         Review[]
+  documents       Document[]
+  conversations   Conversation[]
+}
+
+model Review {
+  id           String        @id @default(cuid())
+  userId       String
+  user         User          @relation(fields: [userId], references: [id])
+  code         String
+  language     String?
+  prUrl        String?
+  summary      String
+  overallScore Int
+  tokensUsed   Int
+  issues       Issue[]
+  createdAt    DateTime      @default(now())
+
+  conversation Conversation?
+}
+
+model Issue {
+  id           String   @id @default(cuid())
+  reviewId     String
+  review       Review   @relation(fields: [reviewId], references: [id])
+  type         IssueType
+  severity     Severity
+  lineStart    Int
+  lineEnd      Int
+  title        String
+  explanation  String
+  suggestedFix String
+  codeExample  String?
+}
+
+model Document {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  name      String
+  chunks    DocumentChunk[]
+  createdAt DateTime @default(now())
+}
+
+model DocumentChunk {
+  id         String   @id @default(cuid())
+  documentId String
+  document   Document @relation(fields: [documentId], references: [id])
+  content    String
+  embedding  Unsupported("vector(1536)")
+  metadata   Json?
+}
+
+model Conversation {
+  id        String    @id @default(cuid())
+  reviewId  String    @unique
+  review    Review    @relation(fields: [reviewId], references: [id])
+  messages  Json      // store message history as JSON array
+  updatedAt DateTime  @updatedAt
+}
+
+enum Plan {
+  FREE
+  PRO
+}
+
+enum IssueType {
+  BUG
+  SECURITY
+  PERFORMANCE
+  STYLE
+  SUGGESTION
+}
+
+enum Severity {
+  CRITICAL
+  WARNING
+  INFO
+}
+```
+
+---
+
+## Folder Structure
+
+One repository, two apps, two shared packages. This is a **pnpm workspace monorepo** — no Nx, no Turborepo, just pnpm's built-in workspace feature.
+
+### Four-layer architecture
+
+| Layer | Location | Responsibility |
+|-------|----------|---------------|
+| **Contract** | `packages/types` | TypeScript types — what things look like |
+| **Domain** | `packages/ai` | Prompts, tools, schemas, AI logic — how the AI thinks |
+| **API** | `apps/server` | NestJS — how requests are handled, auth, payments, DB |
+| **UI** | `apps/client` | Next.js — what users see, zero business logic |
+
+The key insight: AI logic is a **domain layer**, not infrastructure. It lives in `packages/ai` so it's explicit, testable, and reusable — not buried inside NestJS.
+
+### Root structure
+
+```
+code-review-agent/                     ← one git repo
+├── apps/
+│   ├── client/                        ← Next.js frontend (UI Layer)
+│   └── server/                        ← NestJS backend (API Layer)
+├── packages/
+│   ├── types/                         ← Contract Layer
+│   │   ├── src/
+│   │   │   ├── review.types.ts        ← ReviewIssue, CodeReview, etc.
+│   │   │   ├── user.types.ts
+│   │   │   └── index.ts
+│   │   ├── package.json               ← name: "@cra/types"
+│   │   └── tsconfig.json
+│   └── ai/                            ← Domain Layer
+│       ├── src/
+│       │   ├── prompts/
+│       │   │   ├── review.prompt.ts   ← all system prompts
+│       │   │   └── agent.prompt.ts
+│       │   ├── tools/
+│       │   │   ├── github.tool.ts     ← tool definitions (Vercel AI SDK)
+│       │   │   └── linter.tool.ts
+│       │   ├── schemas/
+│       │   │   └── review.schema.ts   ← Zod schemas for structured output
+│       │   ├── embeddings.ts          ← chunking + embedding logic
+│       │   └── index.ts               ← re-exports everything
+│       ├── package.json               ← name: "@cra/ai"
+│       └── tsconfig.json
+├── .github/
+│   └── workflows/
+│       └── deploy.yml                 ← CI/CD pipeline (see Deployment section)
+├── pnpm-workspace.yaml
+├── package.json                       ← root scripts
+├── .gitignore
+└── README.md
+```
+
+### `pnpm-workspace.yaml`
+
+```yaml
+packages:
+  - 'apps/*'
+  - 'packages/*'
+```
+
+### Root `package.json`
+
+```json
+{
+  "name": "code-review-agent",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently \"pnpm --filter client dev\" \"pnpm --filter server dev\"",
+    "build": "pnpm --filter types build && pnpm --filter ai build && pnpm --filter client build && pnpm --filter server build",
+    "lint": "pnpm -r lint",
+    "type-check": "pnpm -r type-check"
+  },
+  "devDependencies": {
+    "concurrently": "^8.0.0"
+  }
+}
+```
+
+Running `pnpm dev` from the root starts both Next.js (port 3000) and NestJS (port 4000) simultaneously.
+
+### `apps/client/` — Next.js frontend
+
+```
+apps/client/
 ├── app/
 │   ├── (auth)/
-│   │   ├── login/
-│   │   │   └── page.tsx
+│   │   ├── login/page.tsx
 │   │   └── layout.tsx
 │   ├── (dashboard)/
-│   │   ├── dashboard/
-│   │   │   └── page.tsx
+│   │   ├── dashboard/page.tsx
 │   │   ├── review/
-│   │   │   ├── [id]/
-│   │   │   │   └── page.tsx
-│   │   │   └── new/
-│   │   │       └── page.tsx
-│   │   ├── history/
-│   │   │   └── page.tsx
-│   │   ├── settings/
-│   │   │   └── page.tsx
+│   │   │   ├── [id]/page.tsx
+│   │   │   └── new/page.tsx
+│   │   ├── history/page.tsx
+│   │   ├── settings/page.tsx
 │   │   └── layout.tsx
 │   ├── api/
-│   │   ├── chat/
-│   │   │   └── route.ts          ← streaming review endpoint
-│   │   ├── review/
-│   │   │   └── route.ts          ← structured review endpoint
-│   │   ├── upload/
-│   │   │   └── route.ts          ← coding standards upload
-│   │   ├── stripe/
-│   │   │   ├── checkout/
-│   │   │   │   └── route.ts
-│   │   │   └── webhook/
-│   │   │       └── route.ts
-│   │   └── auth/
-│   │       └── [...nextauth]/
-│   │           └── route.ts
+│   │   └── auth/[...nextauth]/route.ts   ← ONLY Next.js API route
 │   ├── layout.tsx
-│   └── page.tsx                  ← landing page
+│   └── page.tsx                          ← landing page
 ├── components/
-│   ├── ui/                       ← shadcn components (auto-generated)
+│   ├── ui/                               ← shadcn components
 │   ├── review/
 │   │   ├── CodeEditor.tsx
-│   │   ├── ReviewCard.tsx
+│   │   ├── ReviewStream.tsx              ← handles SSE from NestJS
 │   │   ├── IssueCard.tsx
-│   │   ├── ReviewStream.tsx
+│   │   ├── ReviewCard.tsx
 │   │   └── SeverityBadge.tsx
 │   ├── dashboard/
 │   │   ├── ReviewHistory.tsx
@@ -798,34 +1134,149 @@ reviewai/
 │       ├── Header.tsx
 │       └── Sidebar.tsx
 ├── lib/
-│   ├── ai/
-│   │   ├── prompts.ts            ← all system prompts live here
-│   │   ├── tools.ts              ← tool definitions
-│   │   ├── schemas.ts            ← Zod schemas for structured output
-│   │   └── embeddings.ts        ← embedding + RAG logic
-│   ├── db/
-│   │   └── prisma.ts            ← Prisma client singleton
-│   ├── github/
-│   │   └── api.ts               ← GitHub API helpers
-│   ├── stripe/
-│   │   └── index.ts             ← Stripe helpers
-│   └── utils.ts
-├── prisma/
-│   └── schema.prisma
-├── types/
-│   └── index.ts                 ← shared TypeScript types
+│   ├── api.ts                            ← typed fetch wrapper → NestJS
+│   └── auth.ts                           ← NextAuth config
 ├── .env.local
 ├── .env.example
-└── README.md
+├── package.json                          ← depends on "@cra/types"
+└── next.config.ts
 ```
+
+### `apps/server/` — NestJS backend
+
+```
+apps/server/
+├── src/                                  ← (see NestJS Module Breakdown above)
+├── prisma/
+│   ├── schema.prisma
+│   └── migrations/
+├── test/
+│   └── review.e2e-spec.ts
+├── .env
+├── .env.example
+├── nest-cli.json
+├── package.json                          ← depends on "@cra/types"
+└── tsconfig.json
+```
+
+### `packages/types/` — Contract Layer
+
+Types only. No logic, no dependencies beyond Zod. Both apps depend on this.
+
+```typescript
+// packages/types/src/review.types.ts
+import { z } from 'zod'
+
+export const ReviewIssueSchema = z.object({
+  id: z.string(),
+  type: z.enum(['bug', 'security', 'performance', 'style', 'suggestion']),
+  severity: z.enum(['critical', 'warning', 'info']),
+  lineStart: z.number(),
+  lineEnd: z.number(),
+  title: z.string(),
+  explanation: z.string(),
+  suggestedFix: z.string(),
+  codeExample: z.string().optional(),
+})
+
+export const CodeReviewSchema = z.object({
+  summary: z.string(),
+  overallScore: z.number().min(1).max(10),
+  issues: z.array(ReviewIssueSchema),
+  positives: z.array(z.string()),
+})
+
+// Types inferred from schemas — zero duplication
+export type ReviewIssue = z.infer<typeof ReviewIssueSchema>
+export type CodeReview = z.infer<typeof CodeReviewSchema>
+```
+
+### `packages/ai/` — Domain Layer
+
+All AI logic. Depends on `@cra/types`. Used by `apps/server` only (not the frontend).
+
+```typescript
+// packages/ai/src/prompts/review.prompt.ts
+export const REVIEW_SYSTEM_PROMPT = `
+You are an expert code reviewer with deep knowledge of software engineering best practices.
+Your job is to analyze code and identify bugs, security vulnerabilities, performance issues,
+and style violations. Be specific, actionable, and constructive.
+...
+`
+
+// packages/ai/src/schemas/review.schema.ts
+import { CodeReviewSchema } from '@cra/types'
+export { CodeReviewSchema }  // re-export — schema lives in types, AI package uses it
+
+// packages/ai/src/tools/github.tool.ts
+import { tool } from 'ai'
+import { z } from 'zod'
+
+export const fetchGithubPRTool = tool({
+  description: 'Fetch the diff of a GitHub pull request given its URL',
+  parameters: z.object({ prUrl: z.string().url() }),
+  execute: async ({ prUrl }) => {
+    // GitHub API call logic here
+  },
+})
+
+// packages/ai/src/index.ts — clean public API
+export { REVIEW_SYSTEM_PROMPT, AGENT_SYSTEM_PROMPT } from './prompts'
+export { fetchGithubPRTool, runLinterTool } from './tools'
+export { CodeReviewSchema } from './schemas'
+export { generateEmbedding, chunkDocument } from './embeddings'
+```
+
+```typescript
+// In NestJS ReviewService — imports are clean and intentional
+import { REVIEW_SYSTEM_PROMPT, fetchGithubPRTool, CodeReviewSchema } from '@cra/ai'
+import { CodeReview } from '@cra/types'
+
+// In Next.js ReviewCard — only needs the type, not AI logic
+import { CodeReview } from '@cra/types'
+const ReviewCard = ({ review }: { review: CodeReview }) => { ... }
+```
+
+This separation means your AI logic is independently testable — you can unit test a prompt or a tool without booting up NestJS.
 
 ---
 
 ## Environment Variables
 
-Copy this to `.env.example` and commit it. Never commit `.env.local`.
+Each app manages its own `.env` file. Never put secrets in the root.
+
+### `apps/client/.env.example`
 
 ```bash
+# NextAuth
+NEXTAUTH_URL=http://localhost:3000
+NEXTAUTH_SECRET=
+
+# GitHub OAuth
+GITHUB_CLIENT_ID=
+GITHUB_CLIENT_SECRET=
+
+# NestJS backend URL — change to Railway URL in production
+NEXT_PUBLIC_API_URL=http://localhost:4000
+
+# Stripe (publishable key only — secret key lives in NestJS)
+NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=
+```
+
+### `apps/server/.env.example`
+
+```bash
+# Server
+PORT=4000
+
+# Database (Supabase)
+DATABASE_URL=
+DIRECT_URL=
+
+# JWT
+JWT_SECRET=
+JWT_EXPIRES_IN=7d
+
 # AI Providers
 OPENAI_API_KEY=
 GROQ_API_KEY=
@@ -833,15 +1284,7 @@ GROQ_API_KEY=
 # Observability
 HELICONE_API_KEY=
 
-# Database (Supabase)
-DATABASE_URL=
-DIRECT_URL=
-
-# Auth (NextAuth)
-NEXTAUTH_URL=http://localhost:3000
-NEXTAUTH_SECRET=
-
-# GitHub OAuth (create at github.com/settings/developers)
+# GitHub (server-side, for fetching PRs)
 GITHUB_CLIENT_ID=
 GITHUB_CLIENT_SECRET=
 
@@ -849,10 +1292,209 @@ GITHUB_CLIENT_SECRET=
 STRIPE_SECRET_KEY=
 STRIPE_WEBHOOK_SECRET=
 STRIPE_PRO_PRICE_ID=
-NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=
 
-# App
-NEXT_PUBLIC_APP_URL=http://localhost:3000
+# Frontend URL (for CORS + Stripe redirect)
+FRONTEND_URL=http://localhost:3000
+```
+
+### `.gitignore` at repo root
+
+```
+# env files — never commit these
+apps/client/.env.local
+apps/client/.env
+apps/server/.env
+
+# dependencies
+node_modules/
+apps/*/node_modules/
+packages/*/node_modules/
+
+# build outputs
+apps/client/.next/
+apps/server/dist/
+packages/types/dist/
+```
+
+---
+
+## Deployment & CI/CD
+
+### How it works
+
+One GitHub repo, two independent deployments. GitHub Actions detects which app changed and deploys only that service. Vercel watches `apps/client`, Railway watches `apps/server`. If you change a shared type in `packages/types`, both deploy.
+
+```
+push to main
+     │
+     ├── GitHub Actions checks changed paths
+     │
+     ├── apps/server/** or packages/ai/** changed?   ──→  deploy-api job  ──→  Railway
+     ├── apps/client/** or packages/types/** changed? ──→  deploy-web job  ──→  Vercel
+     └── packages/types/** changed? → both jobs run
+```
+
+### GitHub Actions — `.github/workflows/deploy.yml`
+
+```yaml
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  # Detect which apps changed
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      api: ${{ steps.filter.outputs.api }}
+      web: ${{ steps.filter.outputs.web }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v2
+        id: filter
+        with:
+          filters: |
+            api:
+              - 'apps/server/**'
+              - 'packages/ai/**'
+              - 'packages/types/**'
+            web:
+              - 'apps/client/**'
+              - 'packages/types/**'
+
+  # Deploy NestJS to Railway (only if api or types changed)
+  deploy-api:
+    needs: changes
+    if: ${{ needs.changes.outputs.api == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 8
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build shared types
+        run: pnpm --filter types build
+
+      - name: Build AI package
+        run: pnpm --filter ai build
+
+      - name: Build API
+        run: pnpm --filter server build
+
+      - name: Deploy to Railway
+        uses: bervProject/railway-deploy@main
+        with:
+          railway_token: ${{ secrets.RAILWAY_TOKEN }}
+          service: api
+
+  # Deploy Next.js to Vercel (only if web or types changed)
+  deploy-web:
+    needs: changes
+    if: ${{ needs.changes.outputs.web == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 8
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Deploy to Vercel
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          working-directory: apps/client
+          vercel-args: '--prod'
+```
+
+### GitHub Secrets to configure
+
+Go to your repo → Settings → Secrets and variables → Actions, and add:
+
+| Secret | Where to get it |
+|--------|----------------|
+| `RAILWAY_TOKEN` | Railway dashboard → Account → Tokens |
+| `VERCEL_TOKEN` | Vercel dashboard → Settings → Tokens |
+| `VERCEL_ORG_ID` | Vercel dashboard → Settings → General |
+| `VERCEL_PROJECT_ID` | Vercel project → Settings → General |
+
+### Vercel setup for monorepo
+
+```
+1. Go to vercel.com → Add New Project → import your GitHub repo
+2. In "Configure Project":
+   - Framework Preset: Next.js
+   - Root Directory: apps/client        ← critical setting
+3. Add environment variables (production values from apps/client/.env.example)
+4. Deploy
+```
+
+Vercel will now only trigger builds when files inside `apps/client/` change, and it builds from that subdirectory.
+
+### Railway setup for monorepo
+
+```
+1. Go to railway.app → New Project → Deploy from GitHub repo
+2. Select your repo
+3. In service settings:
+   - Root Directory: apps/server        ← critical setting
+   - Build Command: pnpm build
+   - Start Command: node dist/main
+4. Add environment variables (production values from apps/server/.env.example)
+5. Deploy
+```
+
+Railway gives you a public URL like `https://code-review-agent.up.railway.app`. Copy this into Vercel's `NEXT_PUBLIC_API_URL` environment variable.
+
+### CORS in `apps/server/src/main.ts`
+
+```typescript
+app.enableCors({
+  origin: process.env.FRONTEND_URL, // your Vercel URL in production
+  credentials: true,
+});
+```
+
+### Stripe webhooks in production
+
+```
+After deploying to Railway:
+1. Stripe Dashboard → Developers → Webhooks → Add endpoint
+2. Endpoint URL: https://your-api.up.railway.app/stripe/webhook
+3. Select events: checkout.session.completed, customer.subscription.deleted
+4. Copy the webhook signing secret → add to Railway env as STRIPE_WEBHOOK_SECRET
+```
+
+### Local development
+
+```bash
+# Clone the repo
+git clone https://github.com/kashifrezwi/code-review-agent
+cd code-review-agent
+
+# Install all dependencies across all apps + packages
+pnpm install
+
+# Copy env files
+cp apps/client/.env.example apps/client/.env.local
+cp apps/server/.env.example apps/server/.env
+
+# Fill in your API keys in both .env files, then:
+pnpm dev   # starts Next.js on :3000 and NestJS on :4000 simultaneously
 ```
 
 ---
@@ -900,7 +1542,13 @@ When you finish this project, you'll be able to answer all of these:
 > Provider fallback (OpenAI → Groq), retry with exponential backoff, token budgeting, Helicone for observability, rate limiting per user.
 
 **"Why this tech stack?"**  
-> You made deliberate choices — Next.js for the AI SDK integration, Supabase for pgvector + auth + DB in one, Vercel AI SDK for provider abstraction. You can justify each one.
+> You made deliberate choices — Next.js as a pure UI layer with zero business logic, NestJS as a production-grade modular API you already know from real production work. Supabase for pgvector + DB in one platform, Vercel AI SDK for provider abstraction so switching from OpenAI to Groq is one line. You can justify each one.
+
+**"Why a separate NestJS backend instead of Next.js API routes?"**  
+> Separation of concerns and architectural maturity. Next.js API routes are convenient for side projects but don't scale well. With NestJS I get dependency injection, guards, interceptors, proper module boundaries — the same structure a real engineering team would use. It also means the API is reusable: a CLI or mobile client could consume it without changing anything.
+
+**"How did you manage the monorepo — did you use Nx or Turborepo?"**  
+> I used pnpm workspaces without Nx or Turborepo — deliberate choice. Those tools add real configuration overhead that isn't justified for two apps. I structured the monorepo in four layers: `packages/types` as the contract layer (shared Zod schemas and TypeScript types), `packages/ai` as the domain layer (all prompts, tools, and AI logic — independently testable without booting NestJS), `apps/server` as the API layer, and `apps/client` as the UI layer. For CI/CD I used GitHub Actions with `dorny/paths-filter` to detect which packages changed and deploy only the affected services — Next.js to Vercel, NestJS to Railway, independently.
 
 ---
 
