@@ -17,7 +17,7 @@ export class ReviewService {
 
     async streamReview(code: string, res: Response): Promise<void> {
         const result = streamText({
-            model: this.openai('gpt-5-nano-2025-08-07'),
+            model: this.openai('gpt-4o-mini'),
             system: REVIEW_SYSTEM_PROMPT,
             messages: [
                 {
@@ -28,7 +28,16 @@ export class ReviewService {
             temperature: 0.2,
         })
 
-        // Pipe the stream to the HTTP response as SSE
-        result.pipeTextStreamToResponse(res)
+        // Write headers required by the AI SDK data stream protocol
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8')
+        res.setHeader('X-Vercel-AI-Data-Stream', 'v1')
+        res.setHeader('Transfer-Encoding', 'chunked')
+
+        // Stream each text chunk in the AI SDK data stream format: "0:{json}\n"
+        for await (const chunk of result.textStream) {
+            res.write(`0:${JSON.stringify(chunk)}\n`)
+        }
+
+        res.end()
     }
 }

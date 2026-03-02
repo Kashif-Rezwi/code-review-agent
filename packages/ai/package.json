@@ -9,7 +9,7 @@
     },
     "dependencies": {
         "@cra/types": "workspace:*",
-        "ai": "^4.0.0",
+        "ai": "^6.0.105",
         "openai": "^4.0.0"
     },
     "devDependencies": {

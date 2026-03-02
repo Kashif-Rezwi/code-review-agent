@@ -1,10 +1,7 @@
 import { Controller, Post, Body, Res, HttpCode } from '@nestjs/common'
 import type { Response } from 'express'
 import { ReviewService } from './review.service'
-
-class CreateReviewDto {
-    code: string
-}
+import { CreateReviewDto } from './dto/create-review.dto'
 
 @Controller('review')
 export class ReviewController {
@@ -16,6 +13,6 @@ export class ReviewController {
         @Body() body: CreateReviewDto,
         @Res() res: Response,
     ): Promise<void> {
-        await this.reviewService.streamReview(body.code, res)
+        await this.reviewService.streamReview(body.prompt, res)
     }
 }
