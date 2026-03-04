@@ -28,16 +28,9 @@ export class ReviewService {
             temperature: 0.2,
         })
 
-        // Write headers required by the AI SDK data stream protocol
-        res.setHeader('Content-Type', 'text/plain; charset=utf-8')
-        res.setHeader('X-Vercel-AI-Data-Stream', 'v1')
-        res.setHeader('Transfer-Encoding', 'chunked')
-
-        // Stream each text chunk in the AI SDK data stream format: "0:{json}\n"
-        for await (const chunk of result.textStream) {
-            res.write(`0:${JSON.stringify(chunk)}\n`)
-        }
-
-        res.end()
+        // pipeTextStreamToResponse is the correct AI SDK v6 method for
+        // Express/NestJS. It pipes token-by-token plain text to res.
+        // useCompletion on the frontend reads this plain text stream.
+        result.pipeTextStreamToResponse(res)
     }
 }

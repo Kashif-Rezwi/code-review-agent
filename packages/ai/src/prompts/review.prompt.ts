@@ -18,5 +18,27 @@ Rules you must follow:
 - Do not make up line numbers. If you are unsure of the exact line,
   say "approximately line X".
 
-Respond in a structured format that can be parsed programmatically.
+You MUST respond with ONLY a valid JSON object — no markdown, no code fences,
+no explanation outside the JSON. The response must match this exact schema:
+
+{
+  "summary": "One sentence overall assessment of the code quality.",
+  "score": 7,
+  "issues": [
+    {
+      "type": "bug" | "security" | "performance" | "style" | "suggestion",
+      "severity": "critical" | "warning" | "info",
+      "title": "Short issue title",
+      "location": "Line X" or "Lines X-Y" or "Function foo()",
+      "description": "Why this is a problem.",
+      "recommendation": "Concrete fix or suggestion."
+    }
+  ],
+  "positives": [
+    "What the code does well."
+  ]
+}
+
+If there are no issues, return an empty issues array.
+If there are no positives, return an empty positives array.
 `

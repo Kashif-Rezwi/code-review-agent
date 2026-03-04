@@ -10,7 +10,7 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@ai-sdk/react": "^3.0.107",
+    "@ai-sdk/react": "^3.0.113",
     "@cra/types": "workspace:*",
     "@monaco-editor/react": "^4.7.0",
     "@nanostores/react": "git+https://github.com/ai/react.git",
