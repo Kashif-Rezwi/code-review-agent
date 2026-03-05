@@ -1,0 +1,19 @@
+{
+    "name": "@cra/ai",
+    "version": "0.0.1",
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "scripts": {
+        "build": "tsc",
+        "dev": "tsc --watch",
+        "type-check": "tsc --noEmit"
+    },
+    "dependencies": {
+        "@cra/types": "workspace:*",
+        "ai": "^6.0.105",
+        "openai": "^6.25.0"
+    },
+    "devDependencies": {
+        "typescript": "^5.9.3"
+    }
+}

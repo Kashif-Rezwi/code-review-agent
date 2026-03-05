@@ -1,0 +1,15 @@
+{
+  "name": "code-review-agent",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm build:packages && concurrently \"pnpm --filter client dev\" \"pnpm --filter server start:dev\"",
+    "build:packages": "pnpm --filter @cra/types build && pnpm --filter @cra/ai build",
+    "build": "pnpm build:packages && pnpm --filter client build && pnpm --filter server build",
+    "lint": "pnpm -r lint",
+    "type-check": "pnpm -r type-check"
+  },
+  "devDependencies": {
+    "concurrently": "^8.0.0"
+  },
+  "packageManager": "pnpm@10.30.3"
+}
