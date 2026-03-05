@@ -3,7 +3,8 @@ services:
   - type: web
     name: code-review-agent-api
     env: node
-    rootDir: apps/server
+    # Root Directory must be empty for pnpm monorepo to resolve workspace packages
+    rootDir: ""
     buildCommand: pnpm install && pnpm build:packages && pnpm --filter server build
     startCommand: pnpm --filter server start:prod
     envVars:
