@@ -1,6 +1,7 @@
 {
   "name": "code-review-agent",
   "private": true,
+  "version": "1.0.1",
   "scripts": {
     "dev": "pnpm build:packages && concurrently \"pnpm --filter client dev\" \"pnpm --filter server start:dev\"",
     "build:packages": "pnpm --filter @cra/types build && pnpm --filter @cra/ai build",

@@ -1,0 +1,18 @@
+version: "1"
+services:
+  - type: web
+    name: code-review-agent-api
+    env: node
+    # Root Directory must be empty for pnpm monorepo to resolve workspace packages
+    rootDir: ""
+    buildCommand: pnpm install && pnpm build:packages && pnpm --filter server build
+    startCommand: pnpm --filter server start:prod
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: FRONTEND_URL
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
