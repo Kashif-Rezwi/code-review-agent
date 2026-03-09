@@ -1,20 +1,7 @@
 import { XCircle, Shield, Zap, Wrench, Lightbulb } from 'lucide-react'
 
-export interface ReviewIssue {
-    type: 'bug' | 'security' | 'performance' | 'style' | 'suggestion'
-    severity: 'critical' | 'warning' | 'info'
-    title: string
-    location: string
-    description: string
-    recommendation: string
-}
-
-export interface ReviewData {
-    summary: string
-    score: number
-    issues: ReviewIssue[]
-    positives: string[]
-}
+// Types come from the shared contract layer — single source of truth across client + server
+export type { ReviewIssue, ReviewData } from '@cra/types'
 
 export const LANGUAGE_LABELS: Record<string, string> = {
     typescript: 'TypeScript', javascript: 'JavaScript', python: 'Python',
