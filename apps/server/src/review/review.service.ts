@@ -1,9 +1,9 @@
 import { Injectable } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { createOpenAI } from '@ai-sdk/openai'
-import { streamText } from 'ai'
-import { REVIEW_SYSTEM_PROMPT } from '@cra/ai'
-import type { Response } from 'express'
+import { generateText, Output } from 'ai'
+import { REVIEW_SYSTEM_PROMPT, ReviewDataSchema } from '@cra/ai'
+import type { ReviewData } from '@cra/ai'
 
 @Injectable()
 export class ReviewService {
@@ -15,22 +15,21 @@ export class ReviewService {
         })
     }
 
-    async streamReview(code: string, res: Response): Promise<void> {
-        const result = streamText({
+    async analyzeCode(code: string): Promise<ReviewData> {
+        const result = await generateText({
             model: this.openai('gpt-4o-mini'),
+            // @ts-expect-error TS2589 — tsc cannot resolve recursive Zod generic depth; runtime is correct
+            output: Output.object({ schema: ReviewDataSchema }),
             system: REVIEW_SYSTEM_PROMPT,
             messages: [
                 {
                     role: 'user',
-                    content: `Please review the following code:\n\n\`\`\`\n${code}\n\`\`\``,
+                    content: `Please review the following code:\n\`\`\`\n${code}\n\`\`\``,
                 },
             ],
             temperature: 0.2,
         })
 
-        // pipeTextStreamToResponse is the correct AI SDK v6 method for
-        // Express/NestJS. It pipes token-by-token plain text to res.
-        // useCompletion on the frontend reads this plain text stream.
-        result.pipeTextStreamToResponse(res)
+        return result.output as ReviewData
     }
 }

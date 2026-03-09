@@ -1,5 +1,4 @@
-import { Controller, Post, Body, Res, HttpCode } from '@nestjs/common'
-import type { Response } from 'express'
+import { Body, Controller, Post, HttpCode } from '@nestjs/common'
 import { ReviewService } from './review.service'
 import { CreateReviewDto } from './dto/create-review.dto'
 
@@ -7,12 +6,9 @@ import { CreateReviewDto } from './dto/create-review.dto'
 export class ReviewController {
     constructor(private readonly reviewService: ReviewService) { }
 
-    @Post('stream')
+    @Post('analyze')
     @HttpCode(200)
-    async streamReview(
-        @Body() body: CreateReviewDto,
-        @Res() res: Response,
-    ): Promise<void> {
-        await this.reviewService.streamReview(body.prompt, res)
+    async analyze(@Body() dto: CreateReviewDto) {
+        return this.reviewService.analyzeCode(dto.code)
     }
 }
