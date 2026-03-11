@@ -2,10 +2,10 @@
     "name": "@cra/ai",
     "version": "0.0.1",
     "main": "dist/index.js",
-    "types": "dist/index.d.ts",
+    "types": "src/index.ts",
     "scripts": {
-        "build": "tsup src/index.ts --format cjs --dts --out-dir dist",
-        "dev": "tsup src/index.ts --format cjs --dts --out-dir dist --watch",
+        "build": "tsup src/index.ts --format cjs --out-dir dist",
+        "dev": "tsup src/index.ts --format cjs --out-dir dist --watch",
         "type-check": "tsc --noEmit"
     },
     "dependencies": {
