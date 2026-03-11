@@ -25,8 +25,7 @@ export class ReviewService {
     }
 
     async analyzeCode(code: string): Promise<ReviewData> {
-        // Pre-run linter on JS/TS before calling the AI — avoids AI SDK multi-step
-        // tool calling which is currently incompatible with Output.object in this SDK version.
+        // Pre-run linter to avoid AI SDK v6 multi-step tool bugs with Output.object.
         const lintContext = await this.tryLint(code)
         return this.runReview({ code, lintContext })
     }
@@ -44,19 +43,28 @@ export class ReviewService {
         return this.runReview({ code: diff, lintContext, isDiff: true })
     }
 
-    /**
-     * Attempt to run ESLint on the code. Returns a summary string or null if
-     * the code is not JS/TS or parsing fails.
-     */
+    // Lint JS/TS code or PR diffs (checked via headers) to avoid false positives.
+    // Returns a summary string, or null if unrecognised or clean.
     private async tryLint(code: string): Promise<string | null> {
-        const isJsTs = /\.(js|ts|jsx|tsx)|\bfunction\b|\bconst\b|\blet\b|\bvar\b|=>/.test(code)
+        const JS_TS_EXTS = /\.(js|ts|jsx|tsx|mjs|cjs)$/i
+        // Detect via diff file headers (PR diffs) or treat as raw JS/TS if no diff headers found
+        const diffHeaders = code.match(/^\+\+\+ b\/(.+)$/gm)
+        const isJsTs = diffHeaders
+            ? diffHeaders.some((h) => JS_TS_EXTS.test(h))
+            : JS_TS_EXTS.test(code.split('\n')[0] ?? '') || this.looksLikeJsTs(code)
+
         if (!isJsTs) return null
         try {
-            const result = await this.linterService.lint(code, 'javascript')
+            const result = await this.linterService.lint(code)
             return result === 'No lint issues found.' ? null : result
         } catch {
             return null
         }
+    }
+
+    /** Heuristic for raw code (not a diff): look for unambiguous JS/TS patterns. */
+    private looksLikeJsTs(code: string): boolean {
+        return /\bimport\b.+\bfrom\b|require\s*\(|=>\s*\{/.test(code)
     }
 
     private async runReview({
@@ -81,8 +89,7 @@ export class ReviewService {
             : `Please review the following code:${lintSection}\n\n${codeBlock}`
 
         try {
-            // Single-step generation — no multi-step tool calling.
-            // Pre-processing (PR fetch, linting) is handled above in plain NestJS code.
+            // Single-step generation: PR fetch & linting are pre-processed in NestJS.
             const result = await generateText({
                 model: this.openai('gpt-4o-mini'),
                 // @ts-expect-error TS2589 — tsc cannot resolve recursive Zod generic depth; runtime is correct
@@ -94,6 +101,7 @@ export class ReviewService {
 
             return result.output as ReviewData
         } catch (err: unknown) {
+            // Re-throw intact HttpExceptions; wrap everything else in 500.
             if (err instanceof HttpException) throw err
             const cause = (err as { cause?: unknown })?.cause
             if (cause instanceof HttpException) throw cause
