@@ -11,7 +11,6 @@ export const githubPRToolSchema = z.object({
 export type GithubPRToolInput = z.infer<typeof githubPRToolSchema>
 
 // Factory: Domain owns contract. NestJS passes implementation (GithubService).
-// NOTE: Pre-fetching diff in NestJS bypasses AI SDK v6 multi-step tool bugs.
 
 export function createFetchGithubPRTool(
     execute: (input: GithubPRToolInput) => Promise<string>,

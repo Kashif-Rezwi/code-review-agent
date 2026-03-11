@@ -11,7 +11,6 @@ export const linterToolSchema = z.object({
 export type LinterToolInput = z.infer<typeof linterToolSchema>
 
 // Factory: Domain owns contract. NestJS passes implementation (LinterService).
-// NOTE: Pre-running ESLint in NestJS bypasses AI SDK v6 multi-step tool bugs.
 
 export function createRunLinterTool(
     execute: (input: LinterToolInput) => Promise<string>,

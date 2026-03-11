@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common'
 
 @Injectable()
 export class LinterService {
-    async lint(code: string): Promise<string> {
+    async lint(code: string, language: 'javascript' | 'typescript' = 'javascript'): Promise<string> {
         try {
             const { Linter } = await import('eslint')
             const linter = new Linter()
