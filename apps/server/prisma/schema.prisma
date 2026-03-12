@@ -1,0 +1,29 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ── RAG: Coding Standards ───────────────────────────────────────────────────
+// userId defaults to "default" until Week 6 wires real auth.
+
+model Document {
+  id        String          @id @default(cuid())
+  userId    String          @default("default")
+  name      String
+  chunks    DocumentChunk[]
+  createdAt DateTime        @default(now())
+}
+
+model DocumentChunk {
+  id         String                     @id @default(cuid())
+  documentId String
+  document   Document                   @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  content    String
+  embedding  Unsupported("vector(1536)")?
+  metadata   Json?
+}

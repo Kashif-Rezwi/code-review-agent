@@ -14,6 +14,8 @@ export const ReviewDataSchema = z.object({
     score: z.number().int().min(1).max(10),
     issues: z.array(ReviewIssueSchema),
     positives: z.array(z.string()),
+    // Populated server-side after RAG retrieval — never emitted by the LLM.
+    appliedStandards: z.array(z.string()).optional(),
 })
 
 export type ReviewIssue = z.infer<typeof ReviewIssueSchema>

@@ -1,9 +1,10 @@
-import { CheckCircle2 } from 'lucide-react'
+import { CheckCircle2, BookOpen } from 'lucide-react'
 import { ScoreRing } from './score-ring'
 import { IssueCard } from './issue-card'
 import type { ReviewData } from '@/types/review.types'
 
-// Renders the full structured review: score, summary, issue cards, and positives.
+// Renders the full structured review: score, summary, issue cards, positives, and
+// an optional badge showing which coding-standards documents were applied (Week 4 RAG).
 export function ReviewPanel({ review }: { review: ReviewData }) {
     const criticalCount = review.issues.filter(i => i.severity === 'critical').length
     const warningCount = review.issues.filter(i => i.severity === 'warning').length
@@ -62,6 +63,19 @@ export function ReviewPanel({ review }: { review: ReviewData }) {
                             </div>
                         ))}
                     </div>
+                </div>
+            )}
+
+            {/* Applied coding standards (only shown when RAG retrieved relevant chunks) */}
+            {(review.appliedStandards?.length ?? 0) > 0 && (
+                <div className="rounded-xl border border-blue-900/40 bg-blue-950/20 px-4 py-3 flex items-center gap-2">
+                    <BookOpen className="w-4 h-4 text-blue-400 shrink-0" />
+                    <span className="text-xs text-blue-300">
+                        Reviewed against your team&apos;s standards:{' '}
+                        <span className="font-medium">
+                            {review.appliedStandards!.join(', ')}
+                        </span>
+                    </span>
                 </div>
             )}
         </div>
