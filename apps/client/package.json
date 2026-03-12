@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "pkill -f 'next dev' || true && rm -rf .next && next dev",
+    "dev": "lsof -ti:3000 | xargs kill -9 || true && rm -rf .next && next dev",
     "dev:clean": "rm -rf .next && next dev",
     "build": "pnpm -w build:packages && next build",
     "start": "next start",

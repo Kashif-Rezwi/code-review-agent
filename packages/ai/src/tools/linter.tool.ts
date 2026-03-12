@@ -18,8 +18,8 @@ export function createRunLinterTool(
     // @ts-expect-error TS2589 — tsc cannot resolve recursive Zod generic depth; runtime is correct
     return tool({
         description:
-            'Run ESLint static analysis on JavaScript or TypeScript code. ' +
-            'Use this before reviewing JS/TS code to get objective lint findings. ' +
+            'Run ESLint static analysis on JavaScript or TypeScript source code. ' +
+            'ONLY call this when the user has pasted source code directly — NEVER on a git diff or PR diff. ' +
             'Do NOT call this for Python, SQL, Go, or other languages — only JS/TS.',
         inputSchema: linterToolSchema,
         execute,
