@@ -1,7 +1,8 @@
 'use client'
 
 import { useCallback, useState } from 'react'
-import { AlertTriangle, Loader2, Code2, GitPullRequest } from 'lucide-react'
+import Link from 'next/link'
+import { AlertTriangle, Loader2, Code2, GitPullRequest, BookOpen } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { CodeEditor } from '@/components/review/code-editor'
 import { ReviewPanel } from '@/components/review/review-panel'
@@ -78,7 +79,16 @@ export default function ReviewPage() {
                     <Code2 className="w-5 h-5 text-blue-400" />
                     <span className="font-semibold text-white">Code Review Agent</span>
                 </div>
-                <span className="text-xs text-gray-500">Week 3 — Tool Calling</span>
+                <div className="flex items-center gap-4">
+                    <Link
+                        href="/standards"
+                        className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-200 transition-colors"
+                    >
+                        <BookOpen className="w-3.5 h-3.5" />
+                        Coding Standards
+                    </Link>
+                    <span className="text-xs text-gray-500">Week 4 — RAG</span>
+                </div>
             </header>
 
             <main className="max-w-5xl mx-auto p-6 space-y-6">

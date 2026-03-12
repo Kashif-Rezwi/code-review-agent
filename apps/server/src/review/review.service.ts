@@ -15,6 +15,7 @@ import {
 import type { ReviewData } from '@cra/ai'
 import { GithubService } from '../github/github.service'
 import { LinterService } from '../linter/linter.service'
+import { RagService } from '../rag/rag.service'
 
 @Injectable()
 export class ReviewService {
@@ -24,6 +25,7 @@ export class ReviewService {
         private config: ConfigService,
         private githubService: GithubService,
         private linterService: LinterService,
+        private ragService: RagService,
     ) {
         this.openai = createOpenAI({
             apiKey: this.config.get<string>('OPENAI_API_KEY'),
@@ -31,21 +33,39 @@ export class ReviewService {
     }
 
     async analyzeCode(code: string): Promise<ReviewData> {
+        // Retrieve standards semantically similar to the code being reviewed
+        const standards = await this.ragService.retrieveForContext(code)
         return this.runAgent(
             `Please review the following code:\n\`\`\`\n${code}\n\`\`\``,
+            standards,
         )
     }
 
     async analyzeFromPR(prUrl: string): Promise<ReviewData> {
         this.githubService.validatePRUrl(prUrl)
-        return this.runAgent(`Please review this GitHub pull request: ${prUrl}`)
+        // Use a generic query so broadly applicable standards are retrieved
+        const standards = await this.ragService.retrieveForContext(
+            'code review standards best practices',
+        )
+        return this.runAgent(
+            `Please review this GitHub pull request: ${prUrl}`,
+            standards,
+        )
     }
 
-    private async runAgent(userMessage: string): Promise<ReviewData> {
+    private async runAgent(
+        userMessage: string,
+        standards: Awaited<ReturnType<RagService['retrieveForContext']>>,
+    ): Promise<ReviewData> {
+        // Augment the system prompt with retrieved coding standards (if any)
+        const system = standards
+            ? `${REVIEW_SYSTEM_PROMPT}\n\nYour team's coding standards — apply these during the review:\n\n${standards.content}`
+            : REVIEW_SYSTEM_PROMPT
+
         try {
             const result = await generateText({
                 model: this.openai('gpt-4o-mini'),
-                system: REVIEW_SYSTEM_PROMPT,
+                system,
                 messages: [{ role: 'user', content: userMessage }],
                 tools: {
                     fetchGithubPR: createFetchGithubPRTool(async ({ prUrl }) => {
@@ -67,7 +87,8 @@ export class ReviewService {
                 temperature: 0.2,
             })
 
-            return this.parseReviewText(result.text)
+            const review = this.parseReviewText(result.text)
+            return { ...review, appliedStandards: standards?.appliedNames }
         } catch (err: unknown) {
             if (err instanceof HttpException) throw err
             const cause = (err as { cause?: unknown })?.cause
