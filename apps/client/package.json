@@ -2,6 +2,7 @@
   "name": "client",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@10.30.3",
   "scripts": {
     "dev": "lsof -ti:3000 | xargs kill -9 || true && rm -rf .next && next dev",
     "dev:clean": "rm -rf .next && next dev",

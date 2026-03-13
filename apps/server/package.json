@@ -6,7 +6,7 @@
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
-    "build": "nest build",
+    "build": "prisma generate && nest build",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "lsof -ti:4000 | xargs kill -9 || true && nest start",
     "start:dev": "lsof -ti:4000 | xargs kill -9 || true && nest start --watch",
