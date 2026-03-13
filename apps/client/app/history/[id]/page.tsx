@@ -7,6 +7,7 @@ import { AlertTriangle, ArrowLeft, Code2, BookOpen, History } from 'lucide-react
 import { ReviewPanel } from '@/components/review/review-panel'
 import { ChatPanel } from '@/components/review/chat-panel'
 import { ReviewSkeleton } from '@/components/review/review-skeleton'
+import { ReviewInputDisplay } from '@/components/review/review-input-display'
 import type { ReviewData } from '@/types/review.types'
 
 interface Conversation {
@@ -17,6 +18,7 @@ interface Conversation {
 interface FullReview extends ReviewData {
     id: string
     type: 'CODE' | 'PR'
+    input: string
     conversations: Conversation[]
 }
 
@@ -94,7 +96,13 @@ export default function ReviewDetailPage() {
 
                 {review && (
                     <>
+                        {/* Original input — PR link or read-only code */}
+                        <ReviewInputDisplay type={review.type} input={review.input} />
+
+                        {/* Review results */}
                         <ReviewPanel review={review} />
+
+                        {/* Follow-up chat with persisted history */}
                         <ChatPanel
                             reviewId={review.id}
                             initialMessages={review.conversations}
