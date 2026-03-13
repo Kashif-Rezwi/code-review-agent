@@ -27,3 +27,46 @@ model DocumentChunk {
   embedding  Unsupported("vector(1536)")?
   metadata   Json?
 }
+
+// ── Memory: Review History ───────────────────────────────────────────────────
+// userId defaults to "default" until Week 6 wires real auth.
+
+enum ReviewType {
+  CODE
+  PR
+}
+
+model Review {
+  id               String         @id @default(cuid())
+  userId           String         @default("default")
+  type             ReviewType
+  input            String         @db.Text
+  summary          String         @db.Text
+  score            Int
+  positives        String[]
+  appliedStandards String[]
+  issues           Issue[]
+  conversations    Conversation[]
+  createdAt        DateTime       @default(now())
+}
+
+model Issue {
+  id             String  @id @default(cuid())
+  reviewId       String
+  review         Review  @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  type           String
+  severity       String
+  title          String
+  location       String
+  description    String  @db.Text
+  recommendation String  @db.Text
+}
+
+model Conversation {
+  id        String   @id @default(cuid())
+  reviewId  String
+  review    Review   @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  role      String   // "user" | "assistant"
+  content   String   @db.Text
+  createdAt DateTime @default(now())
+}

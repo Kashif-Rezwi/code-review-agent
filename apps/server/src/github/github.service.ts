@@ -1,4 +1,5 @@
 import { Injectable, BadRequestException } from '@nestjs/common'
+import type { PRFile } from '@cra/ai'
 import { ConfigService } from '@nestjs/config'
 
 const MAX_DIFF_CHARS = 24_000
@@ -86,6 +87,39 @@ export class GithubService {
                 },
             },
         )
+    }
+
+    async fetchPRFiles(prUrl: string): Promise<PRFile[]> {
+        const { owner, repo, number } = this.parsePRUrl(prUrl)
+        const headers: Record<string, string> = {
+            Accept: 'application/vnd.github.v3+json',
+            'User-Agent': 'code-review-agent/1.0',
+            'X-GitHub-Api-Version': '2022-11-28',
+        }
+        if (this.token) headers['Authorization'] = `Bearer ${this.token}`
+
+        const res = await fetch(
+            `https://api.github.com/repos/${owner}/${repo}/pulls/${number}/files?per_page=30`,
+            { headers },
+        )
+
+        if (res.status === 404) throw new BadRequestException(`PR not found: ${prUrl}`)
+        if (res.status === 401 || res.status === 403) {
+            throw new BadRequestException(`Access denied to ${prUrl}. Set a GITHUB_TOKEN environment variable.`)
+        }
+        if (res.status === 429) {
+            throw new BadRequestException('GitHub rate limit exceeded. Set a GITHUB_TOKEN environment variable.')
+        }
+        if (!res.ok) throw new BadRequestException(`GitHub returned ${res.status} for ${prUrl}.`)
+
+        const files = await res.json()
+        return files.map((f: Record<string, unknown>) => ({
+            filename: f.filename,
+            status: f.status,
+            additions: f.additions,
+            deletions: f.deletions,
+            patch: f.patch,
+        }))
     }
 
     /**

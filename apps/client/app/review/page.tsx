@@ -2,11 +2,12 @@
 
 import { useCallback, useState } from 'react'
 import Link from 'next/link'
-import { AlertTriangle, Loader2, Code2, GitPullRequest, BookOpen } from 'lucide-react'
+import { AlertTriangle, Loader2, Code2, GitPullRequest, BookOpen, History } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { CodeEditor } from '@/components/review/code-editor'
 import { ReviewPanel } from '@/components/review/review-panel'
 import { ReviewSkeleton } from '@/components/review/review-skeleton'
+import { ChatPanel } from '@/components/review/chat-panel'
 import { detectLanguage, estimateTokens } from '@/lib/detect-language'
 import type { ReviewData } from '@/types/review.types'
 
@@ -17,6 +18,7 @@ export default function ReviewPage() {
     const [code, setCode] = useState('')
     const [prUrl, setPrUrl] = useState('')
     const [review, setReview] = useState<ReviewData | null>(null)
+    const [reviewId, setReviewId] = useState<string | null>(null)
     const [isLoading, setIsLoading] = useState(false)
     const [error, setError] = useState<string | null>(null)
 
@@ -38,6 +40,7 @@ export default function ReviewPage() {
         setIsLoading(true)
         setError(null)
         setReview(null)
+        setReviewId(null)
 
         try {
             const endpoint = mode === 'code' ? '/review/analyze' : '/review/from-pr'
@@ -57,7 +60,9 @@ export default function ReviewPage() {
                 throw new Error(msg || 'Review failed. Please try again.')
             }
 
-            setReview(await res.json() as ReviewData)
+            const data = await res.json() as ReviewData
+            setReview(data)
+            setReviewId(data.id ?? null)
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Something went wrong.')
         } finally {
@@ -69,6 +74,7 @@ export default function ReviewPage() {
         setCode('')
         setPrUrl('')
         setReview(null)
+        setReviewId(null)
         setError(null)
     }
 
@@ -81,13 +87,20 @@ export default function ReviewPage() {
                 </div>
                 <div className="flex items-center gap-4">
                     <Link
+                        href="/history"
+                        className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-200 transition-colors"
+                    >
+                        <History className="w-3.5 h-3.5" />
+                        History
+                    </Link>
+                    <Link
                         href="/standards"
                         className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-200 transition-colors"
                     >
                         <BookOpen className="w-3.5 h-3.5" />
-                        Coding Standards
+                        Standards
                     </Link>
-                    <span className="text-xs text-gray-500">Week 4 — RAG</span>
+                    <span className="text-xs text-gray-500">Week 5 — Memory</span>
                 </div>
             </header>
 
@@ -104,7 +117,7 @@ export default function ReviewPage() {
                     {(['code', 'pr'] as Mode[]).map((m) => (
                         <button
                             key={m}
-                            onClick={() => { setMode(m); setError(null); setReview(null) }}
+                            onClick={() => { setMode(m); setError(null); setReview(null); setReviewId(null) }}
                             className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${mode === m
                                     ? 'bg-gray-700 text-white'
                                     : 'text-gray-400 hover:text-gray-200'
@@ -186,7 +199,7 @@ export default function ReviewPage() {
                 {isLoading && mode === 'pr' && (
                     <div className="flex items-center gap-3 text-sm text-gray-400 bg-gray-900/60 border border-gray-800 rounded-lg px-4 py-3">
                         <Loader2 className="w-4 h-4 animate-spin text-blue-400 shrink-0" />
-                        Agent is fetching the PR diff, then generating the review...
+                        Agent is fetching the PR files and reviewing each one...
                     </div>
                 )}
 
@@ -198,7 +211,12 @@ export default function ReviewPage() {
                 )}
 
                 {isLoading && <ReviewSkeleton />}
-                {!isLoading && review && <ReviewPanel review={review} />}
+                {!isLoading && review && (
+                    <>
+                        <ReviewPanel review={review} />
+                        {reviewId && <ChatPanel reviewId={reviewId} />}
+                    </>
+                )}
             </main>
         </div>
     )
