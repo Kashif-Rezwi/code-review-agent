@@ -3,6 +3,12 @@ import { XCircle, Shield, Zap, Wrench, Lightbulb } from 'lucide-react'
 // Types come from the shared contract layer — single source of truth across client + server
 export type { ReviewIssue, ReviewData } from '@cra/types'
 
+/** A single chat turn: user question or assistant reply. Shared by ChatPanel + history pages. */
+export interface ChatMessage {
+    role: 'user' | 'assistant'
+    content: string
+}
+
 export const LANGUAGE_LABELS: Record<string, string> = {
     typescript: 'TypeScript', javascript: 'JavaScript', python: 'Python',
     java: 'Java', go: 'Go', rust: 'Rust', html: 'HTML', css: 'CSS',

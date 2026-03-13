@@ -2,15 +2,13 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { Loader2, MessageCircle, Send, Copy, Check } from 'lucide-react'
-
-interface Message {
-    role: 'user' | 'assistant'
-    content: string
-}
+import { apiFetch } from '@/lib/api'
+import { useCopyToClipboard } from '@/lib/hooks'
+import type { ChatMessage } from '@/types/review.types'
 
 interface ChatPanelProps {
     reviewId: string
-    initialMessages?: Message[]
+    initialMessages?: ChatMessage[]
 }
 
 // ── Markdown parser ──────────────────────────────────────────────────────────
@@ -19,10 +17,7 @@ type Segment =
     | { type: 'text'; content: string }
     | { type: 'code'; lang: string; content: string }
 
-/**
- * Split a string into alternating text / fenced-code-block segments.
- * Handles ```lang\n...\n``` patterns; falls back to a single text segment.
- */
+/** Split raw text into alternating text / fenced-code-block segments. */
 function parseSegments(raw: string): Segment[] {
     const segments: Segment[] = []
     const fence = /```(\w*)\n([\s\S]*?)```/g
@@ -46,17 +41,14 @@ function parseSegments(raw: string): Segment[] {
 
 // ── Sub-components ───────────────────────────────────────────────────────────
 
+/** Renders inline backtick code spans inside a text run. */
 function InlineText({ text }: { text: string }) {
-    // Render inline backtick code spans
     const parts = text.split(/`([^`\n]+)`/)
     return (
         <>
             {parts.map((part, i) =>
                 i % 2 === 1 ? (
-                    <code
-                        key={i}
-                        className="bg-gray-700 rounded px-1 py-0.5 text-xs font-mono text-gray-200"
-                    >
+                    <code key={i} className="bg-gray-700 rounded px-1 py-0.5 text-xs font-mono text-gray-200">
                         {part}
                     </code>
                 ) : (
@@ -84,28 +76,19 @@ function TextSegment({ content }: { content: string }) {
 }
 
 function CodeBlock({ lang, content }: { lang: string; content: string }) {
-    const [copied, setCopied] = useState(false)
-
-    const handleCopy = async () => {
-        await navigator.clipboard.writeText(content)
-        setCopied(true)
-        setTimeout(() => setCopied(false), 2000)
-    }
-
+    const { copied, copy } = useCopyToClipboard()
     return (
         <div className="rounded-lg overflow-hidden border border-gray-800/70 my-2">
-            {/* Header: blends with the page — same base dark as #0d1117 */}
             <div className="flex items-center justify-between px-3 py-1.5 bg-[#0d1117] border-b border-gray-800/60">
                 <span className="text-xs text-gray-500 font-mono">{lang}</span>
                 <button
-                    onClick={handleCopy}
+                    onClick={() => copy(content)}
                     className="flex items-center gap-1 text-xs text-gray-600 hover:text-gray-300 transition-colors"
                 >
                     {copied ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
                     {copied ? 'Copied' : 'Copy'}
                 </button>
             </div>
-            {/* Code body: same page-level dark so editor feels embedded, not boxed */}
             <pre className="bg-[#0d1117] px-4 py-3 overflow-x-auto text-xs font-mono text-gray-300 leading-relaxed">
                 <code>{content}</code>
             </pre>
@@ -131,11 +114,10 @@ function AssistantMessage({ content }: { content: string }) {
 // ── Main component ───────────────────────────────────────────────────────────
 
 export function ChatPanel({ reviewId, initialMessages = [] }: ChatPanelProps) {
-    const [messages, setMessages] = useState<Message[]>(initialMessages)
+    const [messages, setMessages] = useState<ChatMessage[]>(initialMessages)
     const [input, setInput] = useState('')
     const [isLoading, setIsLoading] = useState(false)
     const bottomRef = useRef<HTMLDivElement>(null)
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL
 
     useEffect(() => {
         bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -151,14 +133,12 @@ export function ChatPanel({ reviewId, initialMessages = [] }: ChatPanelProps) {
         setIsLoading(true)
 
         try {
-            const res = await fetch(`${apiUrl}/history/${reviewId}/chat`, {
+            const data = await apiFetch<ChatMessage>(`/history/${reviewId}/chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ message }),
             })
-            if (!res.ok) throw new Error('Failed to get a response.')
-            const data = await res.json()
-            setMessages((prev) => [...prev, { role: 'assistant', content: data.content }])
+            setMessages((prev) => [...prev, data])
         } catch {
             setMessages((prev) => [
                 ...prev,

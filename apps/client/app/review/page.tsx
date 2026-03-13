@@ -1,14 +1,16 @@
 'use client'
 
 import { useCallback, useState } from 'react'
-import Link from 'next/link'
-import { AlertTriangle, Loader2, Code2, GitPullRequest, BookOpen, History } from 'lucide-react'
+import { AlertTriangle, Loader2, Code2, GitPullRequest } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { AppHeader } from '@/components/layout/app-header'
+import { ErrorBanner } from '@/components/ui/error-banner'
 import { CodeEditor } from '@/components/review/code-editor'
 import { ReviewPanel } from '@/components/review/review-panel'
 import { ReviewSkeleton } from '@/components/review/review-skeleton'
 import { ChatPanel } from '@/components/review/chat-panel'
 import { detectLanguage, estimateTokens } from '@/lib/detect-language'
+import { apiFetch } from '@/lib/api'
 import type { ReviewData } from '@/types/review.types'
 
 type Mode = 'code' | 'pr'
@@ -46,21 +48,11 @@ export default function ReviewPage() {
             const endpoint = mode === 'code' ? '/review/analyze' : '/review/from-pr'
             const body = mode === 'code' ? { code } : { prUrl }
 
-            const res = await fetch(
-                `${process.env.NEXT_PUBLIC_API_URL}${endpoint}`,
-                {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(body),
-                },
-            )
-
-            if (!res.ok) {
-                const msg = await res.text()
-                throw new Error(msg || 'Review failed. Please try again.')
-            }
-
-            const data = await res.json() as ReviewData
+            const data = await apiFetch<ReviewData>(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            })
             setReview(data)
             setReviewId(data.id ?? null)
         } catch (err) {
@@ -78,31 +70,16 @@ export default function ReviewPage() {
         setError(null)
     }
 
+    const handleModeSwitch = (m: Mode) => {
+        setMode(m)
+        setError(null)
+        setReview(null)
+        setReviewId(null)
+    }
+
     return (
         <div className="min-h-screen bg-[#0d1117] text-gray-100">
-            <header className="border-b border-gray-800 px-6 py-4 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                    <Code2 className="w-5 h-5 text-blue-400" />
-                    <span className="font-semibold text-white">Code Review Agent</span>
-                </div>
-                <div className="flex items-center gap-4">
-                    <Link
-                        href="/history"
-                        className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-200 transition-colors"
-                    >
-                        <History className="w-3.5 h-3.5" />
-                        History
-                    </Link>
-                    <Link
-                        href="/standards"
-                        className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-200 transition-colors"
-                    >
-                        <BookOpen className="w-3.5 h-3.5" />
-                        Standards
-                    </Link>
-                    <span className="text-xs text-gray-500">Week 5 — Memory</span>
-                </div>
-            </header>
+            <AppHeader />
 
             <main className="max-w-5xl mx-auto p-6 space-y-6">
                 <div>
@@ -117,11 +94,10 @@ export default function ReviewPage() {
                     {(['code', 'pr'] as Mode[]).map((m) => (
                         <button
                             key={m}
-                            onClick={() => { setMode(m); setError(null); setReview(null); setReviewId(null) }}
-                            className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${mode === m
-                                    ? 'bg-gray-700 text-white'
-                                    : 'text-gray-400 hover:text-gray-200'
-                                }`}
+                            onClick={() => handleModeSwitch(m)}
+                            className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                                mode === m ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'
+                            }`}
                         >
                             {m === 'code'
                                 ? <><Code2 className="w-4 h-4" /> Paste Code</>
@@ -195,7 +171,6 @@ export default function ReviewPage() {
                     </div>
                 )}
 
-                {/* Agent progress hint — only during PR loading */}
                 {isLoading && mode === 'pr' && (
                     <div className="flex items-center gap-3 text-sm text-gray-400 bg-gray-900/60 border border-gray-800 rounded-lg px-4 py-3">
                         <Loader2 className="w-4 h-4 animate-spin text-blue-400 shrink-0" />
@@ -203,14 +178,10 @@ export default function ReviewPage() {
                     </div>
                 )}
 
-                {error && (
-                    <div className="flex items-start gap-3 bg-red-950/50 border border-red-800 rounded-lg p-4 text-sm text-red-300">
-                        <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
-                        {error}
-                    </div>
-                )}
+                {error && <ErrorBanner message={error} />}
 
                 {isLoading && <ReviewSkeleton />}
+
                 {!isLoading && review && (
                     <>
                         <ReviewPanel review={review} />

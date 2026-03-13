@@ -77,27 +77,7 @@ export class ReviewService {
                 model: this.openai('gpt-4o-mini'),
                 system,
                 messages: [{ role: 'user', content: userMessage }],
-                tools: {
-                    fetchGithubPR: createFetchGithubPRTool(async ({ prUrl }) => {
-                        try {
-                            return await this.githubService.fetchPRDiff(prUrl)
-                        } catch (err) {
-                            const msg = err instanceof Error ? err.message : String(err)
-                            return `[Tool error: ${msg}. Follow the OUTPUT RULE and respond with JSON now.]`
-                        }
-                    }),
-                    listPRFiles: createListPRFilesTool(async ({ prUrl }) => {
-                        try {
-                            return await this.githubService.fetchPRFiles(prUrl)
-                        } catch (err) {
-                            const msg = err instanceof Error ? err.message : String(err)
-                            return `[Tool error: ${msg}. Use fetchGithubPR as fallback.]` as unknown as PRFile[]
-                        }
-                    }),
-                    runLinter: createRunLinterTool(({ code, language }) =>
-                        this.linterService.lint(code, language),
-                    ),
-                },
+                tools: this.buildAgentTools(),
                 stopWhen: stepCountIs(8),
                 temperature: 0.2,
             })
@@ -114,6 +94,33 @@ export class ReviewService {
                 err instanceof Error ? err.message : 'Code review failed.',
             )
         }
+    }
+
+    /** Wire up the three agent tools — each catches its own errors so the agent can recover. */
+    private buildAgentTools() {
+        return {
+            fetchGithubPR: createFetchGithubPRTool(async ({ prUrl }) => {
+                try {
+                    return await this.githubService.fetchPRDiff(prUrl)
+                } catch (err) {
+                    return `[Tool error: ${this.errMsg(err)}. Follow the OUTPUT RULE and respond with JSON now.]`
+                }
+            }),
+            listPRFiles: createListPRFilesTool(async ({ prUrl }) => {
+                try {
+                    return await this.githubService.fetchPRFiles(prUrl)
+                } catch (err) {
+                    return `[Tool error: ${this.errMsg(err)}. Use fetchGithubPR as fallback.]` as unknown as PRFile[]
+                }
+            }),
+            runLinter: createRunLinterTool(({ code, language }) =>
+                this.linterService.lint(code, language),
+            ),
+        }
+    }
+
+    private errMsg(err: unknown): string {
+        return err instanceof Error ? err.message : String(err)
     }
 
     private async saveReview(

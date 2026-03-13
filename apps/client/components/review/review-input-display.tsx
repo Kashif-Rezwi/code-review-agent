@@ -1,31 +1,29 @@
 'use client'
 
 import dynamic from 'next/dynamic'
-import { useState } from 'react'
 import { GitPullRequest, Code2, Copy, Check, ExternalLink } from 'lucide-react'
 import { detectLanguage } from '@/lib/detect-language'
+import { useCopyToClipboard } from '@/lib/hooks'
 import type { Monaco } from '@monaco-editor/react'
 
 const MonacoEditor = dynamic(() => import('@monaco-editor/react'), { ssr: false })
 
-// Page background token — used to define the custom Monaco theme so the editor
-// blends seamlessly with the surrounding dark surface instead of boxing out.
 const PAGE_BG = '#0d1117'
 
-/** Register a Monaco theme whose background matches the page — run once. */
+/** Register once — Monaco theme whose background matches the page colour. */
 function registerTheme(monaco: Monaco) {
     monaco.editor.defineTheme('cra-dark', {
         base: 'vs-dark',
         inherit: true,
         rules: [],
         colors: {
-            'editor.background': PAGE_BG,
-            'editor.lineHighlightBackground': '#161b22',  // very subtle current-line tint
-            'editorGutter.background': PAGE_BG,
-            'editorLineNumber.foreground': '#30363d',
+            'editor.background':             PAGE_BG,
+            'editor.lineHighlightBackground': '#161b22',
+            'editorGutter.background':        PAGE_BG,
+            'editorLineNumber.foreground':    '#30363d',
             'editorLineNumber.activeForeground': '#8b949e',
-            'scrollbar.shadow': '#00000000',
-            'editor.selectionBackground': '#264f78',
+            'scrollbar.shadow':              '#00000000',
+            'editor.selectionBackground':    '#264f78',
         },
     })
 }
@@ -35,17 +33,13 @@ interface ReviewInputDisplayProps {
     input: string
 }
 
-// Shows the original input that was reviewed:
-// - PR  → a card with the URL, copy button, and open-in-GitHub link
-// - CODE → a read-only Monaco editor (custom dark theme, no visual boxing)
+/**
+ * Shows the original input that was reviewed:
+ * - PR   → card with a clickable URL, Copy, and Open-in-GitHub buttons
+ * - CODE → read-only Monaco editor (custom theme blended with the page)
+ */
 export function ReviewInputDisplay({ type, input }: ReviewInputDisplayProps) {
-    const [copied, setCopied] = useState(false)
-
-    const handleCopy = async () => {
-        await navigator.clipboard.writeText(input)
-        setCopied(true)
-        setTimeout(() => setCopied(false), 2000)
-    }
+    const { copied, copy } = useCopyToClipboard()
 
     /* ── PR URL card ─────────────────────────────────────────────── */
     if (type === 'PR') {
@@ -67,13 +61,11 @@ export function ReviewInputDisplay({ type, input }: ReviewInputDisplayProps) {
                         {input}
                     </a>
                     <button
-                        onClick={handleCopy}
+                        onClick={() => copy(input)}
                         title="Copy URL"
                         className="p-1.5 rounded-md text-gray-500 hover:text-gray-300 hover:bg-gray-800 transition-colors shrink-0"
                     >
-                        {copied
-                            ? <Check className="w-3.5 h-3.5 text-green-400" />
-                            : <Copy className="w-3.5 h-3.5" />}
+                        {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
                     </button>
                     <a
                         href={input}
@@ -92,14 +84,11 @@ export function ReviewInputDisplay({ type, input }: ReviewInputDisplayProps) {
     /* ── Read-only code editor ───────────────────────────────────── */
     const language = detectLanguage(input)
     const lineCount = input.split('\n').length
-    // Height: 19px per line, min 120px, max 400px, with padding
     const editorHeight = Math.min(Math.max(lineCount * 19 + 32, 120), 400)
 
     return (
-        // Outer card: same border as the other review cards; bg is the page colour
-        // so the Monaco surface and the card chrome are one continuous dark plane.
         <div className="rounded-xl border border-gray-800 overflow-hidden" style={{ background: PAGE_BG }}>
-            {/* Toolbar — sits on the same dark plane */}
+            {/* Toolbar */}
             <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-800/70">
                 <div className="flex items-center gap-2">
                     <Code2 className="w-4 h-4 text-gray-500" />
@@ -113,7 +102,7 @@ export function ReviewInputDisplay({ type, input }: ReviewInputDisplayProps) {
                     )}
                 </div>
                 <button
-                    onClick={handleCopy}
+                    onClick={() => copy(input)}
                     className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs text-gray-600
                                hover:text-gray-300 hover:bg-gray-800/60 transition-colors"
                 >
@@ -123,7 +112,7 @@ export function ReviewInputDisplay({ type, input }: ReviewInputDisplayProps) {
                 </button>
             </div>
 
-            {/* Monaco with custom theme — background matches PAGE_BG exactly */}
+            {/* Monaco — background matches PAGE_BG exactly via custom theme */}
             <MonacoEditor
                 height={editorHeight}
                 language={language}
