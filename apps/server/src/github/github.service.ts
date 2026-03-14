@@ -62,6 +62,52 @@ export class GithubService {
         }))
     }
 
+    /**
+     * Fetch the full source of any file in the repository.
+     * Used by the autonomous review agent to investigate imports, called
+     * functions, or base classes when the diff alone is not enough.
+     * Response content from GitHub Contents API is base64-encoded.
+     */
+    async fetchFileContent(prUrl: string, filePath: string): Promise<string> {
+        const { owner, repo } = this.parsePRUrl(prUrl)
+
+        const res = await fetch(
+            `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`,
+            { headers: this.buildHeaders('application/vnd.github.v3+json') },
+        )
+
+        if (res.status === 404) {
+            throw new BadRequestException(
+                `File not found in repository: ${filePath}`,
+            )
+        }
+        this.assertOk(res, prUrl)
+
+        const data = await res.json()
+
+        if (data.encoding !== 'base64' || typeof data.content !== 'string') {
+            throw new BadRequestException(
+                `Unexpected GitHub API response for file: ${filePath}`,
+            )
+        }
+
+        // GitHub embeds newlines in the base64 string — strip before decoding
+        const content = Buffer.from(
+            data.content.replace(/\n/g, ''),
+            'base64',
+        ).toString('utf-8')
+
+        const MAX_FILE_CHARS = 8_000
+        if (content.length > MAX_FILE_CHARS) {
+            return (
+                content.slice(0, MAX_FILE_CHARS) +
+                `\n\n[file truncated — ${content.length} chars total, showing first ${MAX_FILE_CHARS}]`
+            )
+        }
+
+        return content || `(empty file: ${filePath})`
+    }
+
     // ── Private helpers ────────────────────────────────────────────────────────
 
     private parsePRUrl(url: string): { owner: string; repo: string; number: number } {

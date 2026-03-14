@@ -58,3 +58,36 @@ export function createListPRFilesTool(
         execute,
     })
 }
+
+// ── fetchFileContent tool ─────────────────────────────────────────────────────
+// Lets the agent investigate any file in the repo when the diff alone
+// is not enough to assess correctness (e.g. checking a called function,
+// verifying an imported type, or understanding a base class).
+
+export const fetchFileContentSchema = z.object({
+    prUrl: z
+        .string()
+        .url()
+        .describe('The GitHub PR URL — used to identify the repository owner and name'),
+    filePath: z
+        .string()
+        .describe('Path of the file to fetch relative to the repo root. E.g. src/auth/token.service.ts'),
+})
+
+export type FetchFileContentInput = z.infer<typeof fetchFileContentSchema>
+
+export function createFetchFileContentTool(
+    execute: (input: FetchFileContentInput) => Promise<string>,
+) {
+    // @ts-expect-error TS2589 — tsc cannot resolve recursive Zod generic depth; runtime is correct
+    return tool({
+        description:
+            'Fetch the full source of any file in the GitHub repository being reviewed. ' +
+            'Use this when you encounter an import, function call, or type reference whose ' +
+            'implementation is needed to accurately judge correctness, security, or design. ' +
+            'Call only for files that are directly relevant to an identified or suspected issue. ' +
+            'Do NOT call speculatively — only when the diff alone is insufficient.',
+        inputSchema: fetchFileContentSchema,
+        execute,
+    })
+}

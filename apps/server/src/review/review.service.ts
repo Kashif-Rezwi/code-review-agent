@@ -12,6 +12,7 @@ import {
     ReviewDataSchema,
     createFetchGithubPRTool,
     createListPRFilesTool,
+    createFetchFileContentTool,
     createRunLinterTool,
 } from '@cra/ai'
 import type { ReviewData, PRFile } from '@cra/ai'
@@ -73,11 +74,12 @@ export class ReviewService {
             : REVIEW_SYSTEM_PROMPT
 
         // Step budget:
-        //   code review  → runLinter(1)   + JSON output(1) = 2 steps
-        //   PR review    → listPRFiles(1) + JSON output(1) = 2 steps
-        //   PR fallback  → listPRFiles(1) + fetchGithubPR(1) + JSON output(1) = 3 steps
-        //   confused max → 3 tool calls   + forced JSON(1) = 4 steps  (+1 buffer = 5)
-        const MAX_STEPS = 5
+        //   code review                → runLinter(1) + JSON(1) = 2
+        //   PR review                  → listPRFiles(1) + JSON(1) = 2
+        //   PR + investigation (×3)    → listPRFiles(1) + fetchFileContent(1-3) + JSON(1) = 3-5
+        //   PR fallback + investigate  → listPRFiles(1) + fetchGithubPR(1) + fetchFileContent(1-3) + JSON(1) = 4-6
+        //   worst-case autonomous max  → 8 tool calls + forced JSON(1) = 9  (+1 buffer = 10)
+        const MAX_STEPS = 10
 
         try {
             const result = await generateText({
@@ -137,7 +139,7 @@ export class ReviewService {
         }
     }
 
-    /** Wire up the three agent tools — each catches its own errors so the agent can recover. */
+    /** Wire up the four agent tools — each catches its own errors so the agent can recover. */
     private buildAgentTools() {
         return {
             fetchGithubPR: createFetchGithubPRTool(async ({ prUrl }) => {
@@ -152,6 +154,13 @@ export class ReviewService {
                     return await this.githubService.fetchPRFiles(prUrl)
                 } catch (err) {
                     return `[Tool error: ${this.errMsg(err)}. Use fetchGithubPR as fallback.]` as unknown as PRFile[]
+                }
+            }),
+            fetchFileContent: createFetchFileContentTool(async ({ prUrl, filePath }) => {
+                try {
+                    return await this.githubService.fetchFileContent(prUrl, filePath)
+                } catch (err) {
+                    return `[Tool error: ${this.errMsg(err)}. Continue the review without this file's content.]`
                 }
             }),
             runLinter: createRunLinterTool(({ code, language }) =>
