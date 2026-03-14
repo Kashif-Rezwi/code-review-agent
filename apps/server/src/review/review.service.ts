@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { createOpenAI } from '@ai-sdk/openai'
-import { generateText, stepCountIs } from 'ai'
+import { generateText } from 'ai'
 import {
     REVIEW_SYSTEM_PROMPT,
     ReviewDataSchema,
@@ -72,17 +72,58 @@ export class ReviewService {
             ? `${REVIEW_SYSTEM_PROMPT}\n\nYour team's coding standards — apply these during the review:\n\n${standards.content}`
             : REVIEW_SYSTEM_PROMPT
 
+        // Step budget:
+        //   code review  → runLinter(1)   + JSON output(1) = 2 steps
+        //   PR review    → listPRFiles(1) + JSON output(1) = 2 steps
+        //   PR fallback  → listPRFiles(1) + fetchGithubPR(1) + JSON output(1) = 3 steps
+        //   confused max → 3 tool calls   + forced JSON(1) = 4 steps  (+1 buffer = 5)
+        const MAX_STEPS = 5
+
         try {
             const result = await generateText({
                 model: this.openai('gpt-4o-mini'),
                 system,
                 messages: [{ role: 'user', content: userMessage }],
                 tools: this.buildAgentTools(),
-                stopWhen: stepCountIs(8),
                 temperature: 0.2,
+
+                // Exit the loop the moment a step produces a parseable review.
+                // Falls back to the hard cap so the loop always terminates.
+                stopWhen: ({ steps }) => {
+                    const lastText = steps.at(-1)?.text ?? ''
+                    try { this.parseReviewText(lastText); return true } catch { /* keep going */ }
+                    return steps.length >= MAX_STEPS
+                },
+
+                // On the last allowed step, remove tools entirely so the model
+                // is physically unable to make another tool call — it must respond
+                // with text (i.e. the JSON review).
+                prepareStep: ({ steps }) => {
+                    if (steps.length >= MAX_STEPS - 1) return { toolChoice: 'none' as const }
+                    return {}
+                },
             })
 
-            const review = this.parseReviewText(result.text)
+            // With the two guards above result.text should always contain the JSON.
+            // The step scan is a final paranoia safety net for unexpected model behaviour.
+            const allTexts = [result.text, ...result.steps.map(s => s.text).reverse()]
+                .filter(t => t.trim())
+
+            let review: ReviewData | undefined
+            for (const text of allTexts) {
+                try { review = this.parseReviewText(text); break } catch { /* try next */ }
+            }
+
+            if (!review) {
+                this.logger.error(
+                    `Review parsing failed — steps: ${result.steps.length}, ` +
+                    `last text: ${JSON.stringify(result.text.slice(0, 300))}`,
+                )
+                throw new InternalServerErrorException(
+                    'The model did not return a valid review. Please try again.',
+                )
+            }
+
             const merged = { ...review, appliedStandards: standards?.appliedNames }
             const id = await this.saveReview(input, reviewType, merged)
             return { ...merged, id }

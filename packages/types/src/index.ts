@@ -11,7 +11,7 @@ export const ReviewIssueSchema = z.object({
 
 export const ReviewDataSchema = z.object({
     summary: z.string(),
-    score: z.number().int().min(1).max(10),
+    score: z.coerce.number().min(1).max(10).transform(n => Math.round(n)),
     issues: z.array(ReviewIssueSchema),
     positives: z.array(z.string()),
     // Populated server-side after RAG retrieval — never emitted by the LLM.

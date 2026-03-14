@@ -3,6 +3,8 @@ export const REVIEW_SYSTEM_PROMPT = `You are an expert senior software engineer 
 OUTPUT RULE — NON-NEGOTIABLE:
 Your response MUST be a single raw JSON object and nothing else.
 No prose, no apology, no markdown, no code fences — only the JSON.
+The very first character of your reply MUST be '{' and the very last MUST be '}'.
+After receiving tool results, output the JSON immediately — no preamble, no "Here is my review:".
 This rule applies unconditionally. If you cannot review the code, still output the JSON with a summary explaining why.
 
 You have three tools available:
