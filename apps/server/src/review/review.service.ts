@@ -117,23 +117,6 @@ export class ReviewService {
                 )
             }
 
-            // Emit task_plan for the pre-fetch progress board
-            send({
-                type: 'task_plan',
-                tasks: files.map(f => ({
-                    id: f.filename,
-                    label: f.filename.split('/').pop() ?? f.filename,
-                })),
-            })
-
-            for (const f of files) {
-                const diffLines = f.patch ? f.patch.split('\n').length : 0
-                const detail = diffLines > 0
-                    ? `+${f.additions} -${f.deletions} · ${diffLines} diff lines`
-                    : f.status
-                send({ type: 'task_update', taskId: f.filename, status: 'done', detail })
-            }
-
             // Use lightweight LLM call to plan clusters intelligently.
             // Falls back to single "general" cluster automatically on error.
             const clusters = await planClusters(files, this.openai)

@@ -26,7 +26,7 @@ export function AppHeader() {
                         {label}
                     </Link>
                 ))}
-                <span className="text-xs text-gray-500">Week 5 — Memory</span>
+                <span className="text-xs text-gray-500">Week 6 — Clustered PR Review</span>
             </div>
         </header>
     )

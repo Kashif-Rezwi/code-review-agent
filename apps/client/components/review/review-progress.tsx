@@ -10,8 +10,7 @@ import {
     X,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import type { TaskItem, TraceEntry, StreamPhase, ClusterState } from '@/lib/use-review-stream'
-import { GithubFilesStep } from './github-files-step'
+import type { TraceEntry, StreamPhase, ClusterState } from '@/lib/use-review-stream'
 import {
     ThinkingGroup,
     ToolStep,
@@ -70,16 +69,17 @@ function PipelineStepLabel({ children }: { children: React.ReactNode }) {
 // ── PlannerCard ───────────────────────────────────────────────────────────────
 
 interface PlannerCardProps {
-    taskItems: TaskItem[]
     clusterMap: Map<string, ClusterState>
     phase: StreamPhase
 }
 
-function PlannerCard({ taskItems, clusterMap, phase }: PlannerCardProps) {
+function PlannerCard({ clusterMap, phase }: PlannerCardProps) {
     const planningDone = clusterMap.size > 0
-    const planning = taskItems.length > 0 && !planningDone && phase === 'streaming'
+    const planning = !planningDone && phase === 'streaming'
 
     if (!planning && !planningDone) return null
+
+    const totalFiles = [...clusterMap.values()].reduce((sum, c) => sum + c.fileNames.length, 0)
 
     return (
         <div>
@@ -98,13 +98,13 @@ function PlannerCard({ taskItems, clusterMap, phase }: PlannerCardProps) {
 
                     {!planningDone && (
                         <span className="text-xs text-blue-400/80">
-                            Grouping {taskItems.length} files into review clusters…
+                            Grouping files into review clusters…
                         </span>
                     )}
 
                     {planningDone && (
                         <span className="text-xs text-gray-600">
-                            Distributed {taskItems.length} files across {clusterMap.size} clusters
+                            Distributed {totalFiles} files across {clusterMap.size} clusters
                         </span>
                     )}
                 </div>
@@ -315,7 +315,6 @@ function SynthesizerStep({
 
 interface AgentTraceProps {
     entries: TraceEntry[]
-    taskItems: TaskItem[]
     phase: StreamPhase
     clusterMap?: Map<string, ClusterState>
     totalDurationMs?: number | null
@@ -323,52 +322,43 @@ interface AgentTraceProps {
 
 // ── ReviewProgress ────────────────────────────────────────────────────────────
 
-export function ReviewProgress({ entries, taskItems, phase, clusterMap, totalDurationMs }: AgentTraceProps) {
+export function ReviewProgress({ entries, phase, clusterMap, totalDurationMs }: AgentTraceProps) {
     const isStreaming = phase === 'connecting' || phase === 'streaming'
 
     const isClusteredPath = clusterMap && clusterMap.size > 0
-    const hasPlannerStep = clusterMap !== undefined && taskItems.length > 0
+    const hasPlannerStep = clusterMap !== undefined && clusterMap.size > 0
 
     // Single-agent path spinner logic
     const hasRunningTool = entries.some(e => e.kind === 'tool' && e.status === 'running')
     const allToolsDone = entries.some(e => e.kind === 'tool' && e.status === 'done') && !hasRunningTool
-    const showSingleAgentSpinner = phase === 'streaming' && !hasPlannerStep
-        && !hasRunningTool && (allToolsDone || taskItems.length > 0)
+    const showSingleAgentSpinner = phase === 'streaming' && !hasPlannerStep && !hasRunningTool && allToolsDone
 
     const grouped = useMemo(() => groupEntries(entries), [entries])
 
-    const hasContent = taskItems.length > 0 || entries.length > 0 || isStreaming || isClusteredPath
+    const hasContent = entries.length > 0 || isStreaming || isClusteredPath
     if (!hasContent) return null
 
     return (
         <div className="space-y-3">
             {/* ── Connecting placeholder ──────────────────────── */}
-            {phase === 'connecting' && taskItems.length === 0 && entries.length === 0 && (
+            {phase === 'connecting' && entries.length === 0 && (
                 <div className="flex items-center gap-2.5 py-1 animate-fade-in">
                     <Loader2 className="h-3.5 w-3.5 animate-spin text-gray-700 shrink-0" />
                     <span className="text-sm text-gray-600">Starting up…</span>
                 </div>
             )}
 
-            {/* ── Stage 1: Data collection ────────────────────── */}
-            {taskItems.length > 0 && (
-                <div>
-                    <PipelineStepLabel>Data Collection</PipelineStepLabel>
-                    <GithubFilesStep items={taskItems} />
-                </div>
-            )}
-
-            {/* ── Stage 2: Planning (multi-agent path only) ────── */}
+            {/* ── Stage 1: Planning (multi-agent path only) ──────── */}
             {clusterMap !== undefined && (
-                <PlannerCard taskItems={taskItems} clusterMap={clusterMap} phase={phase} />
+                <PlannerCard clusterMap={clusterMap} phase={phase} />
             )}
 
-            {/* ── Stage 3: Parallel workers ───────────────────── */}
+            {/* ── Stage 2: Parallel workers ───────────────────── */}
             {isClusteredPath && (
                 <WorkersGrid clusterMap={clusterMap} />
             )}
 
-            {/* ── Stage 4: Synthesis ─────────────────────────── */}
+            {/* ── Stage 3: Synthesis ─────────────────────────── */}
             {isClusteredPath && (
                 <SynthesizerStep
                     phase={phase}

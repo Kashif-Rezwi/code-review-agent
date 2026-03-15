@@ -22,7 +22,7 @@ export default function ReviewPage() {
     const [code, setCode] = useState('')
     const [prUrl, setPrUrl] = useState('')
 
-    const { phase, taskItems, traceEntries, clusterMap, review, error, totalDurationMs, submit, reset } = useReviewStream()
+    const { phase, traceEntries, clusterMap, review, error, totalDurationMs, submit, reset } = useReviewStream()
 
     // reviewId drives the follow-up chat — available once complete event arrives.
     const reviewId = review?.id ?? null
@@ -174,10 +174,9 @@ export default function ReviewPage() {
                 {error && <ErrorBanner message={error} />}
 
                 {/* Agent trace pipeline — visible during streaming AND persists after completion */}
-                {(isStreaming || taskItems.length > 0 || traceEntries.length > 0 || clusterMap.size > 0) && (
+                {(isStreaming || traceEntries.length > 0 || clusterMap.size > 0) && (
                     <ReviewProgress
                         entries={traceEntries}
-                        taskItems={taskItems}
                         phase={phase}
                         clusterMap={clusterMap}
                         totalDurationMs={totalDurationMs}
