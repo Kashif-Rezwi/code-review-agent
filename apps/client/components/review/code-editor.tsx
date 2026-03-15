@@ -3,7 +3,7 @@
 import dynamic from 'next/dynamic'
 import { useCallback } from 'react'
 import { cn } from '@/lib/utils'
-import { LANGUAGE_LABELS } from '@/types/review.types'
+import { LANGUAGE_LABELS } from '@/types/review-config'
 
 import { EditorSkeleton } from './editor-skeleton'
 

@@ -1,6 +1,6 @@
 import { Info, ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { TYPE_CONFIG, SEVERITY_CONFIG } from '@/types/review.types'
+import { TYPE_CONFIG, SEVERITY_CONFIG } from '@/types/review-config'
 import type { ReviewIssue } from '@/types/review.types'
 
 // Displays a single review issue with type icon, severity badge, location, description, and fix recommendation.
