@@ -61,3 +61,6 @@ export function detectLanguage(code: string): string {
 export function estimateTokens(code: string): number {
     return Math.ceil(code.length / 4)
 }
+
+/** Maximum tokens accepted for a pasted-code review submission. */
+export const CODE_TOKEN_LIMIT = 8_000

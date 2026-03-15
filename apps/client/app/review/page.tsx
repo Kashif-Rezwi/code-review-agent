@@ -1,88 +1,71 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, Loader2, Code2, GitPullRequest } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { AppHeader } from '@/components/layout/app-header'
 import { ErrorBanner } from '@/components/ui/error-banner'
 import { CodeEditor } from '@/components/review/code-editor'
 import { ReviewPanel } from '@/components/review/review-panel'
-import { ReviewSkeleton } from '@/components/review/review-skeleton'
+import { ReviewProgress } from '@/components/review/review-progress'
 import { UserBubble, AssistantMessage, LoadingIndicator } from '@/components/review/chat-message'
 import { ChatInput } from '@/components/review/chat-input'
 import { useChatMessages } from '@/lib/use-chat-messages'
-import { detectLanguage, estimateTokens } from '@/lib/detect-language'
-import { apiFetch } from '@/lib/api'
-import type { ReviewData } from '@/types/review.types'
+import { useReviewStream } from '@/lib/use-review-stream'
+import { detectLanguage, estimateTokens, CODE_TOKEN_LIMIT } from '@/lib/detect-language'
+import { PrUrlInput } from '@/components/ui/pr-url-input'
+import { ReviewErrorBoundary } from '@/components/ui/error-boundary'
 
 type Mode = 'code' | 'pr'
 
 export default function ReviewPage() {
-    const [mode,     setMode]     = useState<Mode>('code')
-    const [code,     setCode]     = useState('')
-    const [prUrl,    setPrUrl]    = useState('')
-    const [review,   setReview]   = useState<ReviewData | null>(null)
-    const [reviewId, setReviewId] = useState<string | null>(null)
-    const [isLoading, setIsLoading] = useState(false)
-    const [error,    setError]    = useState<string | null>(null)
+    const [mode, setMode] = useState<Mode>('code')
+    const [code, setCode] = useState('')
+    const [prUrl, setPrUrl] = useState('')
 
-    const { messages, input, setInput, isSending, submit } = useChatMessages(reviewId)
+    const { phase, taskItems, traceEntries, review, error, totalDurationMs, stepCount, submit, reset } = useReviewStream()
+
+    // reviewId drives the follow-up chat — available once complete event arrives.
+    const reviewId = review?.id ?? null
+
+    const { messages, input, setInput, isSending, submit: sendChat } = useChatMessages(reviewId)
 
     const bottomRef = useRef<HTMLDivElement>(null)
 
-    const detectedLanguage = detectLanguage(code)
-    const tokenCount       = estimateTokens(code)
-    const isOverLimit      = tokenCount > 8000
+    // Memoize so language detection and token counting only re-run when `code` changes,
+    // not on every SSE event or unrelated state update.
+    const detectedLanguage = useMemo(() => detectLanguage(code), [code])
+    const tokenCount       = useMemo(() => estimateTokens(code),  [code])
+    const isOverLimit = tokenCount > CODE_TOKEN_LIMIT
+
+    const isStreaming = phase === 'connecting' || phase === 'streaming'
 
     const canSubmit =
         mode === 'code'
             ? code.trim().length > 0 && !isOverLimit
-            : prUrl.trim().startsWith('https://github.com')
+            : /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/.test(prUrl.trim())
 
     const handleEditorChange = useCallback((value: string | undefined) => {
         setCode(value ?? '')
     }, [])
 
-    const handleReview = async () => {
-        if (!canSubmit || isLoading) return
-        setIsLoading(true)
-        setError(null)
-        setReview(null)
-        setReviewId(null)
-
-        try {
-            const endpoint = mode === 'code' ? '/review/analyze' : '/review/from-pr'
-            const body     = mode === 'code' ? { code } : { prUrl }
-            const data     = await apiFetch<ReviewData>(endpoint, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body),
-            })
-            setReview(data)
-            setReviewId(data.id ?? null)
-        } catch (err) {
-            setError(err instanceof Error ? err.message : 'Something went wrong.')
-        } finally {
-            setIsLoading(false)
-        }
+    const handleReview = () => {
+        if (!canSubmit || isStreaming) return
+        submit(mode === 'code' ? { code } : { prUrl })
     }
 
     const handleClear = () => {
         setCode('')
         setPrUrl('')
-        setReview(null)
-        setReviewId(null)
-        setError(null)
+        reset()
     }
 
     const handleModeSwitch = (m: Mode) => {
         setMode(m)
-        setError(null)
-        setReview(null)
-        setReviewId(null)
+        reset()
     }
 
-    // Scroll to bottom as the conversation grows
+    // Scroll to bottom as the conversation grows.
     useEffect(() => {
         bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
     }, [messages, isSending])
@@ -106,9 +89,8 @@ export default function ReviewPage() {
                         <button
                             key={m}
                             onClick={() => handleModeSwitch(m)}
-                            className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                                mode === m ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'
-                            }`}
+                            className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${mode === m ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'
+                                }`}
                         >
                             {m === 'code'
                                 ? <><Code2 className="w-4 h-4" /> Paste Code</>
@@ -127,44 +109,31 @@ export default function ReviewPage() {
                         onChange={handleEditorChange}
                     />
                 ) : (
-                    <div className="space-y-2">
-                        <label className="text-xs font-medium text-gray-400 uppercase tracking-wide">
-                            Pull Request URL
-                        </label>
-                        <input
-                            type="url"
-                            value={prUrl}
-                            onChange={(e) => setPrUrl(e.target.value)}
-                            onKeyDown={(e) => e.key === 'Enter' && handleReview()}
-                            placeholder="https://github.com/owner/repo/pull/123"
-                            className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-3
-                                       text-sm text-gray-100 placeholder-gray-600
-                                       focus:outline-none focus:border-blue-500 transition-colors"
-                        />
-                        <p className="text-xs text-gray-600">
-                            Public repositories only — private repos require a{' '}
-                            <code className="text-gray-500">GITHUB_TOKEN</code> on the server.
-                        </p>
-                    </div>
+                    <PrUrlInput
+                        value={prUrl}
+                        onChange={setPrUrl}
+                        onSubmit={handleReview}
+                        disabled={isStreaming}
+                    />
                 )}
 
                 {/* Actions */}
                 <div className="flex items-center gap-4">
                     <Button
                         onClick={handleReview}
-                        disabled={isLoading || !canSubmit}
+                        disabled={isStreaming || !canSubmit}
                         className="bg-blue-600 hover:bg-blue-500 text-white px-6"
                     >
-                        {isLoading ? (
+                        {isStreaming ? (
                             <>
                                 <Loader2 className="w-4 h-4 animate-spin" />
-                                {mode === 'pr' ? 'Fetching PR...' : 'Analyzing...'}
+                                Reviewing…
                             </>
                         ) : (
                             'Review Code'
                         )}
                     </Button>
-                    {(code || prUrl || review) && !isLoading && (
+                    {(code || prUrl || review) && !isStreaming && (
                         <button
                             onClick={handleClear}
                             className="text-sm text-gray-500 hover:text-gray-300 transition-colors"
@@ -174,26 +143,31 @@ export default function ReviewPage() {
                     )}
                 </div>
 
-                {/* Warnings */}
+                {/* Token warning */}
                 {isOverLimit && mode === 'code' && (
                     <div className="flex items-center gap-2 text-sm text-yellow-400">
                         <AlertTriangle className="w-4 h-4 shrink-0" />
                         Code exceeds the 8,000 token limit.
                     </div>
                 )}
-                {isLoading && mode === 'pr' && (
-                    <div className="flex items-center gap-3 text-sm text-gray-400 bg-gray-900/60 border border-gray-800 rounded-lg px-4 py-3">
-                        <Loader2 className="w-4 h-4 animate-spin text-blue-400 shrink-0" />
-                        Agent is fetching the PR files and reviewing each one...
-                    </div>
+
+                {/* Error */}
+                {error && <ErrorBanner message={error} />}
+
+                {/* Agent trace — visible during streaming AND persists after completion */}
+                {(isStreaming || taskItems.length > 0 || traceEntries.length > 0) && (
+                    <ReviewProgress
+                        entries={traceEntries}
+                        taskItems={taskItems}
+                        phase={phase}
+                        totalDurationMs={totalDurationMs}
+                        stepCount={stepCount}
+                    />
                 )}
 
-                {error && <ErrorBanner message={error} />}
-                {isLoading && <ReviewSkeleton />}
-
                 {/* Review results + follow-up conversation */}
-                {!isLoading && review && (
-                    <>
+                {review && (
+                    <ReviewErrorBoundary onReset={reset}>
                         <ReviewPanel review={review} />
 
                         {/* Messages — keyed by index (safe: list is append-only) */}
@@ -205,7 +179,7 @@ export default function ReviewPage() {
 
                         {isSending && <LoadingIndicator />}
                         <div ref={bottomRef} />
-                    </>
+                    </ReviewErrorBoundary>
                 )}
             </main>
 
@@ -215,7 +189,7 @@ export default function ReviewPage() {
                 <ChatInput
                     value={input}
                     onChange={setInput}
-                    onSubmit={submit}
+                    onSubmit={sendChat}
                     disabled={isSending}
                 />
             )}

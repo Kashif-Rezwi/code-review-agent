@@ -7,7 +7,7 @@ import { AppHeader } from '@/components/layout/app-header'
 import { ErrorBanner } from '@/components/ui/error-banner'
 import { ScoreBadge } from '@/components/review/score-badge'
 import { apiFetch } from '@/lib/api'
-import { TYPE_CONFIG } from '@/types/review.types'
+import { TYPE_CONFIG } from '@/types/review-config'
 
 interface ReviewSummary {
     id: string
