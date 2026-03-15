@@ -27,6 +27,7 @@
     "@nestjs/config": "^4.0.3",
     "@nestjs/core": "^11.0.1",
     "@nestjs/platform-express": "^11.0.1",
+    "express": "^5.0.0",
     "@prisma/client": "^6.0.0",
     "ai": "^6.0.105",
     "class-transformer": "^0.5.1",
