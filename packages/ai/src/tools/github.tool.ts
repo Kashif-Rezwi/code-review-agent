@@ -15,7 +15,7 @@ export type GithubPRToolInput = z.infer<typeof githubPRToolSchema>
 export function createFetchGithubPRTool(
     execute: (input: GithubPRToolInput) => Promise<string>,
 ) {
-    // @ts-expect-error TS2589 — tsc cannot resolve recursive Zod generic depth; runtime is correct
+    // @ts-ignore TS2589 — tsc cannot resolve recursive Zod generic depth; runtime is correct
     return tool({
         description:
             'Fetch the unified diff of a GitHub pull request as a single string. ' +
@@ -28,13 +28,16 @@ export function createFetchGithubPRTool(
 
 // ── listPRFiles tool ─────────────────────────────────────────────────────────
 
-export type PRFile = {
-    filename: string
-    status: string
-    additions: number
-    deletions: number
-    patch?: string
-}
+export const PRFileSchema = z.object({
+    filename:  z.string(),
+    status:    z.string(),
+    additions: z.number(),
+    deletions: z.number(),
+    patch:     z.string().optional(),
+})
+
+/** A single changed file in a GitHub PR. Derived from PRFileSchema for runtime safety. */
+export type PRFile = z.infer<typeof PRFileSchema>
 
 export const listPRFilesToolSchema = z.object({
     prUrl: z
@@ -48,7 +51,7 @@ export type ListPRFilesToolInput = z.infer<typeof listPRFilesToolSchema>
 export function createListPRFilesTool(
     execute: (input: ListPRFilesToolInput) => Promise<PRFile[]>,
 ) {
-    // @ts-expect-error TS2589 — tsc cannot resolve recursive Zod generic depth; runtime is correct
+    // @ts-ignore TS2589 — tsc cannot resolve recursive Zod generic depth; runtime is correct
     return tool({
         description:
             'List all files changed in a GitHub PR with their individual diffs (patches). ' +
@@ -71,6 +74,7 @@ export const fetchFileContentSchema = z.object({
         .describe('The GitHub PR URL — used to identify the repository owner and name'),
     filePath: z
         .string()
+        .min(1, 'filePath must not be empty')
         .describe('Path of the file to fetch relative to the repo root. E.g. src/auth/token.service.ts'),
 })
 
@@ -79,7 +83,7 @@ export type FetchFileContentInput = z.infer<typeof fetchFileContentSchema>
 export function createFetchFileContentTool(
     execute: (input: FetchFileContentInput) => Promise<string>,
 ) {
-    // @ts-expect-error TS2589 — tsc cannot resolve recursive Zod generic depth; runtime is correct
+    // @ts-ignore TS2589 — tsc cannot resolve recursive Zod generic depth; runtime is correct
     return tool({
         description:
             'Fetch the full source of any file in the GitHub repository being reviewed. ' +

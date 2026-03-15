@@ -15,7 +15,7 @@ export type LinterToolInput = z.infer<typeof linterToolSchema>
 export function createRunLinterTool(
     execute: (input: LinterToolInput) => Promise<string>,
 ) {
-    // @ts-expect-error TS2589 — tsc cannot resolve recursive Zod generic depth; runtime is correct
+    // @ts-ignore TS2589 — tsc cannot resolve recursive Zod generic depth; runtime is correct
     return tool({
         description:
             'Run ESLint static analysis on JavaScript or TypeScript source code. ' +
