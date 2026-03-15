@@ -15,8 +15,12 @@ import {
     createListPRFilesTool,
     createFetchFileContentTool,
     createRunLinterTool,
+    planClusters,
+    buildWorkerPrompt,
+    buildSynthesisUserMessage,
+    buildSynthesisSystemPrompt,
 } from '@cra/ai'
-import type { ReviewData, PRFile } from '@cra/ai'
+import type { ReviewData, PRFile, ClusterPlan } from '@cra/ai'
 import type { ReviewStreamEvent } from '@cra/types'
 import { GithubService } from '../github/github.service'
 import { LinterService } from '../linter/linter.service'
@@ -30,8 +34,8 @@ import {
 } from './review.formatter'
 import { ThinkingStream } from './review.thinking'
 
-/** Maximum agent loop steps per review type. CODE allows full investigation; PR streaming is pre-built. */
-const AGENT_MAX_STEPS = { CODE: 10, PR: 2 } as const
+/** Maximum agent loop steps per review type. */
+const AGENT_MAX_STEPS = { CODE: 10, PR: 2, WORKER: 5 } as const
 
 @Injectable()
 export class ReviewService {
@@ -99,12 +103,13 @@ export class ReviewService {
         try {
             send({ type: 'start' })
 
-            // ── Phase 1: Fetch file list (includes diff patches) ─────────────
+            // ── Phase 1: Fetch files and RAG standards in parallel ────────────
             const [standards, files] = await Promise.all([
                 this.ragService.retrieveForContext('code review standards best practices'),
                 this.githubService.fetchPRFiles(prUrl).catch(() => null),
             ])
 
+            // Fallback: if file fetch fails entirely, use old single-agent path
             if (!files || files.length === 0) {
                 return this.streamAnalysis(
                     `Please review this GitHub pull request: ${prUrl}`,
@@ -112,8 +117,7 @@ export class ReviewService {
                 )
             }
 
-            // ── Phase 2: Emit task plan + mark all files done (diffs are ready)
-            // The patch data already came with fetchPRFiles — no extra API calls needed.
+            // Emit task_plan for the pre-fetch progress board
             send({
                 type: 'task_plan',
                 tasks: files.map(f => ({
@@ -130,33 +134,91 @@ export class ReviewService {
                 send({ type: 'task_update', taskId: f.filename, status: 'done', detail })
             }
 
-            // ── Phase 3: Build prompt using diffs (keeps context well within limits)
-            // Full-file content is NOT fetched — diffs contain exactly the changed lines
-            // which is what the review needs. 15 files × ~200 diff lines ≈ 15 K tokens total.
-            const MAX_PATCH_CHARS = 3_000  // per file — prevents any single huge file from dominating
-            const fileSection = files.map(f => {
-                const patch = f.patch
-                    ? (f.patch.length > MAX_PATCH_CHARS
-                        ? f.patch.slice(0, MAX_PATCH_CHARS) + '\n… [diff truncated]'
-                        : f.patch)
-                    : `(no diff — ${f.status})`
-                return `### ${f.filename}  [+${f.additions} -${f.deletions}  status: ${f.status}]\n${patch}`
-            }).join('\n\n')
+            // Use lightweight LLM call to plan clusters intelligently.
+            // Falls back to single "general" cluster automatically on error.
+            const clusters = await planClusters(files, this.openai)
 
-            const userMessage =
-                `Please review this GitHub pull request: ${prUrl}\n\n` +
-                `The PR has ${files.length} changed file(s). ` +
-                `Diffs for all files are provided below.\n\n` +
-                fileSection
+            // Tell the UI exactly what clusters exist — it renders panels immediately
+            send({
+                type: 'cluster_plan',
+                clusters: clusters.map(c => ({
+                    id: c.id,
+                    label: c.label,
+                    focus: c.focus,
+                    fileNames: c.files.map(f => f.filename),
+                })),
+            })
 
-            // ── Phase 4: AI analysis (no file tools — context is pre-built) ──
-            return this.streamAnalysis(
-                userMessage, standards, prUrl, 'PR', res, { send, startedAt },
+            // ── Phase 2: Run all worker agents in parallel ────────────────────
+            // Promise.allSettled means one failing cluster never blocks the others.
+            const workerResults = await Promise.allSettled(
+                clusters.map(cluster => this.runWorkerAgent(cluster, standards, send))
             )
+
+            // Collect successful results — failed clusters are noted but not fatal
+            const partialReviews = workerResults
+                .map((result, i) => ({ result, cluster: clusters[i] }))
+                .filter(({ result }) => result.status === 'fulfilled')
+                .map(({ result, cluster }) => ({
+                    clusterId: cluster.id,
+                    label: cluster.label,
+                    review: (result as PromiseFulfilledResult<ReviewData>).value,
+                }))
+
+            if (partialReviews.length === 0) {
+                send({ type: 'error', message: 'All cluster agents failed. Please try again.' })
+                res.end()
+                return
+            }
+
+            // ── Phase 3: Skip synthesis for single-cluster PRs ────────────────
+            // Small PRs (≤3 files) produce one cluster — its review is the final output.
+            if (partialReviews.length === 1) {
+                const only = partialReviews[0].review
+                const merged = { ...only, appliedStandards: standards?.appliedNames }
+                const id = await this.saveReview(prUrl, 'PR', merged)
+                send({
+                    type: 'complete',
+                    review: { ...merged, id },
+                    durationMs: Date.now() - startedAt,
+                    stepCount: 1,
+                })
+                res.end()
+                return
+            }
+
+            // ── Phase 3: Synthesis agent ──────────────────────────────────────
+            // Final LLM call that sees all partial reviews and produces the unified
+            // output — including cross-cluster issue detection.
+            const synthesisMessage = buildSynthesisUserMessage(prUrl, partialReviews)
+            const synthesisSystem = standards
+                ? `${buildSynthesisSystemPrompt()}\n\nYour team's coding standards:\n\n${standards.content}`
+                : buildSynthesisSystemPrompt()
+
+            const { text: synthesisText } = await generateText({
+                model: this.openai('gpt-4o-mini'),
+                system: synthesisSystem,
+                messages: [{ role: 'user', content: synthesisMessage }],
+                temperature: 0.2,
+            })
+
+            const finalReview = this.parseReviewText(synthesisText)
+            const merged = { ...finalReview, appliedStandards: standards?.appliedNames }
+            const id = await this.saveReview(prUrl, 'PR', merged)
+
+            send({
+                type: 'complete',
+                review: { ...merged, id },
+                durationMs: Date.now() - startedAt,
+                stepCount: clusters.length + 1, // workers + synthesis
+            })
+
         } catch (err) {
             const message = err instanceof Error ? err.message : 'PR review failed'
             send({ type: 'error', message })
-            res.end()
+        } finally {
+            // Guard against double-end: the fallback streamAnalysis path ends res itself.
+            if (!res.writableEnded) res.end()
         }
     }
 
@@ -336,6 +398,87 @@ export class ReviewService {
         }
     }
 
+    /** Run one cluster's worker agent, emitting SSE events tagged with clusterId. */
+    private async runWorkerAgent(
+        cluster: ClusterPlan,
+        standards: Awaited<ReturnType<RagService['retrieveForContext']>>,
+        send: (event: ReviewStreamEvent) => void,
+    ): Promise<ReviewData> {
+        const workerStart = Date.now()
+
+        const MAX_PATCH_CHARS = 3_000
+        const fileSection = cluster.files.map(f => {
+            const patch = f.patch
+                ? (f.patch.length > MAX_PATCH_CHARS
+                    ? f.patch.slice(0, MAX_PATCH_CHARS) + '\n… [diff truncated]'
+                    : f.patch)
+                : `(no diff — ${f.status})`
+            return `### ${f.filename}  [+${f.additions} -${f.deletions}  status: ${f.status}]\n${patch}`
+        }).join('\n\n')
+
+        const userMessage =
+            `Review the following files from the pull request.\n\n` +
+            `Your focus: ${cluster.focus}\n\n` +
+            fileSection
+
+        const system = buildWorkerPrompt(cluster.label, cluster.focus, standards?.content)
+
+        const tools = {
+            runLinter: createRunLinterTool(({ code, language }) =>
+                this.linterService.lint(code, language),
+            ),
+        }
+
+        const pending = new Map<string, { toolName: string; args: Record<string, unknown>; startedAt: number }>()
+        const thinking = new ThinkingStream(
+            (event) => send({ ...event, clusterId: cluster.id }),
+        )
+        const clusterSend = (event: ReviewStreamEvent) =>
+            send({ ...event, clusterId: cluster.id } as ReviewStreamEvent)
+
+        const { onChunk, onStepFinish } = this.buildStreamCallbacks(clusterSend, pending, thinking)
+
+        const result = streamText({
+            model: this.openai('gpt-4o-mini'),
+            system,
+            messages: [{ role: 'user', content: userMessage }],
+            tools,
+            temperature: 0.2,
+            stopWhen: ({ steps }) => {
+                const lastText = steps.at(-1)?.text ?? ''
+                try { this.parseReviewText(lastText); return true } catch { /* keep going */ }
+                return steps.length >= AGENT_MAX_STEPS.WORKER
+            },
+            prepareStep: ({ steps }) => {
+                if (steps.length >= AGENT_MAX_STEPS.WORKER - 1) return { toolChoice: 'none' as const }
+                return {}
+            },
+            onChunk,
+            onStepFinish,
+        })
+
+        const [finalText, steps] = await Promise.all([result.text, result.steps])
+
+        const allTexts = [finalText, ...steps.map(s => s.text).reverse()].filter(t => t.trim())
+        let review: ReviewData | undefined
+        for (const text of allTexts) {
+            try { review = this.parseReviewText(text); break } catch { /* try next */ }
+        }
+
+        if (!review) {
+            throw new Error(`Worker agent for cluster "${cluster.id}" did not return a valid review.`)
+        }
+
+        send({
+            type: 'cluster_done',
+            clusterId: cluster.id,
+            issueCount: review.issues.length,
+            durationMs: Date.now() - workerStart,
+        })
+
+        return review
+    }
+
     /** Extract the onChunk / onStepFinish callbacks so streamAnalysis stays focused on control flow.
      *  toolCallCount is owned here and exposed via getToolCallCount() to avoid a mutable closure leak. */
     private buildStreamCallbacks(
@@ -475,19 +618,33 @@ export class ReviewService {
         }
     }
 
-    // Extracts ReviewData from the model's text, handling three production failure modes:
-    // clean JSON, JSON wrapped in a markdown fence, and JSON embedded in surrounding prose.
+    // Extracts ReviewData from the model's text, handling four production failure modes:
+    // clean JSON, JSON wrapped in a markdown fence, JSON preceded by analysis prose,
+    // and JSON embedded anywhere in surrounding prose.
     private parseReviewText(text: string): ReviewData {
         const t = text.trim()
 
         const candidates = [t]
 
+        // ① Markdown fence
         const fenceMatch = t.match(/```(?:json)?\s*([\s\S]*?)```/)
         if (fenceMatch) candidates.push(fenceMatch[1].trim())
 
+        // ② Last standalone `{` line → last `}` (synthesis agent outputs prose before JSON;
+        //   the prose may contain `{...}` fragments which would fool a simple indexOf search.
+        //   Using the LAST line-starting `{` reliably finds the JSON block.)
+        const lastLineJson = t.lastIndexOf('\n{')
+        const jsonBlockStart = lastLineJson !== -1
+            ? lastLineJson + 1
+            : (t.startsWith('{') ? 0 : -1)
+        const jsonBlockEnd = t.lastIndexOf('}')
+        if (jsonBlockStart !== -1 && jsonBlockEnd > jsonBlockStart) {
+            candidates.push(t.slice(jsonBlockStart, jsonBlockEnd + 1).trim())
+        }
+
+        // ③ First `{` → last `}` (legacy fallback)
         const start = t.indexOf('{')
-        const end = t.lastIndexOf('}')
-        if (start !== -1 && end > start) candidates.push(t.slice(start, end + 1))
+        if (start !== -1 && jsonBlockEnd > start) candidates.push(t.slice(start, jsonBlockEnd + 1))
 
         for (const candidate of candidates) {
             try {

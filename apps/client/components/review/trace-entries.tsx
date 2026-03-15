@@ -8,6 +8,7 @@ import {
     ChevronRight,
     Loader2,
     MessageSquareText,
+    Zap,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { TraceEntry } from '@/lib/use-review-stream'
@@ -41,8 +42,6 @@ export function toolBadge(tool: string): { label: string; color: string } {
             return { label: 'GITHUB', color: 'text-purple-400 bg-purple-400/10 border-purple-400/20' }
         case 'fetchFileContent':
             return { label: 'READ', color: 'text-cyan-400   bg-cyan-400/10   border-cyan-400/20' }
-        case 'runLinter':
-            return { label: 'LINTER', color: 'text-yellow-400 bg-yellow-400/10 border-yellow-400/20' }
         default:
             return { label: 'TOOL', color: 'text-gray-500   bg-gray-500/10   border-gray-500/20' }
     }
@@ -164,6 +163,63 @@ export function ToolStep({ entry }: { entry: Extract<TraceEntry, { kind: 'tool' 
                     )}
                 </div>
             )}
+        </div>
+    )
+}
+
+// ── LinterGroup ───────────────────────────────────────────────────────────────
+// Groups all runLinter trace entries under a single ESLINT header with
+// individual file rows below (checkmark before the file, not before the badge).
+
+type ToolEntry = Extract<TraceEntry, { kind: 'tool' }>
+
+export function LinterGroup({ entries }: { entries: ToolEntry[] }) {
+    const allDone = entries.every(e => e.status === 'done')
+    const running = entries.filter(e => e.status === 'running').length
+    const count = entries.length
+
+    return (
+        <div className="py-0.5 animate-fade-in">
+            {/* ── Header row: ESLINT badge + file count ──────────────────── */}
+            <div className="flex items-center gap-2.5">
+                {allDone
+                    ? <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0" />
+                    : <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-400 shrink-0" />
+                }
+                <span className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded border text-yellow-400 bg-yellow-400/10 border-yellow-400/20 flex items-center gap-1">
+                    <Zap className="h-2.5 w-2.5" />
+                    ESLINT
+                </span>
+                <span className="text-sm text-gray-400">
+                    {count} file{count !== 1 ? 's' : ''}
+                    {!allDone && running > 0 && (
+                        <span className="text-blue-400/70 ml-1.5">· {running} running</span>
+                    )}
+                </span>
+            </div>
+
+            {/* ── Per-file sub-rows ─────────────────────────────────────── */}
+            <div className="mt-1 ml-6 space-y-0.5">
+                {entries.map(entry => (
+                    <div key={entry.id} className="flex items-center gap-2">
+                        {entry.status === 'done'
+                            ? <CheckCircle2 className="h-3 w-3 text-green-600 shrink-0" />
+                            : <Loader2 className="h-3 w-3 animate-spin text-blue-400 shrink-0" />
+                        }
+                        <span className={cn(
+                            'text-[11px] font-mono flex-1 min-w-0 truncate',
+                            entry.status === 'done' ? 'text-gray-500' : 'text-gray-300',
+                        )}>
+                            {entry.label}
+                        </span>
+                        {entry.durationMs != null && (
+                            <span className="text-[11px] text-gray-600 tabular-nums shrink-0">
+                                {formatDuration(entry.durationMs)}
+                            </span>
+                        )}
+                    </div>
+                ))}
+            </div>
         </div>
     )
 }

@@ -6,6 +6,8 @@ export const linterToolSchema = z.object({
     language: z
         .enum(['javascript', 'typescript'])
         .describe('Language of the code — only JS/TS supported'),
+    filename: z.string().optional()
+        .describe('The filename being linted (e.g. cache-store.ts) — include when known'),
 })
 
 export type LinterToolInput = z.infer<typeof linterToolSchema>

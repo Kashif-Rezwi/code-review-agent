@@ -22,12 +22,29 @@ export type TraceEntry =
 
 export type StreamPhase = 'idle' | 'connecting' | 'streaming' | 'complete' | 'error'
 
+/** Per-cluster state collected during the multi-agent clustered PR review path. */
+export type ClusterState = {
+    id: string
+    label: string
+    focus: string
+    fileNames: string[]
+    traceEntries: TraceEntry[]
+    issueCount?: number
+    durationMs?: number
+    done: boolean
+}
+
 export interface UseReviewStreamReturn {
     phase: StreamPhase
     /** Pre-fetch task board — one item per changed PR file. */
     taskItems: TaskItem[]
-    /** Ordered trace entries — tool calls interleaved with thinking steps. */
+    /** Ordered trace entries — tool calls interleaved with thinking steps (single-agent path). */
     traceEntries: TraceEntry[]
+    /**
+     * Per-cluster trace state — only populated on the multi-agent clustered PR path.
+     * Empty map on the single-agent (code review) path.
+     */
+    clusterMap: Map<string, ClusterState>
     review: ReviewData | null
     error: string | null
     /** Total wall-clock duration of the entire stream in milliseconds. */
@@ -46,6 +63,7 @@ export function useReviewStream(): UseReviewStreamReturn {
     const [phase, setPhase] = useState<StreamPhase>('idle')
     const [taskItems, setTaskItems] = useState<TaskItem[]>([])
     const [traceEntries, setTraceEntries] = useState<TraceEntry[]>([])
+    const [clusterMap, setClusterMap] = useState<Map<string, ClusterState>>(new Map())
     const [review, setReview] = useState<ReviewData | null>(null)
     const [error, setError] = useState<string | null>(null)
     const [totalDurationMs, setTotalDurationMs] = useState<number | null>(null)
@@ -58,12 +76,12 @@ export function useReviewStream(): UseReviewStreamReturn {
     const thinkingSeqRef = useRef(0)
 
     // ── Shared state reset ─────────────────────────────────────────────────────
-    // Used by both reset() and submit() to avoid duplicating the 6 setState calls.
 
     const resetState = useCallback(() => {
         setPhase('idle')
         setTaskItems([])
         setTraceEntries([])
+        setClusterMap(new Map())
         setReview(null)
         setError(null)
         setTotalDurationMs(null)
@@ -119,7 +137,6 @@ export function useReviewStream(): UseReviewStreamReturn {
                             break
 
                         case 'task_plan':
-                            // Initialise the task board with all files as "pending".
                             setTaskItems(event.tasks.map(t => ({ ...t, status: 'pending' as const })))
                             break
 
@@ -131,46 +148,106 @@ export function useReviewStream(): UseReviewStreamReturn {
                             ))
                             break
 
+                        case 'cluster_plan':
+                            setClusterMap(() => {
+                                const m = new Map<string, ClusterState>()
+                                for (const c of event.clusters) {
+                                    m.set(c.id, { ...c, traceEntries: [], done: false })
+                                }
+                                return m
+                            })
+                            break
+
+                        case 'cluster_done':
+                            setClusterMap(prev => {
+                                const m = new Map(prev)
+                                const existing = m.get(event.clusterId)
+                                if (existing) {
+                                    m.set(event.clusterId, {
+                                        ...existing,
+                                        issueCount: event.issueCount,
+                                        durationMs: event.durationMs,
+                                        done: true,
+                                    })
+                                }
+                                return m
+                            })
+                            break
+
                         case 'thinking': {
                             const seq = ++thinkingSeqRef.current
-                            setTraceEntries(prev => [
-                                ...prev,
-                                { kind: 'thinking', id: `thinking-${seq}`, text: event.text },
-                            ])
+                            const entry: TraceEntry = { kind: 'thinking', id: `thinking-${seq}`, text: event.text }
+                            if (event.clusterId) {
+                                const cid = event.clusterId
+                                setClusterMap(prev => {
+                                    const m = new Map(prev)
+                                    const c = m.get(cid)
+                                    if (c) m.set(cid, { ...c, traceEntries: [...c.traceEntries, entry] })
+                                    return m
+                                })
+                            } else {
+                                setTraceEntries(prev => [...prev, entry])
+                            }
                             break
                         }
 
-                        case 'tool_start':
-                            setTraceEntries(prev => [
-                                ...prev,
-                                {
-                                    kind: 'tool',
-                                    id: event.callId,
-                                    tool: event.tool,
-                                    label: event.label,
-                                    status: 'running',
-                                    detail: event.detail,
-                                },
-                            ])
+                        case 'tool_start': {
+                            const entry: TraceEntry = {
+                                kind: 'tool',
+                                id: event.callId,
+                                tool: event.tool,
+                                label: event.label,
+                                status: 'running',
+                                detail: event.detail,
+                            }
+                            if (event.clusterId) {
+                                const cid = event.clusterId
+                                setClusterMap(prev => {
+                                    const m = new Map(prev)
+                                    const c = m.get(cid)
+                                    if (c) m.set(cid, { ...c, traceEntries: [...c.traceEntries, entry] })
+                                    return m
+                                })
+                            } else {
+                                setTraceEntries(prev => [...prev, entry])
+                            }
                             break
+                        }
 
                         case 'tool_done':
-                            setTraceEntries(prev =>
-                                prev.map(e =>
-                                    e.kind === 'tool' && e.id === event.callId
-                                        ? {
-                                            ...e,
-                                            label: event.label || e.label,
-                                            status: 'done' as const,
-                                            detail: event.detail ?? e.detail,
-                                            durationMs: event.durationMs,
-                                        }
-                                        : e,
-                                ),
-                            )
+                            if (event.clusterId) {
+                                const cid = event.clusterId
+                                setClusterMap(prev => {
+                                    const m = new Map(prev)
+                                    const c = m.get(cid)
+                                    if (!c) return prev
+                                    const updated = c.traceEntries.map(e =>
+                                        e.kind === 'tool' && e.id === event.callId
+                                            ? { ...e, label: event.label || e.label, status: 'done' as const, detail: event.detail ?? e.detail, durationMs: event.durationMs }
+                                            : e,
+                                    )
+                                    m.set(cid, { ...c, traceEntries: updated })
+                                    return m
+                                })
+                            } else {
+                                setTraceEntries(prev =>
+                                    prev.map(e =>
+                                        e.kind === 'tool' && e.id === event.callId
+                                            ? { ...e, label: event.label || e.label, status: 'done' as const, detail: event.detail ?? e.detail, durationMs: event.durationMs }
+                                            : e,
+                                    ),
+                                )
+                            }
                             break
 
                         case 'complete':
+                            setClusterMap(prev => {
+                                const m = new Map(prev)
+                                for (const [id, c] of m) {
+                                    if (!c.done) m.set(id, { ...c, done: true })
+                                }
+                                return m
+                            })
                             setReview(event.review)
                             setTotalDurationMs(event.durationMs)
                             setStepCount(event.stepCount)
@@ -193,5 +270,5 @@ export function useReviewStream(): UseReviewStreamReturn {
         })()
     }, [resetState])
 
-    return { phase, taskItems, traceEntries, review, error, totalDurationMs, stepCount, submit, reset }
+    return { phase, taskItems, traceEntries, clusterMap, review, error, totalDurationMs, stepCount, submit, reset }
 }

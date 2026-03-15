@@ -1,8 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, Loader2, Code2, GitPullRequest } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { AlertTriangle, BrainCircuit, Clock, Code2, GitPullRequest } from 'lucide-react'
 import { AppHeader } from '@/components/layout/app-header'
 import { ErrorBanner } from '@/components/ui/error-banner'
 import { CodeEditor } from '@/components/review/code-editor'
@@ -23,7 +22,7 @@ export default function ReviewPage() {
     const [code, setCode] = useState('')
     const [prUrl, setPrUrl] = useState('')
 
-    const { phase, taskItems, traceEntries, review, error, totalDurationMs, stepCount, submit, reset } = useReviewStream()
+    const { phase, taskItems, traceEntries, clusterMap, review, error, totalDurationMs, submit, reset } = useReviewStream()
 
     // reviewId drives the follow-up chat — available once complete event arrives.
     const reviewId = review?.id ?? null
@@ -117,22 +116,50 @@ export default function ReviewPage() {
                     />
                 )}
 
-                {/* Actions */}
+                {/* Token warning */}
+                {isOverLimit && mode === 'code' && (
+                    <div className="flex items-center gap-2 text-sm text-yellow-400">
+                        <AlertTriangle className="w-4 h-4 shrink-0" />
+                        Code exceeds the 8,000 token limit.
+                    </div>
+                )}
+
+                {/* Action row — button when idle, live status when running/complete */}
                 <div className="flex items-center gap-4">
-                    <Button
-                        onClick={handleReview}
-                        disabled={isStreaming || !canSubmit}
-                        className="bg-blue-600 hover:bg-blue-500 text-white px-6"
-                    >
-                        {isStreaming ? (
-                            <>
-                                <Loader2 className="w-4 h-4 animate-spin" />
-                                Reviewing…
-                            </>
-                        ) : (
-                            'Review Code'
-                        )}
-                    </Button>
+                    {!isStreaming && phase !== 'complete' && phase !== 'error' ? (
+                        <button
+                            onClick={handleReview}
+                            disabled={!canSubmit}
+                            className="flex items-center gap-2 text-sm cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed group"
+                        >
+                            <BrainCircuit className="h-4 w-4 shrink-0 text-blue-400 group-hover:text-blue-300 transition-colors" />
+                            <span className="font-medium text-gray-300 group-hover:text-white transition-colors">
+                                {mode === 'pr' ? 'Run Agents' : 'Run Review'}
+                            </span>
+                        </button>
+                    ) : (
+                        <div className="flex items-center gap-2 text-sm">
+                            <BrainCircuit className={`h-4 w-4 shrink-0 ${phase === 'complete' || phase === 'error' ? 'text-green-500' : 'text-blue-400'}`} />
+                            <span className={`font-medium ${phase === 'complete' || phase === 'error' ? 'text-gray-400' : 'text-gray-300'}`}>
+                                {phase === 'connecting' && 'Connecting to agent…'}
+                                {phase === 'streaming' && 'Agent is analysing…'}
+                                {phase === 'complete' && 'Agent trace'}
+                                {phase === 'error' && 'Agent trace (error)'}
+                            </span>
+                            {isStreaming && <span className="h-1.5 w-1.5 rounded-full bg-blue-400 animate-pulse" />}
+                            {clusterMap.size > 0 && (
+                                <span className="text-gray-600">
+                                    {clusterMap.size} cluster{clusterMap.size !== 1 ? 's' : ''}
+                                </span>
+                            )}
+                            {phase === 'complete' && totalDurationMs != null && (
+                                <span className="flex items-center gap-1 text-gray-600">
+                                    <Clock className="h-3 w-3" />
+                                    {(totalDurationMs / 1000).toFixed(1)}s
+                                </span>
+                            )}
+                        </div>
+                    )}
                     {(code || prUrl || review) && !isStreaming && (
                         <button
                             onClick={handleClear}
@@ -143,25 +170,17 @@ export default function ReviewPage() {
                     )}
                 </div>
 
-                {/* Token warning */}
-                {isOverLimit && mode === 'code' && (
-                    <div className="flex items-center gap-2 text-sm text-yellow-400">
-                        <AlertTriangle className="w-4 h-4 shrink-0" />
-                        Code exceeds the 8,000 token limit.
-                    </div>
-                )}
-
                 {/* Error */}
                 {error && <ErrorBanner message={error} />}
 
-                {/* Agent trace — visible during streaming AND persists after completion */}
-                {(isStreaming || taskItems.length > 0 || traceEntries.length > 0) && (
+                {/* Agent trace pipeline — visible during streaming AND persists after completion */}
+                {(isStreaming || taskItems.length > 0 || traceEntries.length > 0 || clusterMap.size > 0) && (
                     <ReviewProgress
                         entries={traceEntries}
                         taskItems={taskItems}
                         phase={phase}
+                        clusterMap={clusterMap}
                         totalDurationMs={totalDurationMs}
-                        stepCount={stepCount}
                     />
                 )}
 

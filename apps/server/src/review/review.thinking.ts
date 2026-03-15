@@ -1,5 +1,3 @@
-import type { ReviewStreamEvent } from '@cra/types'
-
 export class ThinkingStream {
     // ── Thinking stream state ─────────────────────────────────────────────
     // fullAccumulated: every text-delta received, in order.
@@ -12,7 +10,7 @@ export class ThinkingStream {
     private lastThinkingEnd = 0
     private jsonBoundary = -1
 
-    constructor(private readonly send: (event: ReviewStreamEvent) => void) { }
+    constructor(private readonly send: (event: { type: 'thinking'; text: string }) => void) { }
 
     /** Returns true if `pos` falls inside an unclosed triple-backtick code fence.
      *  Prevents false-positive JSON boundary detection on `{` inside code blocks. */

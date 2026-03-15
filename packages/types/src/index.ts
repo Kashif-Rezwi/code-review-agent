@@ -26,13 +26,26 @@ export type ReviewData = z.infer<typeof ReviewDataSchema>
 /**
  * Events emitted by the /review/[analyze|from-pr]/stream SSE endpoints.
  * Each event is a JSON object on a `data:` line, delimited by \n\n.
+ *
+ * `clusterId` is present only when running the multi-agent clustered PR path.
+ * All single-agent paths leave it undefined, preserving backward compatibility.
  */
 export type ReviewStreamEvent =
     | { type: 'start' }
-    | { type: 'thinking'; text: string }
+    | { type: 'thinking'; clusterId?: string; text: string }
     | { type: 'task_plan'; tasks: { id: string; label: string }[] }
     | { type: 'task_update'; taskId: string; status: 'running' | 'done'; detail?: string }
-    | { type: 'tool_start'; tool: string; label: string; callId: string; detail?: string }
-    | { type: 'tool_done'; callId: string; label: string; detail?: string; durationMs: number }
+    | { type: 'tool_start'; clusterId?: string; tool: string; label: string; callId: string; detail?: string }
+    | { type: 'tool_done'; clusterId?: string; callId: string; label: string; detail?: string; durationMs: number }
     | { type: 'complete'; review: ReviewData; durationMs: number; stepCount: number }
     | { type: 'error'; message: string }
+    | {
+        type: 'cluster_plan'
+        clusters: {
+            id: string
+            label: string
+            focus: string
+            fileNames: string[]
+        }[]
+      }
+    | { type: 'cluster_done'; clusterId: string; issueCount: number; durationMs: number }

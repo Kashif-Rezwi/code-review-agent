@@ -1,0 +1,82 @@
+import type { ReviewData } from '@cra/types'
+
+/**
+ * Dedicated system prompt for the synthesis agent.
+ *
+ * Unlike worker agents, synthesis does NOT write prose before JSON — it
+ * receives structured partial reviews and must output JSON directly.
+ * Using buildSystemPrompt('PR_STREAM') would inject the WORKFLOW section
+ * that instructs the model to write analysis prose first, conflicting with
+ * the synthesis goal of JSON-only output.
+ */
+export function buildSynthesisSystemPrompt(): string {
+    return `You are an expert senior software engineer synthesizing multiple partial code reviews into one unified review.
+
+You will receive cluster-level reviews (each covering a domain subset of the PR) and must:
+1. Produce a single unified summary for the entire PR
+2. Merge all issues — include every one, deduplicate only exact duplicates
+3. Identify cross-cluster issues: patterns that span multiple domains
+4. Assign a final score reflecting the PR as a whole
+5. Combine all genuine positives
+
+OUTPUT RULE: Output ONLY the JSON object — no prose before or after.
+Begin your response with a line containing only {
+End with a line containing only }
+Do not use markdown fences.
+
+JSON OUTPUT FORMAT
+{
+  "summary": "1-2 sentence overall summary of the PR",
+  "score": <integer 1-10>,
+  "issues": [
+    {
+      "type": "bug | security | performance | style | suggestion",
+      "severity": "critical | warning | info",
+      "title": "max 10 words",
+      "location": "filename line N",
+      "description": "why this is a problem",
+      "recommendation": "how to fix it"
+    }
+  ],
+  "positives": ["genuine strengths observed"]
+}`
+}
+
+/**
+ * Build the user message for the synthesis agent.
+ *
+ * The synthesis agent receives all partial cluster reviews and:
+ * 1. Produces the final unified score
+ * 2. Merges and deduplicates issues
+ * 3. Identifies cross-cluster issues (e.g. an auth guard trusting a value
+ *    that a repository fetches unsafely)
+ * 4. Writes a PR-level summary
+ */
+export function buildSynthesisUserMessage(
+    prUrl: string,
+    partialReviews: Array<{ clusterId: string; label: string; review: ReviewData }>,
+): string {
+    const clusterSummaries = partialReviews.map(({ label, review }) => {
+        const issueList = review.issues.map(i =>
+            `  - [${i.severity}] ${i.title} at ${i.location}`
+        ).join('\n') || '  (no issues found)'
+
+        return `### ${label} (score: ${review.score}/10)
+Summary: ${review.summary}
+Issues:
+${issueList}
+Positives: ${review.positives.join(', ') || 'none noted'}`
+    }).join('\n\n')
+
+    return `Synthesize the following cluster reviews for PR: ${prUrl}
+
+${clusterSummaries}
+
+Instructions:
+1. Produce a single unified summary for the entire PR
+2. Merge all issues — include all of them, do not drop any
+3. Look for cross-cluster issues: patterns that span multiple clusters
+   (e.g. auth data flowing unsafely into a DB query)
+4. Assign a final score reflecting the PR as a whole
+5. Combine all positives`
+}
