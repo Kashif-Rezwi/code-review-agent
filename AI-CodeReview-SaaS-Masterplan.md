@@ -16,9 +16,10 @@
    - [Week 3 — Tool Calling](#week-3--tool-calling)
    - [Week 4 — RAG](#week-4--rag)
    - [Week 5 — Multi-step Agents + Memory](#week-5--multi-step-agents--memory)
-   - [Week 6 — Auth, Payments & Database](#week-6--auth-payments--database)
-   - [Week 7 — Production Hardening](#week-7--production-hardening)
-   - [Week 8 — Launch](#week-8--launch)
+   - [Week 6 — Clustered PR Review Agent](#week-6--clustered-pr-review-agent)
+   - [Week 7 — Auth, Payments & Database](#week-7--auth-payments--database)
+   - [Week 8 — Production Hardening](#week-8--production-hardening)
+   - [Week 9 — Launch](#week-9--launch)
 6. [Architecture Overview](#architecture-overview)
 7. [NestJS Backend — Module Breakdown](#nestjs-backend--module-breakdown)
 8. [Folder Structure](#folder-structure)
@@ -60,7 +61,7 @@ Think of it as a senior engineer who is always available, never tired, and alrea
 - **Review History** — all past reviews stored, searchable, with trend tracking
 - **Usage-based Plans** — free tier (10 reviews/month), Pro tier (unlimited via Stripe)
 
-### What it looks like at the end of Week 8
+### What it looks like at the end of Week 9
 
 ```
 Landing page → Sign up → Paste code or PR URL → 
@@ -568,7 +569,111 @@ USING ivfflat (embedding vector_cosine_ops);
 
 ---
 
-### Week 6 — Auth, Payments & Database
+### Week 6 — Clustered PR Review Agent
+
+#### 📖 Concept
+
+**Why single-pass PR review falls short**
+
+The current `streamAnalyzeFromPR` in `apps/server/src/review/review.service.ts` builds a single `fileSection` variable that concatenates every changed file's diff and passes it all in one message to one model call. When a pull request touches authentication middleware, a database repository, and an API controller simultaneously, the model's attention is split across completely unrelated concerns — it is thinking about JWT security AND database query efficiency AND API contract design all at once. The result is shallow, generic feedback: the model sees everything, focuses on nothing.
+
+**The supervisor / worker pattern**
+
+The solution is a hub-and-spoke multi-agent architecture with three phases. A **supervisor** (pure TypeScript — no LLM of its own) makes one lightweight LLM planning call to assign the PR's files into 2–4 domain clusters. It then launches one **worker agent** per cluster. Each worker receives only its cluster's files and a domain-focused system prompt, so its full attention goes to one concern. A final **synthesis agent** sees all partial reviews, merges issues, deduplicates, and explicitly hunts for cross-cluster patterns — for example, an auth guard trusting a value that a repository fetches unsafely.
+
+This differs from peer-to-peer agent communication, where agents talk to each other directly. Peer-to-peer produces coordination overhead: agents wait on each other, results are harder to aggregate, and one stalled agent can block all others. In the hub-and-spoke model the supervisor controls all coordination, workers share nothing with each other, and the synthesis step does explicit integration. The three phases are: (1) **planning** — the supervisor asks a cheap model to assign files to clusters; (2) **parallel workers** — one agent per cluster runs simultaneously; (3) **synthesis** — one final agent combines all partial reviews.
+
+**Parallelism via `Promise.allSettled`**
+
+Worker agents run via `Promise.allSettled`, which means wall-clock time equals the slowest cluster, not the sum of all clusters. If three clusters each take 10 seconds, the total is ~10 seconds instead of 30. A concrete estimate: a PR that previously took 30 seconds as a single pass finishes in approximately 12 seconds with three parallel workers. Critically, `Promise.allSettled` never lets one worker's failure cascade — if the security-focused worker throws, the database and API workers continue and complete normally. This is graceful degradation by design.
+
+**SSE event multiplexing**
+
+All three phases emit Server-Sent Events through the single existing Express `res` object. There is no new SSE infrastructure — `review.sse.ts` is completely unchanged. Worker agents receive a typed `send` callback rather than the raw `res` object, so they have no knowledge of HTTP or SSE at all. The `clusterId` field is added as an optional property to the `thinking`, `tool_start`, and `tool_done` event types. When present, the frontend routes those events to the correct cluster's panel; when absent (for the code-review path), the existing trace panel receives them exactly as before. No locking is needed because Node.js is single-threaded — concurrent `res.write()` calls from `Promise.allSettled` workers interleave naturally in the event loop.
+
+#### 🔨 Build — Week 6
+
+> **Implementation reference:** This section gives you orientation and a day-by-day sequence. For exact type definitions, full function signatures, complete code, and edge-case handling, open `Clustered-PR-Review-Spec.md` — it is the authoritative implementation guide for this week.
+
+**Day 1 — Type contract**
+```
+- Add cluster_plan and cluster_done event types to packages/types/src/index.ts
+- Add optional clusterId?: string to the existing thinking, tool_start, and tool_done event types
+- Add the ClusterState type and clusterMap to use-review-stream.ts types
+```
+
+**Day 2 — `packages/ai/src/clustering.ts`**
+```
+- Create clustering.ts with the planClusters() function
+- PRs with ≤ 3 files skip the LLM call and return a single "general" cluster
+- Larger PRs use generateObject (gpt-4o-mini) to group files into 2–4 domain clusters
+- Wrap in try/catch — any failure falls back to the single "general" cluster
+- Re-export from packages/ai/src/index.ts
+```
+
+**Day 3 — Worker and synthesis prompt builders**
+```
+- Create packages/ai/src/prompts/worker.prompt.ts — buildWorkerPrompt()
+- Create packages/ai/src/prompts/synthesis.prompt.ts — buildSynthesisUserMessage()
+- Re-export both from packages/ai/src/index.ts
+```
+
+**Day 4 — `ThinkingStream` fix and `runWorkerAgent` method**
+```
+- Widen the ThinkingStream constructor's send parameter type in review.thinking.ts
+- Add private runWorkerAgent(cluster, standards, send) to ReviewService
+- Worker uses only the runLinter tool — diff context is pre-built, no GitHub calls needed
+- Every SSE event emitted by the worker is tagged with cluster.id before sending
+```
+
+**Day 5 — Supervisor rewrite of `streamAnalyzeFromPR`**
+```
+- Replace streamAnalyzeFromPR in review.service.ts with the three-phase supervisor
+- Phase 1: fetch files + RAG in parallel, call planClusters, send cluster_plan event
+- Phase 2: Promise.allSettled over all runWorkerAgent calls
+- Phase 3: skip synthesis if only one cluster succeeded; otherwise run synthesis agent
+- Do NOT touch analyzeCode, analyzeFromPR, or streamAnalyzeCode
+```
+
+**Day 6 — Frontend: cluster state routing and `ClusterPanel` component**
+```
+- In use-review-stream.ts: add clusterMap state, handle cluster_plan and cluster_done,
+  route thinking/tool_start/tool_done events by clusterId when present
+- In review-progress.tsx: add ClusterPanel component, render one per cluster
+- Do NOT modify ReviewPanel, IssueCard, or ScoreRing
+```
+
+**Day 7 — End-to-end testing**
+```
+- pnpm dev → paste a public PR URL with 5+ files across multiple directories
+- Verify multiple cluster panels render immediately and update independently
+- Verify final review contains issues from all clusters
+- Confirm parallel execution: all runWorkerAgent calls log within milliseconds of each other
+- Test a small PR (≤ 3 files): single panel, synthesis skipped
+```
+
+#### ✅ Done when
+- [ ] Submitting a PR URL with 5+ files renders multiple cluster panels immediately, each labeled with its domain
+- [ ] Each cluster panel's thinking and tool events update live and independently as workers run in parallel
+- [ ] Completed cluster panels display a green checkmark, the number of issues found, and elapsed time
+- [ ] The final review appears in ReviewPanel after all workers and synthesis complete
+- [ ] The final review contains issues sourced from all clusters, not just one
+- [ ] A PR with 1–3 files produces a single "Code Review" panel, skips synthesis, and completes correctly
+- [ ] The existing code-review path (paste code, not a PR URL) is completely unaffected
+- [ ] Console timestamps confirm all worker agents start within milliseconds of each other
+
+#### 💬 Come back to Claude when
+- `ThinkingStream` emits events without `clusterId` even after the constructor fix — check that each worker agent is wrapping `send` to inject `clusterId` before passing it to `ThinkingStream`, not passing the raw `send` directly
+- The synthesis agent's `generateText` returns output where `parseReviewText` fails on every step — bring the raw text so Claude can identify where the JSON boundary is being produced incorrectly
+- `Promise.allSettled` workers appear to run sequentially rather than in parallel — verify you are building the promise array with `.map()` and passing it directly to `allSettled`, not `await`-ing inside the map
+- `cluster_plan` events reach the frontend but no panels render — confirm `clusterMap` is passed as a prop from the page through to `ReviewProgress`, and that `ReviewProgress`'s prop type was updated to include it
+
+#### 🧠 Explain it back
+> "I built a supervisor/worker multi-agent system for PR review because a single agent reviewing all files at once splits its attention across unrelated domains — security, database access, API contracts — and produces shallow feedback. Instead, a pure TypeScript supervisor makes one cheap LLM call to group the PR's files into 2–4 domain clusters, then launches one focused worker agent per cluster in parallel via `Promise.allSettled`. Wall-clock time equals the slowest worker, not the sum — a 30-second sequential review becomes approximately 12 seconds. Each worker emits live SSE events tagged with its cluster ID, so the frontend renders multiple panels updating simultaneously; the existing code-review path is untouched because `clusterId` is optional on all event types. When all workers finish, a synthesis agent combines the partial reviews, deduplicates issues, and explicitly identifies cross-cluster patterns that span multiple domains."
+
+---
+
+### Week 7 — Auth, Payments & Database
 
 #### 📖 Concept
 
@@ -585,7 +690,7 @@ This week is less about AI and more about turning your tool into a real product.
 - Stripe Checkout handles the payment flow
 - Stripe webhooks update the user's plan in your database
 
-#### 🔨 Build — Week 6
+#### 🔨 Build — Week 7
 
 **Day 1-2: Auth — NextAuth on frontend, JWT guard on NestJS**
 ```
@@ -647,7 +752,7 @@ NestJS:
 
 ---
 
-### Week 7 — Production Hardening
+### Week 8 — Production Hardening
 
 #### 📖 Concept
 
@@ -662,7 +767,7 @@ NestJS:
 - **Reliability**: LLMs occasionally return malformed output. You need retry logic and fallbacks.
 - **Rate limits**: OpenAI has rate limits per tier. At scale, you need a queue.
 
-#### 🔨 Build — Week 7
+#### 🔨 Build — Week 8
 
 **Day 1-2: Helicone integration**
 ```
@@ -726,7 +831,7 @@ NestJS:
 
 ---
 
-### Week 8 — Launch
+### Week 9 — Launch
 
 #### 📖 Concept
 
@@ -737,7 +842,7 @@ Launching is a skill. Most developers build things and then quietly deploy them 
 - Developers trust other developers. First-person, authentic posts outperform polished marketing.
 - Timing matters: Tuesday–Thursday mornings get the most engagement
 
-#### 🔨 Build — Week 8
+#### 🔨 Build — Week 9
 
 **Day 1-2: Landing page**
 ```
@@ -1538,8 +1643,11 @@ When you finish this project, you'll be able to answer all of these:
 **"What's tool calling and when would you use it?"**  
 > Use the 🧠 Explain it back from Week 3.
 
-**"How do you handle AI reliability in production?"**  
+**"How do you handle AI reliability in production?"**
 > Provider fallback (OpenAI → Groq), retry with exponential backoff, token budgeting, Helicone for observability, rate limiting per user.
+
+**"Walk me through how you'd design a multi-agent system for code review."**
+> I split the problem into three phases: a pure TypeScript supervisor that makes one cheap LLM call to cluster the PR's files by domain; parallel worker agents via `Promise.allSettled` — each focused on a single domain cluster — so wall-clock time equals the slowest worker rather than the sum of all workers; and a synthesis agent that receives all partial reviews and produces a unified output, explicitly hunting for cross-cluster issues that span multiple domains. Workers receive a typed `send` callback rather than the raw response object, keeping them fully decoupled from HTTP and SSE. Real-time visibility is handled by tagging all SSE events with a `clusterId` so the frontend routes them to the correct panel — and the existing code-review path works unchanged because `clusterId` is optional on all event types.
 
 **"Why this tech stack?"**  
 > You made deliberate choices — Next.js as a pure UI layer with zero business logic, NestJS as a production-grade modular API you already know from real production work. Supabase for pgvector + DB in one platform, Vercel AI SDK for provider abstraction so switching from OpenAI to Groq is one line. You can justify each one.
@@ -1552,5 +1660,5 @@ When you finish this project, you'll be able to answer all of these:
 
 ---
 
-*Last updated: Week 0 (before start)*  
+*Last updated: Week 6 — Clustered PR Review Agent added*
 *Update this document as you make architectural decisions that differ from the plan.*
