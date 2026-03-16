@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { memo, useMemo, useState } from 'react'
 import {
     CheckCircle2,
     Clock,
@@ -11,13 +11,13 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { TraceEntry, StreamPhase, ClusterState, TaskItem } from '@/lib/use-review-stream'
+import { groupEntries } from '@/lib/group-entries'
 import { GithubFilesStep } from './github-files-step'
 import {
     ThinkingGroup,
     ToolStep,
     LinterGroup,
     formatDuration,
-    type ThinkingEntry,
 } from './trace-entries'
 
 // ── AgentIcon ─────────────────────────────────────────────────────────────────
@@ -26,42 +26,6 @@ import {
 const AgentIcon = ({ className = '' }: { className?: string }) => (
     <Loader2 className={cn('shrink-0 animate-spin text-blue-400', className)} />
 )
-
-// ── Entry grouping ────────────────────────────────────────────────────────────
-
-type ToolEntry = Extract<TraceEntry, { kind: 'tool' }>
-
-type RenderGroup =
-    | { kind: 'thinking-group'; id: string; entries: ThinkingEntry[] }
-    | { kind: 'tool'; entry: ToolEntry }
-    | { kind: 'linter-group'; id: string; entries: ToolEntry[] }
-
-function groupEntries(entries: TraceEntry[]): RenderGroup[] {
-    const groups: RenderGroup[] = []
-    for (const entry of entries) {
-        if (entry.kind === 'thinking') {
-            const last = groups.at(-1)
-            if (last?.kind === 'thinking-group') {
-                last.entries.push(entry as ThinkingEntry)
-            } else {
-                groups.push({ kind: 'thinking-group', id: `tg-${entry.id}`, entries: [entry as ThinkingEntry] })
-            }
-        } else if (entry.kind === 'tool') {
-            const toolEntry = entry as ToolEntry
-            if (toolEntry.tool === 'runLinter') {
-                const last = groups.at(-1)
-                if (last?.kind === 'linter-group') {
-                    last.entries.push(toolEntry)
-                } else {
-                    groups.push({ kind: 'linter-group', id: `lg-${entry.id}`, entries: [toolEntry] })
-                }
-            } else {
-                groups.push({ kind: 'tool', entry: toolEntry })
-            }
-        }
-    }
-    return groups
-}
 
 // ── PipelineStepLabel ─────────────────────────────────────────────────────────
 // Small uppercase section divider for each pipeline stage.
@@ -81,7 +45,7 @@ interface PlannerCardProps {
     phase: StreamPhase
 }
 
-function PlannerCard({ clusterMap, phase }: PlannerCardProps) {
+const PlannerCard = memo(function PlannerCard({ clusterMap, phase }: PlannerCardProps) {
     const planningDone = clusterMap.size > 0
     const planning = !planningDone && phase === 'streaming'
 
@@ -119,12 +83,12 @@ function PlannerCard({ clusterMap, phase }: PlannerCardProps) {
             </div>
         </div>
     )
-}
+})
 
 // ── WorkerCard ────────────────────────────────────────────────────────────────
 // Compact grid cell for one parallel worker agent.
 
-function WorkerCard({
+const WorkerCard = memo(function WorkerCard({
     cluster,
     isSelected,
     onClick,
@@ -186,7 +150,7 @@ function WorkerCard({
             </div>
         </button>
     )
-}
+})
 
 // ── WorkersGrid ───────────────────────────────────────────────────────────────
 // Shows all parallel worker agents side-by-side to convey simultaneous execution.
@@ -273,7 +237,7 @@ function WorkersGrid({ clusterMap }: { clusterMap: Map<string, ClusterState> }) 
 // ── SynthesizerStep ───────────────────────────────────────────────────────────
 // Final LLM call that merges all partial cluster reviews.
 
-function SynthesizerStep({
+const SynthesizerStep = memo(function SynthesizerStep({
     phase,
     clusterMap,
     totalDurationMs,
@@ -317,7 +281,7 @@ function SynthesizerStep({
             </div>
         </div>
     )
-}
+})
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 

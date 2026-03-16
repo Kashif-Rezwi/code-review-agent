@@ -86,6 +86,14 @@
   display: none;
 }
 
+/* ── App-level design tokens ──────────────────────────────────────────────── */
+/* These map the hardcoded hex values used across layout / editor to a single  */
+/* place so theme updates only need to happen here.                             */
+:root {
+  --color-app-bg:     #0d1117;  /* page background — body, header, page wrappers  */
+  --color-editor-bg:  #0f1521;  /* Monaco editor / code card background           */
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

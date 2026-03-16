@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, BrainCircuit, Clock, Code2, GitPullRequest, Loader2, Bot } from 'lucide-react'
+import { AlertTriangle, BrainCircuit, Clock, Code2, GitPullRequest, Loader2 } from 'lucide-react'
 import { AppHeader } from '@/components/layout/app-header'
 import { ErrorBanner } from '@/components/ui/error-banner'
 import { CodeEditor } from '@/components/review/code-editor'
@@ -12,6 +12,7 @@ import { ChatInput } from '@/components/review/chat-input'
 import { useChatMessages } from '@/lib/use-chat-messages'
 import { useReviewStream } from '@/lib/use-review-stream'
 import { detectLanguage, estimateTokens, CODE_TOKEN_LIMIT } from '@/lib/detect-language'
+import { isValidPrUrl } from '@/lib/validate'
 import { PrUrlInput } from '@/components/ui/pr-url-input'
 import { ReviewErrorBoundary } from '@/components/ui/error-boundary'
 import { cn } from '@/lib/utils'
@@ -43,7 +44,7 @@ export default function ReviewPage() {
     const canSubmit =
         mode === 'code'
             ? code.trim().length > 0 && !isOverLimit
-            : /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/.test(prUrl.trim())
+            : isValidPrUrl(prUrl)
 
     const handleEditorChange = useCallback((value: string | undefined) => {
         setCode(value ?? '')

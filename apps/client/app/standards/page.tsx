@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import {
     BookOpen,
     Upload,
@@ -12,76 +12,22 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { AppHeader } from '@/components/layout/app-header'
-
-interface Document {
-    id: string
-    name: string
-    createdAt: string
-    _count: { chunks: number }
-}
+import { useStandardsDocuments } from '@/lib/use-standards-documents'
 
 export default function StandardsPage() {
-    const [documents, setDocuments] = useState<Document[]>([])
-    const [isLoadingDocs, setIsLoadingDocs] = useState(true)
-    const [isUploading, setIsUploading] = useState(false)
-    const [uploadError, setUploadError] = useState<string | null>(null)
-    const [uploadSuccess, setUploadSuccess] = useState<string | null>(null)
-    const [deletingId, setDeletingId] = useState<string | null>(null)
+    const {
+        documents,
+        isLoading,
+        isUploading,
+        deletingId,
+        uploadError,
+        uploadSuccess,
+        uploadFile,
+        deleteDocument,
+    } = useStandardsDocuments()
+
     const [isDragging, setIsDragging] = useState(false)
     const fileInputRef = useRef<HTMLInputElement>(null)
-
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL
-
-    const fetchDocuments = useCallback(async () => {
-        try {
-            const res = await fetch(`${apiUrl}/rag/documents`)
-            if (res.ok) setDocuments(await res.json())
-        } catch {
-            // silently ignore — list can be refetched on next interaction
-        } finally {
-            setIsLoadingDocs(false)
-        }
-    }, [apiUrl])
-
-    useEffect(() => {
-        fetchDocuments()
-    }, [fetchDocuments])
-
-    const uploadFile = useCallback(async (file: File) => {
-        const allowed = ['text/plain', 'application/pdf', 'text/markdown']
-        if (!allowed.includes(file.type)) {
-            setUploadError('Only .txt and .pdf files are supported.')
-            return
-        }
-        if (file.size > 5 * 1024 * 1024) {
-            setUploadError('File must be smaller than 5 MB.')
-            return
-        }
-
-        setIsUploading(true)
-        setUploadError(null)
-        setUploadSuccess(null)
-
-        const formData = new FormData()
-        formData.append('file', file)
-
-        try {
-            const res = await fetch(`${apiUrl}/rag/upload`, {
-                method: 'POST',
-                body: formData,
-            })
-            if (!res.ok) {
-                const msg = await res.text()
-                throw new Error(msg || 'Upload failed.')
-            }
-            setUploadSuccess(`"${file.name}" uploaded successfully.`)
-            await fetchDocuments()
-        } catch (err) {
-            setUploadError(err instanceof Error ? err.message : 'Upload failed.')
-        } finally {
-            setIsUploading(false)
-        }
-    }, [apiUrl, fetchDocuments])
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0]
@@ -105,21 +51,6 @@ export default function StandardsPage() {
         setIsDragging(true)
     }
     const handleDragLeave = () => setIsDragging(false)
-
-    const handleDelete = async (id: string, name: string) => {
-        setDeletingId(id)
-        try {
-            const res = await fetch(`${apiUrl}/rag/documents/${id}`, { method: 'DELETE' })
-            if (res.ok) {
-                setDocuments((prev) => prev.filter((d) => d.id !== id))
-                if (uploadSuccess?.includes(name)) setUploadSuccess(null)
-            }
-        } catch {
-            // Network error — document stays in list, user can retry
-        } finally {
-            setDeletingId(null)
-        }
-    }
 
     const formatDate = (iso: string) =>
         new Date(iso).toLocaleDateString(undefined, {
@@ -205,10 +136,10 @@ export default function StandardsPage() {
                 {/* Document list */}
                 <div className="space-y-3">
                     <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                        Uploaded Standards{!isLoadingDocs && ` (${documents.length})`}
+                        Uploaded Standards{!isLoading && ` (${documents.length})`}
                     </h2>
 
-                    {isLoadingDocs ? (
+                    {isLoading ? (
                         <div className="space-y-2">
                             {[1, 2, 3].map((i) => (
                                 <div
@@ -259,7 +190,7 @@ export default function StandardsPage() {
                                         variant="ghost"
                                         size="sm"
                                         disabled={deletingId === doc.id}
-                                        onClick={() => handleDelete(doc.id, doc.name)}
+                                        onClick={() => deleteDocument(doc.id, doc.name)}
                                         className="text-gray-500 hover:text-red-400 hover:bg-red-950/30 h-8 w-8 p-0"
                                     >
                                         {deletingId === doc.id ? (

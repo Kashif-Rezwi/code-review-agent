@@ -1,10 +1,9 @@
-import { useState, useCallback } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiFetch } from '@/lib/api'
 import type { ChatMessage } from '@/types/review.types'
 
 interface UseChatMessages {
     messages: ChatMessage[]
-    setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>
     input: string
     setInput: (v: string) => void
     isSending: boolean
@@ -14,16 +13,29 @@ interface UseChatMessages {
 /**
  * Manages chat messages for a review session.
  *
- * `setMessages` is exposed so the caller can seed initial messages
- * (e.g. from a persisted history fetch) without a second network call.
+ * `initialMessages` seeds the list once — useful when replaying a
+ * persisted history fetch without exposing the internal state setter.
  *
  * `reviewId` may be null while the review is still loading — `submit`
  * is a no-op until it resolves.
  */
-export function useChatMessages(reviewId: string | null): UseChatMessages {
+export function useChatMessages(
+    reviewId: string | null,
+    initialMessages?: ChatMessage[],
+): UseChatMessages {
     const [messages, setMessages] = useState<ChatMessage[]>([])
     const [input,    setInput]    = useState('')
     const [isSending, setIsSending] = useState(false)
+
+    // Seed initial messages exactly once — runs when initialMessages first
+    // becomes available (e.g. after the history fetch resolves).
+    const seeded = useRef(false)
+    useEffect(() => {
+        if (initialMessages && !seeded.current) {
+            setMessages(initialMessages)
+            seeded.current = true
+        }
+    }, [initialMessages])
 
     const submit = useCallback(async () => {
         const message = input.trim()
@@ -50,5 +62,5 @@ export function useChatMessages(reviewId: string | null): UseChatMessages {
         }
     }, [reviewId, input, isSending])
 
-    return { messages, setMessages, input, setInput, isSending, submit }
+    return { messages, input, setInput, isSending, submit }
 }

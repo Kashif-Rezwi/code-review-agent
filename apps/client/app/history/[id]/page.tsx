@@ -31,17 +31,19 @@ export default function ReviewDetailPage() {
     const [isLoading, setIsLoading] = useState(true)
     const [error,     setError]     = useState<string | null>(null)
 
-    const { messages, setMessages, input, setInput, isSending, submit } = useChatMessages(id)
+    // `review` is set once — conversations are passed as initialMessages so
+    // useChatMessages can seed itself without exposing its internal setter.
+    const { messages, input, setInput, isSending, submit } = useChatMessages(id, review?.conversations)
 
     const scrollContainerRef = useRef<HTMLDivElement>(null)
     const bottomRef          = useRef<HTMLDivElement>(null)
 
     useEffect(() => {
         apiFetch<FullReview>(`/history/${id}`)
-            .then((data) => { setReview(data); setMessages(data.conversations) })
+            .then(setReview)
             .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load review.'))
             .finally(() => setIsLoading(false))
-    }, [id])  // eslint-disable-line react-hooks/exhaustive-deps
+    }, [id, setReview, setError, setIsLoading])
 
     useEffect(() => {
         bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
