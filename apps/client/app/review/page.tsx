@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, BrainCircuit, Clock, Code2, GitPullRequest } from 'lucide-react'
+import { AlertTriangle, BrainCircuit, Clock, Code2, GitPullRequest, Loader2, Bot } from 'lucide-react'
 import { AppHeader } from '@/components/layout/app-header'
 import { ErrorBanner } from '@/components/ui/error-banner'
 import { CodeEditor } from '@/components/review/code-editor'
@@ -14,6 +14,7 @@ import { useReviewStream } from '@/lib/use-review-stream'
 import { detectLanguage, estimateTokens, CODE_TOKEN_LIMIT } from '@/lib/detect-language'
 import { PrUrlInput } from '@/components/ui/pr-url-input'
 import { ReviewErrorBoundary } from '@/components/ui/error-boundary'
+import { cn } from '@/lib/utils'
 
 type Mode = 'code' | 'pr'
 
@@ -22,7 +23,7 @@ export default function ReviewPage() {
     const [code, setCode] = useState('')
     const [prUrl, setPrUrl] = useState('')
 
-    const { phase, traceEntries, clusterMap, review, error, totalDurationMs, submit, reset } = useReviewStream()
+    const { phase, taskItems, traceEntries, clusterMap, review, error, totalDurationMs, submit, reset } = useReviewStream()
 
     // reviewId drives the follow-up chat — available once complete event arrives.
     const reviewId = review?.id ?? null
@@ -34,7 +35,7 @@ export default function ReviewPage() {
     // Memoize so language detection and token counting only re-run when `code` changes,
     // not on every SSE event or unrelated state update.
     const detectedLanguage = useMemo(() => detectLanguage(code), [code])
-    const tokenCount       = useMemo(() => estimateTokens(code),  [code])
+    const tokenCount = useMemo(() => estimateTokens(code), [code])
     const isOverLimit = tokenCount > CODE_TOKEN_LIMIT
 
     const isStreaming = phase === 'connecting' || phase === 'streaming'
@@ -130,30 +131,39 @@ export default function ReviewPage() {
                         <button
                             onClick={handleReview}
                             disabled={!canSubmit}
-                            className="flex items-center gap-2 text-sm cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed group"
+                            className="group flex items-center gap-2.5 px-5 py-2.5 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/20 hover:border-blue-400/40 text-sm cursor-pointer transition-all duration-300 shadow-[0_0_15px_rgba(59,130,246,0.1)] hover:shadow-[0_0_25px_rgba(59,130,246,0.2)] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-blue-500/10 disabled:hover:border-blue-500/20 disabled:hover:shadow-[0_0_15px_rgba(59,130,246,0.1)]"
                         >
-                            <BrainCircuit className="h-4 w-4 shrink-0 text-blue-400 group-hover:text-blue-300 transition-colors" />
-                            <span className="font-medium text-gray-300 group-hover:text-white transition-colors">
-                                {mode === 'pr' ? 'Run Agents' : 'Run Review'}
+                            <BrainCircuit className="h-4 w-4 shrink-0 text-blue-400 transition-colors" />
+                            <span className="font-medium text-blue-100 transition-colors">
+                                Run Review
                             </span>
                         </button>
                     ) : (
-                        <div className="flex items-center gap-2 text-sm">
-                            <BrainCircuit className={`h-4 w-4 shrink-0 ${phase === 'complete' || phase === 'error' ? 'text-green-500' : 'text-blue-400'}`} />
-                            <span className={`font-medium ${phase === 'complete' || phase === 'error' ? 'text-gray-400' : 'text-gray-300'}`}>
-                                {phase === 'connecting' && 'Connecting to agent…'}
-                                {phase === 'streaming' && 'Agent is analysing…'}
-                                {phase === 'complete' && 'Agent trace'}
-                                {phase === 'error' && 'Agent trace (error)'}
+                        <div className="flex items-center gap-2.5 px-5 py-2.5 border border-blue-500/20 bg-blue-500/5 rounded-lg text-sm shadow-[0_0_15px_rgba(59,130,246,0.05)] transition-all duration-300">
+                            <BrainCircuit className={cn(
+                                'h-4 w-4 shrink-0 transition-colors',
+                                isStreaming ? 'text-blue-400/80 animate-pulse' :
+                                    phase === 'error' ? 'text-red-500' : 'text-green-500'
+                            )} />
+                            <span className={`font-medium ${phase === 'complete' || phase === 'error' ? 'text-gray-400' : 'text-blue-200'}`}>
+                                {phase === 'connecting' && mode === 'pr' && 'Connecting'}
+                                {(phase === 'streaming' || (phase === 'connecting' && mode === 'code')) && (
+                                    <span className="inline-flex items-center">
+                                        <span className="bg-gradient-to-r from-blue-400 to-indigo-400 text-transparent bg-clip-text font-semibold tracking-wide">Running AI Review</span>
+                                        <Loader2 className="h-4 w-4 shrink-0 animate-spin text-blue-400 ml-3" />
+                                    </span>
+                                )}
+                                {phase === 'complete' && 'Review complete'}
+                                {phase === 'error' && 'Review failed'}
                             </span>
-                            {isStreaming && <span className="h-1.5 w-1.5 rounded-full bg-blue-400 animate-pulse" />}
+
                             {clusterMap.size > 0 && (
-                                <span className="text-gray-600">
+                                <span className="text-gray-500 ml-2 border-l border-gray-700/50 pl-3">
                                     {clusterMap.size} cluster{clusterMap.size !== 1 ? 's' : ''}
                                 </span>
                             )}
                             {phase === 'complete' && totalDurationMs != null && (
-                                <span className="flex items-center gap-1 text-gray-600">
+                                <span className="flex items-center gap-1.5 text-gray-500 ml-2 border-l border-gray-700/50 pl-3">
                                     <Clock className="h-3 w-3" />
                                     {(totalDurationMs / 1000).toFixed(1)}s
                                 </span>
@@ -163,7 +173,7 @@ export default function ReviewPage() {
                     {(code || prUrl || review) && !isStreaming && (
                         <button
                             onClick={handleClear}
-                            className="text-sm text-gray-500 hover:text-gray-300 transition-colors"
+                            className="px-4 py-2.5 text-sm font-medium text-gray-400 hover:text-gray-200 hover:bg-gray-800/60 rounded-lg transition-all duration-300 cursor-pointer"
                         >
                             Clear
                         </button>
@@ -174,12 +184,14 @@ export default function ReviewPage() {
                 {error && <ErrorBanner message={error} />}
 
                 {/* Agent trace pipeline — visible during streaming AND persists after completion */}
-                {(isStreaming || traceEntries.length > 0 || clusterMap.size > 0) && (
+                {(isStreaming || taskItems.length > 0 || traceEntries.length > 0 || clusterMap.size > 0) && (
                     <ReviewProgress
                         entries={traceEntries}
+                        taskItems={taskItems}
                         phase={phase}
                         clusterMap={clusterMap}
                         totalDurationMs={totalDurationMs}
+                        mode={mode}
                     />
                 )}
 

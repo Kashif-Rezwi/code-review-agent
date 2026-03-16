@@ -45,7 +45,7 @@ export type ReviewStreamEvent =
             id: string
             label: string
             focus: string
-            fileNames: string[]
+            files: { name: string; additions: number; deletions: number; status: string }[]
         }[]
       }
     | { type: 'cluster_done'; clusterId: string; issueCount: number; durationMs: number }

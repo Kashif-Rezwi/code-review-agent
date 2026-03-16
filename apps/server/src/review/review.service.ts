@@ -37,6 +37,10 @@ import { ThinkingStream } from './review.thinking'
 /** Maximum agent loop steps per review type. */
 const AGENT_MAX_STEPS = { CODE: 10, PR: 2, WORKER: 5 } as const
 
+/** Maximum diff characters forwarded to each worker agent per file.
+ *  Keeps prompts within token budget while preserving most of the useful signal. */
+const MAX_PATCH_CHARS = 3_000
+
 @Injectable()
 export class ReviewService {
     private readonly logger = new Logger(ReviewService.name)
@@ -117,6 +121,25 @@ export class ReviewService {
                 )
             }
 
+            // ── Phase 1b: Emit file list for the Data Collection stage ────────
+            // Fires before planning so the UI shows "Reading files…" first,
+            // then transitions to the Planning stage when cluster_plan arrives.
+            send({
+                type: 'task_plan',
+                tasks: files.map(f => ({
+                    id: f.filename,
+                    label: f.filename.split('/').pop() ?? f.filename,
+                })),
+            })
+            for (const f of files) {
+                const diffLines = f.patch ? f.patch.split('\n').length : 0
+                const detail = diffLines > 0
+                    ? `+${f.additions} -${f.deletions} · ${diffLines} diff lines`
+                    : f.status
+                send({ type: 'task_update', taskId: f.filename, status: 'done', detail })
+            }
+
+            // ── Phase 2: Plan clusters ────────────────────────────────────────
             // Use lightweight LLM call to plan clusters intelligently.
             // Falls back to single "general" cluster automatically on error.
             const clusters = await planClusters(files, this.openai)
@@ -128,11 +151,16 @@ export class ReviewService {
                     id: c.id,
                     label: c.label,
                     focus: c.focus,
-                    fileNames: c.files.map(f => f.filename),
+                    files: c.files.map(f => ({
+                        name: f.filename,
+                        additions: f.additions,
+                        deletions: f.deletions,
+                        status: f.status,
+                    })),
                 })),
             })
 
-            // ── Phase 2: Run all worker agents in parallel ────────────────────
+            // ── Phase 3: Run all worker agents in parallel ────────────────────
             // Promise.allSettled means one failing cluster never blocks the others.
             const workerResults = await Promise.allSettled(
                 clusters.map(cluster => this.runWorkerAgent(cluster, standards, send))
@@ -389,7 +417,6 @@ export class ReviewService {
     ): Promise<ReviewData> {
         const workerStart = Date.now()
 
-        const MAX_PATCH_CHARS = 3_000
         const fileSection = cluster.files.map(f => {
             const patch = f.patch
                 ? (f.patch.length > MAX_PATCH_CHARS

@@ -22,12 +22,20 @@ export type TraceEntry =
 
 export type StreamPhase = 'idle' | 'connecting' | 'streaming' | 'complete' | 'error'
 
+/** Diff stats for a single file within a cluster. */
+export type ClusterFile = {
+    name: string
+    additions: number
+    deletions: number
+    status: string
+}
+
 /** Per-cluster state collected during the multi-agent clustered PR review path. */
 export type ClusterState = {
     id: string
     label: string
     focus: string
-    fileNames: string[]
+    files: ClusterFile[]
     traceEntries: TraceEntry[]
     issueCount?: number
     durationMs?: number
@@ -49,8 +57,6 @@ export interface UseReviewStreamReturn {
     error: string | null
     /** Total wall-clock duration of the entire stream in milliseconds. */
     totalDurationMs: number | null
-    /** Number of tool calls made during the stream. */
-    stepCount: number | null
     /** Start streaming a new review.  Pass `{ code }` or `{ prUrl }`. */
     submit: (payload: { code: string } | { prUrl: string }) => void
     /** Abort any in-progress stream and reset all state to idle. */
@@ -67,7 +73,6 @@ export function useReviewStream(): UseReviewStreamReturn {
     const [review, setReview] = useState<ReviewData | null>(null)
     const [error, setError] = useState<string | null>(null)
     const [totalDurationMs, setTotalDurationMs] = useState<number | null>(null)
-    const [stepCount, setStepCount] = useState<number | null>(null)
 
     const abortRef = useRef<AbortController | null>(null)
     // Monotonically increasing counter for thinking entry IDs — kept in a ref
@@ -85,7 +90,6 @@ export function useReviewStream(): UseReviewStreamReturn {
         setReview(null)
         setError(null)
         setTotalDurationMs(null)
-        setStepCount(null)
     }, [])
 
     // ── Reset ─────────────────────────────────────────────────────────────────
@@ -152,7 +156,12 @@ export function useReviewStream(): UseReviewStreamReturn {
                             setClusterMap(() => {
                                 const m = new Map<string, ClusterState>()
                                 for (const c of event.clusters) {
-                                    m.set(c.id, { ...c, traceEntries: [], done: false })
+                                    m.set(c.id, {
+                                        ...c,
+                                        files: c.files ?? [],
+                                        traceEntries: [],
+                                        done: false,
+                                    })
                                 }
                                 return m
                             })
@@ -250,7 +259,6 @@ export function useReviewStream(): UseReviewStreamReturn {
                             })
                             setReview(event.review)
                             setTotalDurationMs(event.durationMs)
-                            setStepCount(event.stepCount)
                             setPhase('complete')
                             break
 
@@ -270,5 +278,5 @@ export function useReviewStream(): UseReviewStreamReturn {
         })()
     }, [resetState])
 
-    return { phase, taskItems, traceEntries, clusterMap, review, error, totalDurationMs, stepCount, submit, reset }
+    return { phase, taskItems, traceEntries, clusterMap, review, error, totalDurationMs, submit, reset }
 }

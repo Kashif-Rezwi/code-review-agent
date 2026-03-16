@@ -10,7 +10,8 @@ import {
     X,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import type { TraceEntry, StreamPhase, ClusterState } from '@/lib/use-review-stream'
+import type { TraceEntry, StreamPhase, ClusterState, TaskItem } from '@/lib/use-review-stream'
+import { GithubFilesStep } from './github-files-step'
 import {
     ThinkingGroup,
     ToolStep,
@@ -18,6 +19,13 @@ import {
     formatDuration,
     type ThinkingEntry,
 } from './trace-entries'
+
+// ── AgentIcon ─────────────────────────────────────────────────────────────────
+// Reusable spinner for any in-progress agent step.
+
+const AgentIcon = ({ className = '' }: { className?: string }) => (
+    <Loader2 className={cn('shrink-0 animate-spin text-blue-400', className)} />
+)
 
 // ── Entry grouping ────────────────────────────────────────────────────────────
 
@@ -79,7 +87,7 @@ function PlannerCard({ clusterMap, phase }: PlannerCardProps) {
 
     if (!planning && !planningDone) return null
 
-    const totalFiles = [...clusterMap.values()].reduce((sum, c) => sum + c.fileNames.length, 0)
+    const totalFiles = [...clusterMap.values()].reduce((sum, c) => sum + c.files.length, 0)
 
     return (
         <div>
@@ -91,14 +99,14 @@ function PlannerCard({ clusterMap, phase }: PlannerCardProps) {
                 <div className="flex items-center gap-3 flex-wrap">
                     {planningDone
                         ? <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />
-                        : <Loader2 className="h-4 w-4 animate-spin text-blue-400 shrink-0" />
+                        : <AgentIcon className="h-3.5 mx-0.5" />
                     }
                     <Network className="h-3.5 w-3.5 text-gray-500 shrink-0" />
                     <span className="text-sm font-medium text-gray-200">Planner</span>
 
                     {!planningDone && (
-                        <span className="text-xs text-blue-400/80">
-                            Grouping files into review clusters…
+                        <span className="text-xs text-blue-400/80 inline-flex animate-pulse">
+                            Structuring review clusters…
                         </span>
                     )}
 
@@ -143,7 +151,7 @@ function WorkerCard({
             <div className="flex items-center gap-2 mb-2.5">
                 {cluster.done
                     ? <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0" />
-                    : <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-400 shrink-0" />
+                    : <AgentIcon className="h-2.5 ml-0.5 mr-0.5" />
                 }
                 <span className="text-xs font-medium text-gray-200 truncate leading-none">
                     {cluster.label}
@@ -230,7 +238,7 @@ function WorkersGrid({ clusterMap }: { clusterMap: Map<string, ClusterState> }) 
                     <div className="flex items-center justify-between mb-3">
                         <span className="text-xs font-medium text-gray-400">
                             {selected.label}
-                            <span className="text-gray-700 font-normal ml-1.5">— agent trace</span>
+                            <span className="text-gray-700 font-normal ml-1.5">— event logs</span>
                         </span>
                         <button
                             onClick={() => setSelectedId(null)}
@@ -241,9 +249,9 @@ function WorkersGrid({ clusterMap }: { clusterMap: Map<string, ClusterState> }) 
                     </div>
 
                     {selected.traceEntries.length === 0 && (
-                        <div className="flex items-center gap-2 text-xs text-gray-600 py-1">
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                            Waiting for agent to start…
+                        <div className="flex items-center gap-2.5 text-xs text-gray-500 py-1 font-medium">
+                            <AgentIcon className="h-2.5 opacity-60 ml-0.5" />
+                            Provisioning agent instance
                         </div>
                     )}
 
@@ -315,18 +323,28 @@ function SynthesizerStep({
 
 interface AgentTraceProps {
     entries: TraceEntry[]
+    taskItems: TaskItem[]
     phase: StreamPhase
     clusterMap?: Map<string, ClusterState>
     totalDurationMs?: number | null
+    mode?: 'code' | 'pr'
 }
 
 // ── ReviewProgress ────────────────────────────────────────────────────────────
 
-export function ReviewProgress({ entries, phase, clusterMap, totalDurationMs }: AgentTraceProps) {
+export function ReviewProgress({ entries, taskItems, phase, clusterMap = new Map(), totalDurationMs, mode = 'pr' }: AgentTraceProps) {
     const isStreaming = phase === 'connecting' || phase === 'streaming'
 
-    const isClusteredPath = clusterMap && clusterMap.size > 0
-    const hasPlannerStep = clusterMap !== undefined && clusterMap.size > 0
+    // Stage gate: every stage after Data Collection only renders once all files
+    // are confirmed received. This is purely data-driven — no timeouts or effects.
+    // On the code path taskItems is always empty so allFilesDone stays false and
+    // these stages never render (correct, they're PR-only).
+    const allFilesDone = taskItems.length > 0 && taskItems.every(t => t.status === 'done')
+
+    const isClusteredPath = mode === 'pr' && allFilesDone && clusterMap.size > 0
+    // Hide the single-agent trace only when cluster workers are active.
+    // On the fallback path (no clusters) the trace must still render.
+    const hasPlannerStep = clusterMap.size > 0
 
     // Single-agent path spinner logic
     const hasRunningTool = entries.some(e => e.kind === 'tool' && e.status === 'running')
@@ -335,30 +353,38 @@ export function ReviewProgress({ entries, phase, clusterMap, totalDurationMs }: 
 
     const grouped = useMemo(() => groupEntries(entries), [entries])
 
-    const hasContent = entries.length > 0 || isStreaming || isClusteredPath
+    const hasContent = taskItems.length > 0 || entries.length > 0 || isStreaming || isClusteredPath
     if (!hasContent) return null
 
     return (
         <div className="space-y-3">
             {/* ── Connecting placeholder ──────────────────────── */}
-            {phase === 'connecting' && entries.length === 0 && (
-                <div className="flex items-center gap-2.5 py-1 animate-fade-in">
-                    <Loader2 className="h-3.5 w-3.5 animate-spin text-gray-700 shrink-0" />
-                    <span className="text-sm text-gray-600">Starting up…</span>
+            {phase === 'connecting' && taskItems.length === 0 && entries.length === 0 && mode === 'pr' && (
+                <div className="flex items-center gap-2.5 py-1 animate-fade-in pl-1 text-gray-500">
+                    <AgentIcon className="h-2.5 opacity-60 ml-0.5" />
+                    <span className="text-sm font-medium inline-flex">Connecting to agent environment</span>
                 </div>
             )}
 
-            {/* ── Stage 1: Planning (multi-agent path only) ──────── */}
-            {clusterMap !== undefined && (
+            {/* ── Stage 1: Data Collection — file list with diff stats ──────── */}
+            {taskItems.length > 0 && (
+                <div>
+                    <PipelineStepLabel>Data Collection</PipelineStepLabel>
+                    <GithubFilesStep items={taskItems} />
+                </div>
+            )}
+
+            {/* ── Stage 2: Planning — only after all files are confirmed done ── */}
+            {mode === 'pr' && allFilesDone && (
                 <PlannerCard clusterMap={clusterMap} phase={phase} />
             )}
 
-            {/* ── Stage 2: Parallel workers ───────────────────── */}
+            {/* ── Stage 3: Parallel workers ────────────────────────────────── */}
             {isClusteredPath && (
                 <WorkersGrid clusterMap={clusterMap} />
             )}
 
-            {/* ── Stage 3: Synthesis ─────────────────────────── */}
+            {/* ── Stage 4: Synthesis ───────────────────────────────────────── */}
             {isClusteredPath && (
                 <SynthesizerStep
                     phase={phase}
@@ -367,7 +393,7 @@ export function ReviewProgress({ entries, phase, clusterMap, totalDurationMs }: 
                 />
             )}
 
-            {/* ── Single-agent trace timeline ─────────────────── */}
+            {/* ── Single-agent trace timeline (code review + PR fallback) ───── */}
             {!hasPlannerStep && (
                 <div className="space-y-1">
                     {grouped.map(group => {
@@ -380,7 +406,10 @@ export function ReviewProgress({ entries, phase, clusterMap, totalDurationMs }: 
                     {showSingleAgentSpinner && (
                         <div className="flex items-center gap-2.5 py-2 px-4 rounded-lg border border-gray-800/60 bg-gray-900/20 animate-fade-in">
                             <Sparkles className="h-3.5 w-3.5 text-blue-400 shrink-0 animate-pulse" />
-                            <span className="text-sm text-gray-300">Generating review…</span>
+                            <span className="text-sm bg-gradient-to-r from-blue-400 to-indigo-400 bg-clip-text text-transparent font-medium tracking-wide flex items-center gap-3">
+                                Generating final review
+                                <AgentIcon className="h-3" />
+                            </span>
                         </div>
                     )}
                 </div>
