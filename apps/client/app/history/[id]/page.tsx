@@ -3,23 +3,26 @@
 import { useEffect, useRef, useState } from 'react'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, Activity } from 'lucide-react'
 import { AppHeader } from '@/components/layout/app-header'
 import { ErrorBanner } from '@/components/ui/error-banner'
 import { ReviewPanel } from '@/components/review/review-panel'
 import { ReviewSkeleton } from '@/components/review/review-skeleton'
 import { ReviewInputDisplay } from '@/components/review/review-input-display'
+import { ReviewProgress } from '@/components/review/review-progress'
 import { UserBubble, AssistantMessage, LoadingIndicator } from '@/components/review/chat-message'
 import { ChatInput } from '@/components/review/chat-input'
 import { useChatMessages } from '@/lib/use-chat-messages'
+import { useTraceReplay } from '@/lib/use-trace-replay'
 import { apiFetch } from '@/lib/api'
-import type { ReviewData, ChatMessage } from '@/types/review.types'
+import type { ReviewData, ChatMessage, ReviewStreamEvent } from '@/types/review.types'
 
 interface FullReview extends ReviewData {
     id: string
     type: 'CODE' | 'PR'
     input: string
     conversations: ChatMessage[]
+    traceLog: ReviewStreamEvent[] | null
 }
 
 export default function ReviewDetailPage() {
@@ -43,6 +46,13 @@ export default function ReviewDetailPage() {
     useEffect(() => {
         bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
     }, [messages, isSending])
+
+    // Replay the stored trace synchronously — no streaming needed.
+    // Returns empty structures for pre-migration reviews (traceLog === null).
+    const { traceEntries, clusterMap, taskItems, totalDurationMs, mode } =
+        useTraceReplay(review?.traceLog ?? null)
+
+    const hasTrace = traceEntries.length > 0 || clusterMap.size > 0 || taskItems.length > 0
 
     return (
         <div className="h-screen flex flex-col bg-[#0d1117] text-gray-100">
@@ -70,6 +80,34 @@ export default function ReviewDetailPage() {
                     {review && (
                         <>
                             <ReviewInputDisplay type={review.type} input={review.input} />
+
+                            {/* ── Agent Trace Replay ─────────────────────────────────────── */}
+                            {hasTrace && (
+                                <div className="rounded-lg border border-gray-800 bg-gray-900/20 overflow-hidden">
+                                    <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-800/60">
+                                        <Activity className="w-3.5 h-3.5 text-gray-600" />
+                                        <span className="text-xs font-semibold uppercase tracking-widest text-gray-600">
+                                            Agent Trace
+                                        </span>
+                                        {totalDurationMs != null && (
+                                            <span className="ml-auto text-xs text-gray-700">
+                                                {(totalDurationMs / 1000).toFixed(1)}s
+                                            </span>
+                                        )}
+                                    </div>
+                                    <div className="p-4">
+                                        <ReviewProgress
+                                            entries={traceEntries}
+                                            taskItems={taskItems}
+                                            phase="complete"
+                                            clusterMap={clusterMap}
+                                            totalDurationMs={totalDurationMs}
+                                            mode={mode}
+                                        />
+                                    </div>
+                                </div>
+                            )}
+
                             <ReviewPanel review={review} />
 
                             {/* Messages — keyed by index (safe: list is append-only) */}

@@ -56,27 +56,32 @@ export function buildSynthesisUserMessage(
     prUrl: string,
     partialReviews: Array<{ clusterId: string; label: string; review: ReviewData }>,
 ): string {
+    // Include full issue detail (description + recommendation) so synthesis can carry
+    // them through directly rather than re-generating them — reduces output size and
+    // lowers the chance of the model producing malformed or truncated JSON.
     const clusterSummaries = partialReviews.map(({ label, review }) => {
-        const issueList = review.issues.map(i =>
-            `  - [${i.severity}] ${i.title} at ${i.location}`
+        const issueList = review.issues.map((i, n) =>
+            `  ${n + 1}. [${i.severity}/${i.type}] ${i.title}\n` +
+            `     location: ${i.location}\n` +
+            `     problem: ${i.description}\n` +
+            `     fix: ${i.recommendation}`,
         ).join('\n') || '  (no issues found)'
 
         return `### ${label} (score: ${review.score}/10)
 Summary: ${review.summary}
 Issues:
 ${issueList}
-Positives: ${review.positives.join(', ') || 'none noted'}`
-    }).join('\n\n')
+Positives: ${review.positives.join(' · ') || 'none noted'}`
+    }).join('\n\n---\n\n')
 
     return `Synthesize the following cluster reviews for PR: ${prUrl}
 
 ${clusterSummaries}
 
 Instructions:
-1. Produce a single unified summary for the entire PR
-2. Merge all issues — include all of them, do not drop any
-3. Look for cross-cluster issues: patterns that span multiple clusters
-   (e.g. auth data flowing unsafely into a DB query)
-4. Assign a final score reflecting the PR as a whole
-5. Combine all positives`
+1. Write a single unified summary for the entire PR (1-2 sentences).
+2. Include EVERY issue listed above — copy the description and fix text directly, only refine when adding cross-cluster context.
+3. Add any NEW cross-cluster issues you identify (patterns spanning multiple domains).
+4. Assign a final score reflecting the PR as a whole.
+5. Combine all genuine positives, removing exact duplicates.`
 }
