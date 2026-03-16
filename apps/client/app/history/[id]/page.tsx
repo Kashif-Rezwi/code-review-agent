@@ -65,7 +65,7 @@ export default function ReviewDetailPage() {
                 </div>
 
                 {/* pb-24 ensures content is never obscured by the fixed input overlay */}
-                <main className="flex-1 max-w-3xl mx-auto w-full px-6 space-y-6 pt-2 pb-24">
+                <main className="flex-1 max-w-4xl mx-auto w-full px-6 space-y-6 pt-2 pb-24">
                     <Link
                         href="/history"
                         className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-300 transition-colors"

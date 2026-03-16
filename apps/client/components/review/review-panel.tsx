@@ -12,7 +12,7 @@ export function ReviewPanel({ review }: { review: ReviewData }) {
     return (
         <div className="space-y-4">
             {/* Header: score ring + summary */}
-            <div className="rounded-lg border border-gray-800 bg-gray-900/40 p-5 flex items-start gap-5">
+            <div className="rounded-lg border border-gray-800 bg-gray-900/40 p-4 flex items-start gap-4">
                 <ScoreRing score={review.score} />
                 <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-3 mb-1.5 flex-wrap">

@@ -90,8 +90,15 @@
   * {
     @apply border-border outline-ring/50;
   }
+  /* Prevent elastic over-scroll bounce at page edges on all platforms */
+  html {
+    overscroll-behavior: none;
+    height: 100%;
+  }
   body {
     @apply bg-background text-foreground;
+    overscroll-behavior: none;
+    min-height: 100%;
   }
 }
 

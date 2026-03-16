@@ -55,7 +55,7 @@ export function ChatInput({ value, onChange, onSubmit, disabled, scrollContainer
                         bg-gradient-to-t from-[#0d1117] via-[#0d1117]/75 to-transparent
                         pointer-events-none
                         animate-in fade-in slide-in-from-bottom-2 duration-200">
-            <div className="w-full max-w-3xl pointer-events-auto">
+            <div className="w-full max-w-[860px] pointer-events-auto">
                 <InputShell
                     value={value}
                     onChange={onChange}
@@ -89,7 +89,7 @@ export function InputShell({ value, onChange, onSubmit, onFocus, onBlur, onKeyDo
     return (
         <form onSubmit={(e) => { e.preventDefault(); onSubmit() }}>
             <div className={cn(
-                'flex items-center gap-3 rounded-[20px] px-5 py-3',
+                'flex items-center gap-3 rounded-lg px-5 py-3',
                 'bg-gray-900/75 backdrop-blur-xl border transition-all duration-200',
                 isFocused
                     ? 'border-gray-600/50 shadow-[0_0_0_1px_rgba(255,255,255,0.05),0_8px_40px_rgba(0,0,0,0.55)]'

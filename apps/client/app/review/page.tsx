@@ -75,7 +75,7 @@ export default function ReviewPage() {
             <AppHeader />
 
             {/* pb-24 ensures content is never obscured by the fixed input overlay */}
-            <main className="max-w-5xl mx-auto p-6 pb-24 space-y-6">
+            <main className="max-w-4xl mx-auto p-6 pb-24 space-y-6">
                 <div>
                     <h1 className="text-2xl font-bold text-white">Review your code</h1>
                     <p className="text-gray-400 text-sm mt-1">

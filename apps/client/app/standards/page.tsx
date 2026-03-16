@@ -132,7 +132,7 @@ export default function StandardsPage() {
         <div className="min-h-screen bg-[#0d1117] text-gray-100">
             <AppHeader />
 
-            <main className="max-w-3xl mx-auto p-6 space-y-8">
+            <main className="max-w-4xl mx-auto p-6 space-y-6">
                 <div>
                     <h1 className="text-2xl font-bold text-white flex items-center gap-2">
                         <BookOpen className="w-6 h-6 text-blue-400" />
@@ -205,16 +205,26 @@ export default function StandardsPage() {
                 {/* Document list */}
                 <div className="space-y-3">
                     <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                        Uploaded Standards ({documents.length})
+                        Uploaded Standards{!isLoadingDocs && ` (${documents.length})`}
                     </h2>
 
                     {isLoadingDocs ? (
                         <div className="space-y-2">
-                            {[1, 2].map((i) => (
+                            {[1, 2, 3].map((i) => (
                                 <div
                                     key={i}
-                                    className="h-16 rounded-lg bg-gray-900/60 border border-gray-800 animate-pulse"
-                                />
+                                    className="flex items-center gap-4 rounded-lg border border-gray-800 bg-gray-900/60 px-4 py-3 animate-pulse"
+                                >
+                                    {/* File icon */}
+                                    <div className="w-4 h-4 rounded bg-gray-700 shrink-0" />
+                                    {/* Filename + meta */}
+                                    <div className="flex-1 space-y-1.5 min-w-0">
+                                        <div className="h-3.5 bg-gray-700 rounded w-44" />
+                                        <div className="h-3 bg-gray-800 rounded w-28" />
+                                    </div>
+                                    {/* Delete button */}
+                                    <div className="h-8 w-8 rounded-md bg-gray-800 shrink-0" />
+                                </div>
                             ))}
                         </div>
                     ) : documents.length === 0 ? (

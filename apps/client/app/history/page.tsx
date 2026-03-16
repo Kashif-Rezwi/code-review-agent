@@ -65,8 +65,20 @@ export default function HistoryPage() {
 
                 {error && <ErrorBanner message={error} />}
 
-                {/* Issue trends */}
-                {stats && stats.totalReviews > 0 && (
+                {/* Issue trends — skeleton while loading, real card once data arrives */}
+                {isLoading ? (
+                    <div className="rounded-lg border border-gray-800 bg-gray-900/40 p-4 animate-pulse space-y-3">
+                        <div className="flex items-center justify-between">
+                            <div className="h-3 w-24 rounded bg-gray-700" />
+                            <div className="h-3 w-20 rounded bg-gray-800" />
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                            {[72, 56, 80, 64, 60].map((w, i) => (
+                                <div key={i} className="h-6 rounded-full bg-gray-800" style={{ width: w }} />
+                            ))}
+                        </div>
+                    </div>
+                ) : stats && stats.totalReviews > 0 && (
                     <div className="rounded-lg border border-gray-800 bg-gray-900/40 p-4 space-y-3">
                         <div className="flex items-center justify-between">
                             <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
@@ -101,9 +113,27 @@ export default function HistoryPage() {
 
                 {/* Review list */}
                 {isLoading ? (
-                    <div className="space-y-3">
-                        {[1, 2, 3].map((n) => (
-                            <div key={n} className="h-20 rounded-lg bg-gray-800/40 animate-pulse" />
+                    <div className="space-y-2">
+                        {[1, 2, 3, 4, 5].map((n) => (
+                            <div key={n} className="rounded-lg border border-gray-800 bg-gray-900/40 p-4 animate-pulse">
+                                <div className="flex items-start justify-between gap-4">
+                                    {/* Score badge + type badge */}
+                                    <div className="flex items-center gap-2 shrink-0">
+                                        <div className="h-5 w-11 rounded-full bg-gray-700" />
+                                        <div className="h-5 w-14 rounded-full bg-gray-800" />
+                                    </div>
+                                    {/* Summary text lines */}
+                                    <div className="flex-1 space-y-2 min-w-0 pt-0.5">
+                                        <div className="h-3 bg-gray-700 rounded w-full" />
+                                        <div className="h-3 bg-gray-800 rounded w-4/5" />
+                                    </div>
+                                    {/* Date + issue count */}
+                                    <div className="shrink-0 space-y-1.5 text-right">
+                                        <div className="h-3 bg-gray-800 rounded w-20" />
+                                        <div className="h-3 bg-gray-800 rounded w-14 ml-auto" />
+                                    </div>
+                                </div>
+                            </div>
                         ))}
                     </div>
                 ) : reviews.length === 0 ? (
