@@ -10,14 +10,14 @@ import type { TaskItem } from '@/lib/use-review-stream'
 
 function DiffStats({ detail }: { detail: string }) {
     const m = detail.match(/^\+(\d+)\s+-(\d+)/)
-    if (!m) return <span className="text-[11px] text-gray-600 tabular-nums shrink-0">{detail}</span>
+    if (!m) return <span className="text-xs text-gray-600 tabular-nums shrink-0">{detail}</span>
     const add = parseInt(m[1])
     const del = parseInt(m[2])
     return (
         <div className="flex items-center gap-1 shrink-0">
-            {add > 0 && <span className="text-[11px] tabular-nums font-mono text-green-600">+{add}</span>}
-            {del > 0 && <span className="text-[11px] tabular-nums font-mono text-red-500/70">-{del}</span>}
-            {add === 0 && del === 0 && <span className="text-[11px] text-gray-700 font-mono">±0</span>}
+            {add > 0 && <span className="text-xs tabular-nums font-mono text-green-600">+{add}</span>}
+            {del > 0 && <span className="text-xs tabular-nums font-mono text-red-500/70">-{del}</span>}
+            {add === 0 && del === 0 && <span className="text-xs text-gray-700 font-mono">±0</span>}
         </div>
     )
 }
@@ -56,7 +56,7 @@ export function GithubFilesStep({ items }: { items: TaskItem[] }) {
                 {!allDone && (
                     <div className="w-16 h-1 rounded-full bg-gray-800 overflow-hidden shrink-0">
                         <div
-                            className="h-full bg-blue-500 rounded-full transition-all duration-300"
+                            className="h-full bg-blue-500 rounded-full transition-all duration-200"
                             style={{ width: `${(done / total) * 100}%` }}
                         />
                     </div>
@@ -85,11 +85,11 @@ export function GithubFilesStep({ items }: { items: TaskItem[] }) {
                             className="flex items-center gap-2.5 px-4 py-1.5 border-b border-gray-800/40 last:border-0"
                         >
                             {item.status === 'done'
-                                ? <CheckCircle2 className="h-3 w-3 text-green-600 shrink-0" />
+                                ? <CheckCircle2 className="h-3 w-3 text-green-500 shrink-0" />
                                 : <span className="h-1.5 w-1.5 rounded-full border border-gray-600 shrink-0 ml-0.5" />
                             }
                             <span className={cn(
-                                'text-[11px] font-mono flex-1 truncate',
+                                'text-xs font-mono flex-1 truncate',
                                 item.status === 'done' ? 'text-gray-400' : 'text-gray-300 animate-pulse',
                             )}>
                                 {item.label}

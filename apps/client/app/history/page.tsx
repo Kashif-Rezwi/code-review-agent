@@ -4,8 +4,10 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { Code2, GitPullRequest, History } from 'lucide-react'
 import { AppHeader } from '@/components/layout/app-header'
+import { PageHeader } from '@/components/layout/page-header'
 import { ErrorBanner } from '@/components/ui/error-banner'
 import { ScoreBadge } from '@/components/review/score-badge'
+import { Badge } from '@/components/ui/badge'
 import { apiFetch } from '@/lib/api'
 import { TYPE_CONFIG } from '@/types/review-config'
 
@@ -49,19 +51,15 @@ export default function HistoryPage() {
     }, [])
 
     return (
-        <div className="min-h-screen bg-[#0d1117] text-gray-100">
+        <div className="min-h-screen bg-app-bg text-gray-100">
             <AppHeader />
 
             <main className="max-w-4xl mx-auto p-6 space-y-6">
-                <div>
-                    <h1 className="text-2xl font-bold text-white flex items-center gap-2">
-                        <History className="w-6 h-6 text-blue-400" />
-                        Review History
-                    </h1>
-                    <p className="text-gray-400 text-sm mt-1">
-                        All past code reviews. Click any review to view details and continue the conversation.
-                    </p>
-                </div>
+                <PageHeader
+                    icon={History}
+                    title="Review History"
+                    description="All past code reviews. Click any review to view details and continue the conversation."
+                />
 
                 {error && <ErrorBanner message={error} />}
 
@@ -162,18 +160,12 @@ export default function HistoryPage() {
                                 <div className="flex items-start justify-between gap-4">
                                     <div className="flex items-center gap-2 shrink-0">
                                         <ScoreBadge score={review.score} />
-                                        <span
-                                            className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border ${
-                                                review.type === 'PR'
-                                                    ? 'text-purple-400/80 bg-purple-950/30 border-purple-800/40'
-                                                    : 'text-blue-400/80 bg-blue-950/30 border-blue-800/40'
-                                            }`}
-                                        >
+                                        <Badge variant={review.type === 'PR' ? 'purple' : 'blue'}>
                                             {review.type === 'PR'
                                                 ? <GitPullRequest className="w-3 h-3" />
                                                 : <Code2 className="w-3 h-3" />}
                                             {review.type}
-                                        </span>
+                                        </Badge>
                                     </div>
 
                                     <p className="flex-1 text-sm text-gray-300 leading-snug line-clamp-2">

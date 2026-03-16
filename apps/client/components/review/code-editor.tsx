@@ -6,6 +6,7 @@ import { Code2, Copy, Check } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { LANGUAGE_LABELS } from '@/types/review-config'
 import { useCopyToClipboard } from '@/lib/hooks'
+import { Button } from '@/components/ui/button'
 import type { Monaco } from '@monaco-editor/react'
 import { EditorSkeleton } from './editor-skeleton'
 
@@ -97,15 +98,16 @@ export function CodeEditor({
 
                 {readOnly ? (
                     /* Copy button — read-only / history mode */
-                    <button
+                    <Button
+                        variant="ghost-icon"
+                        size="sm"
                         onClick={() => copy(value)}
-                        className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs text-gray-600
-                                   hover:text-gray-300 hover:bg-gray-800/60 transition-colors"
+                        className="gap-1.5 text-xs"
                     >
                         {copied
                             ? <><Check className="w-3 h-3 text-green-400" /> Copied</>
                             : <><Copy className="w-3 h-3" /> Copy</>}
-                    </button>
+                    </Button>
                 ) : (
                     /* Token counter — editable / review mode */
                     <span className={cn(

@@ -12,6 +12,7 @@ import {
 import { cn } from '@/lib/utils'
 import type { TraceEntry, StreamPhase, ClusterState, TaskItem } from '@/lib/use-review-stream'
 import { groupEntries } from '@/lib/group-entries'
+import { Badge } from '@/components/ui/badge'
 import { GithubFilesStep } from './github-files-step'
 import {
     ThinkingGroup,
@@ -32,7 +33,7 @@ const AgentIcon = ({ className = '' }: { className?: string }) => (
 
 function PipelineStepLabel({ children }: { children: React.ReactNode }) {
     return (
-        <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-700 mb-1.5 px-0.5">
+        <p className="text-xs font-semibold uppercase tracking-widest text-gray-700 mb-1.5 px-0.5">
             {children}
         </p>
     )
@@ -125,25 +126,20 @@ const WorkerCard = memo(function WorkerCard({
             {/* Meta row */}
             <div className="flex items-center gap-1.5 flex-wrap">
                 {!cluster.done && (
-                    <span className="text-[11px] text-blue-400/70">Analyzing…</span>
+                    <span className="text-xs text-blue-400/70">Analyzing…</span>
                 )}
                 {cluster.done && cluster.issueCount !== undefined && (
-                    <span className={cn(
-                        'text-[11px] px-1.5 py-0.5 rounded-full font-medium border',
-                        cluster.issueCount > 0
-                            ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
-                            : 'bg-green-500/10 text-green-500 border-green-500/20',
-                    )}>
+                    <Badge variant={cluster.issueCount > 0 ? 'amber' : 'green'} className="font-medium">
                         {cluster.issueCount === 0 ? 'Clean' : `${cluster.issueCount} issue${cluster.issueCount !== 1 ? 's' : ''}`}
-                    </span>
+                    </Badge>
                 )}
                 {cluster.durationMs != null && (
-                    <span className="text-[11px] text-gray-600 tabular-nums">
+                    <span className="text-xs text-gray-600 tabular-nums">
                         {formatDuration(cluster.durationMs)}
                     </span>
                 )}
                 {toolCount > 0 && (
-                    <span className="text-[11px] text-gray-700 ml-auto tabular-nums">
+                    <span className="text-xs text-gray-700 ml-auto tabular-nums">
                         {toolCount} call{toolCount !== 1 ? 's' : ''}
                     </span>
                 )}

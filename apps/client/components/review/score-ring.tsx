@@ -1,6 +1,10 @@
 // Animated SVG ring showing the overall code quality score (1-10).
 export function ScoreRing({ score }: { score: number }) {
-    const color = score >= 8 ? '#22c55e' : score >= 5 ? '#eab308' : '#ef4444'
+    const color = score >= 8
+        ? 'var(--color-score-high)'
+        : score >= 5
+            ? 'var(--color-score-mid)'
+            : 'var(--color-score-low)'
     const r = 28, circ = 2 * Math.PI * r
     const dash = (score / 10) * circ
 

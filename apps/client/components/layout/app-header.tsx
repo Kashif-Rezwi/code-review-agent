@@ -16,7 +16,7 @@ export function AppHeader() {
     const pathname = usePathname()
 
     return (
-        <header className="sticky top-0 z-50 border-b border-gray-800 bg-[#0d1117]/95 backdrop-blur-md">
+        <header className="sticky top-0 z-50 border-b border-gray-800 bg-app-bg/95 backdrop-blur-md">
             <div className="max-w-4xl mx-auto px-6 py-4 flex items-center justify-between">
                 <div className="flex items-center gap-2">
                     <Code2 className="w-5 h-5 text-blue-400" />

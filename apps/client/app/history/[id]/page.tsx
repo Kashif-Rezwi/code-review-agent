@@ -57,13 +57,13 @@ export default function ReviewDetailPage() {
     const hasTrace = traceEntries.length > 0 || clusterMap.size > 0 || taskItems.length > 0
 
     return (
-        <div className="h-screen flex flex-col bg-[#0d1117] text-gray-100">
+        <div className="h-screen flex flex-col bg-app-bg text-gray-100">
             <AppHeader />
 
             <div ref={scrollContainerRef} className="flex-1 overflow-y-auto scroll-hide flex flex-col">
                 {/* Top gradient fade */}
                 <div className="sticky top-0 z-10 pointer-events-none">
-                    <div className="h-8 bg-gradient-to-b from-[#0d1117] to-transparent" />
+                    <div className="h-8 bg-gradient-to-b from-app-bg to-transparent" />
                 </div>
 
                 {/* pb-24 ensures content is never obscured by the fixed input overlay */}

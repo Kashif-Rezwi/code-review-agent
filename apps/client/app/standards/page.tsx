@@ -7,11 +7,11 @@ import {
     Trash2,
     FileText,
     Loader2,
-    AlertTriangle,
-    CheckCircle2,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { AppHeader } from '@/components/layout/app-header'
+import { PageHeader } from '@/components/layout/page-header'
+import { StatusMessage } from '@/components/ui/status-message'
 import { useStandardsDocuments } from '@/lib/use-standards-documents'
 
 export default function StandardsPage() {
@@ -60,20 +60,15 @@ export default function StandardsPage() {
         })
 
     return (
-        <div className="min-h-screen bg-[#0d1117] text-gray-100">
+        <div className="min-h-screen bg-app-bg text-gray-100">
             <AppHeader />
 
             <main className="max-w-4xl mx-auto p-6 space-y-6">
-                <div>
-                    <h1 className="text-2xl font-bold text-white flex items-center gap-2">
-                        <BookOpen className="w-6 h-6 text-blue-400" />
-                        Coding Standards
-                    </h1>
-                    <p className="text-gray-400 text-sm mt-1">
-                        Upload your team's style guides or conventions documents. Reviews will be
-                        automatically checked against these standards.
-                    </p>
-                </div>
+                <PageHeader
+                    icon={BookOpen}
+                    title="Coding Standards"
+                    description="Upload your team's style guides or conventions documents. Reviews will be automatically checked against these standards."
+                />
 
                 {/* Upload zone */}
                 <div
@@ -103,7 +98,7 @@ export default function StandardsPage() {
                         </div>
                     ) : (
                         <div className="flex flex-col items-center gap-3">
-                            <div className="w-12 h-12 rounded-xl bg-gray-900 border border-gray-800 flex items-center justify-center">
+                            <div className="w-12 h-12 rounded-lg bg-gray-900 border border-gray-800 flex items-center justify-center">
                                 <Upload className="w-5 h-5 text-gray-500" />
                             </div>
                             <div>
@@ -120,18 +115,8 @@ export default function StandardsPage() {
                 </div>
 
                 {/* Status messages */}
-                {uploadError && (
-                    <div className="flex items-center gap-2 text-sm text-red-300 bg-red-950/40 border border-red-800 rounded-lg px-4 py-3">
-                        <AlertTriangle className="w-4 h-4 shrink-0" />
-                        {uploadError}
-                    </div>
-                )}
-                {uploadSuccess && (
-                    <div className="flex items-center gap-2 text-sm text-green-300 bg-green-950/40 border border-green-800 rounded-lg px-4 py-3">
-                        <CheckCircle2 className="w-4 h-4 shrink-0" />
-                        {uploadSuccess}
-                    </div>
-                )}
+                {uploadError && <StatusMessage variant="error" message={uploadError} />}
+                {uploadSuccess && <StatusMessage variant="success" message={uploadSuccess} />}
 
                 {/* Document list */}
                 <div className="space-y-3">

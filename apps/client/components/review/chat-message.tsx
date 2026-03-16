@@ -2,6 +2,7 @@
 
 import { Copy, Check } from 'lucide-react'
 import { useCopyToClipboard } from '@/lib/hooks'
+import { Button } from '@/components/ui/button'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -72,17 +73,19 @@ export function CodeBlock({ lang, content }: { lang: string; content: string }) 
     const { copied, copy } = useCopyToClipboard()
     return (
         <div className="rounded-lg overflow-hidden border border-gray-800 my-2">
-            <div className="flex items-center justify-between px-3 py-1.5 bg-[#0d1117] border-b border-gray-800">
+            <div className="flex items-center justify-between px-3 py-1.5 bg-app-bg border-b border-gray-800">
                 <span className="text-xs text-gray-600 font-mono">{lang}</span>
-                <button
+                <Button
+                    variant="ghost-icon"
+                    size="sm"
                     onClick={() => copy(content)}
-                    className="flex items-center gap-1 text-xs text-gray-600 hover:text-gray-300 transition-colors"
+                    className="gap-1 text-xs"
                 >
                     {copied ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
                     {copied ? 'Copied' : 'Copy'}
-                </button>
+                </Button>
             </div>
-            <pre className="bg-[#0d1117] px-4 py-3 overflow-x-auto text-xs font-mono text-gray-400 leading-relaxed">
+            <pre className="bg-app-bg px-4 py-3 overflow-x-auto text-xs font-mono text-gray-400 leading-relaxed">
                 <code>{content}</code>
             </pre>
         </div>

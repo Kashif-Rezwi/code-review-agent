@@ -64,7 +64,7 @@ export function ThinkingGroup({ entries }: { entries: ThinkingEntry[] }) {
                 <MessageSquareText className="h-3.5 w-3.5 text-blue-500/60 shrink-0 mt-0.5" />
                 <div className="flex-1 min-w-0 pr-4">
                     <div className={cn(
-                        "text-[12.5px] text-gray-300 leading-relaxed font-sans",
+                        "text-sm text-gray-300 leading-relaxed font-sans",
                         !expanded && "line-clamp-4"
                     )}>
                         <ReactMarkdown components={MARKDOWN_COMPONENTS}>
@@ -75,7 +75,7 @@ export function ThinkingGroup({ entries }: { entries: ThinkingEntry[] }) {
                     {hasMore && (
                         <button
                             onClick={() => setExpanded(p => !p)}
-                            className="mt-1.5 text-[11px] font-medium text-blue-500/70 hover:text-blue-400 transition-colors flex items-center gap-1"
+                            className="mt-1.5 text-xs font-medium text-blue-500/70 hover:text-blue-400 transition-colors flex items-center gap-1 rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500/50"
                         >
                             {expanded ? (
                                 <>Show less <ChevronDown className="h-3 w-3 rotate-180" /></>
@@ -121,7 +121,7 @@ export function ToolStep({ entry }: { entry: Extract<TraceEntry, { kind: 'tool' 
                     : entry.detail
                         ? <button
                               onClick={() => setExpanded(p => !p)}
-                              className="shrink-0 text-gray-700 hover:text-gray-400 transition-colors"
+                              className="shrink-0 text-gray-700 hover:text-gray-400 transition-colors rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500/50"
                           >
                               {expanded
                                   ? <ChevronDown className="h-3 w-3" />
@@ -131,7 +131,7 @@ export function ToolStep({ entry }: { entry: Extract<TraceEntry, { kind: 'tool' 
                         : <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0" />
                 }
                 <span className={cn(
-                    'text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded border',
+                    'text-xs font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded border',
                     badge.color,
                 )}>
                     {badge.label}
@@ -143,20 +143,20 @@ export function ToolStep({ entry }: { entry: Extract<TraceEntry, { kind: 'tool' 
                     {entry.label}
                 </span>
                 {entry.durationMs != null && (
-                    <span className="text-[11px] text-gray-600 tabular-nums shrink-0">
+                    <span className="text-xs text-gray-600 tabular-nums shrink-0">
                         {formatDuration(entry.durationMs)}
                     </span>
                 )}
             </div>
             {entry.detail && expanded && (
                 <div className="mt-1 ml-[52px]">
-                    <p className="text-[11px] font-mono text-gray-600 break-all leading-relaxed whitespace-pre-wrap">
+                    <p className="text-xs font-mono text-gray-600 break-all leading-relaxed whitespace-pre-wrap">
                         {previewDetail}
                     </p>
                     {isLongDetail && (
                         <button
                             onClick={() => setDetailExpanded(p => !p)}
-                            className="mt-0.5 text-[10px] text-gray-600 hover:text-gray-400 transition-colors"
+                            className="mt-0.5 text-xs text-gray-600 hover:text-gray-400 transition-colors rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500/50"
                         >
                             {detailExpanded ? 'Show less ↑' : 'Show more ↓'}
                         </button>
@@ -186,7 +186,7 @@ export function LinterGroup({ entries }: { entries: ToolEntry[] }) {
                     ? <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0" />
                     : <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-400 shrink-0" />
                 }
-                <span className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded border text-yellow-400 bg-yellow-400/10 border-yellow-400/20 flex items-center gap-1">
+                <span className="text-xs font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded border text-yellow-400 bg-yellow-400/10 border-yellow-400/20 flex items-center gap-1">
                     <Zap className="h-2.5 w-2.5" />
                     ESLINT
                 </span>
@@ -203,17 +203,17 @@ export function LinterGroup({ entries }: { entries: ToolEntry[] }) {
                 {entries.map(entry => (
                     <div key={entry.id} className="flex items-center gap-2">
                         {entry.status === 'done'
-                            ? <CheckCircle2 className="h-3 w-3 text-green-600 shrink-0" />
+                            ? <CheckCircle2 className="h-3 w-3 text-green-500 shrink-0" />
                             : <Loader2 className="h-3 w-3 animate-spin text-blue-400 shrink-0" />
                         }
                         <span className={cn(
-                            'text-[11px] font-mono flex-1 min-w-0 truncate',
+                            'text-xs font-mono flex-1 min-w-0 truncate',
                             entry.status === 'done' ? 'text-gray-500' : 'text-gray-300',
                         )}>
                             {entry.label}
                         </span>
                         {entry.durationMs != null && (
-                            <span className="text-[11px] text-gray-600 tabular-nums shrink-0">
+                            <span className="text-xs text-gray-600 tabular-nums shrink-0">
                                 {formatDuration(entry.durationMs)}
                             </span>
                         )}

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, BrainCircuit, Clock, Code2, GitPullRequest, Loader2 } from 'lucide-react'
 import { AppHeader } from '@/components/layout/app-header'
+import { PageHeader } from '@/components/layout/page-header'
 import { ErrorBanner } from '@/components/ui/error-banner'
 import { CodeEditor } from '@/components/review/code-editor'
 import { ReviewPanel } from '@/components/review/review-panel'
@@ -72,17 +73,15 @@ export default function ReviewPage() {
     }, [messages, isSending])
 
     return (
-        <div className="min-h-screen bg-[#0d1117] text-gray-100">
+        <div className="min-h-screen bg-app-bg text-gray-100">
             <AppHeader />
 
             {/* pb-24 ensures content is never obscured by the fixed input overlay */}
             <main className="max-w-4xl mx-auto p-6 pb-24 space-y-6">
-                <div>
-                    <h1 className="text-2xl font-bold text-white">Review your code</h1>
-                    <p className="text-gray-400 text-sm mt-1">
-                        Paste code directly or provide a GitHub PR URL.
-                    </p>
-                </div>
+                <PageHeader
+                    title="Review your code"
+                    description="Paste code directly or provide a GitHub PR URL."
+                />
 
                 {/* Mode tabs */}
                 <div className="flex gap-1 bg-gray-900 border border-gray-800 rounded-lg p-1 w-fit">
@@ -135,7 +134,7 @@ export default function ReviewPage() {
                         <button
                             onClick={handleReview}
                             disabled={!canSubmit}
-                            className="group flex items-center gap-2.5 px-5 py-2.5 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/20 hover:border-blue-400/40 text-sm cursor-pointer transition-all duration-300 shadow-[0_0_15px_rgba(59,130,246,0.1)] hover:shadow-[0_0_25px_rgba(59,130,246,0.2)] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-blue-500/10 disabled:hover:border-blue-500/20 disabled:hover:shadow-[0_0_15px_rgba(59,130,246,0.1)]"
+                            className="group flex items-center gap-2.5 px-5 py-2.5 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/20 hover:border-blue-400/40 text-sm cursor-pointer transition-all duration-200 shadow-[0_0_15px_rgba(59,130,246,0.1)] hover:shadow-[0_0_25px_rgba(59,130,246,0.2)] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-blue-500/10 disabled:hover:border-blue-500/20 disabled:hover:shadow-[0_0_15px_rgba(59,130,246,0.1)]"
                         >
                             <BrainCircuit className="h-4 w-4 shrink-0 text-blue-400 transition-colors" />
                             <span className="font-medium text-blue-100 transition-colors">
@@ -143,7 +142,7 @@ export default function ReviewPage() {
                             </span>
                         </button>
                     ) : (
-                        <div className="flex items-center gap-2.5 px-5 py-2.5 border border-blue-500/20 bg-blue-500/5 rounded-lg text-sm shadow-[0_0_15px_rgba(59,130,246,0.05)] transition-all duration-300">
+                        <div className="flex items-center gap-2.5 px-5 py-2.5 border border-blue-500/20 bg-blue-500/5 rounded-lg text-sm shadow-[0_0_15px_rgba(59,130,246,0.05)] transition-all duration-200">
                             <BrainCircuit className={cn(
                                 'h-4 w-4 shrink-0 transition-colors',
                                 isStreaming ? 'text-blue-400/80 animate-pulse' :
@@ -177,7 +176,7 @@ export default function ReviewPage() {
                     {(code || prUrl || review) && !isStreaming && (
                         <button
                             onClick={handleClear}
-                            className="px-4 py-2.5 text-sm font-medium text-gray-400 hover:text-gray-200 hover:bg-gray-800/60 rounded-lg transition-all duration-300 cursor-pointer"
+                            className="px-4 py-2.5 text-sm font-medium text-gray-400 hover:text-gray-200 hover:bg-gray-800/60 rounded-lg transition-all duration-200 cursor-pointer"
                         >
                             Clear
                         </button>

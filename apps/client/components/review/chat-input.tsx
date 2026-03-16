@@ -52,10 +52,10 @@ export function ChatInput({ value, onChange, onSubmit, disabled, scrollContainer
 
     return (
         <div className="fixed bottom-0 left-0 right-0 z-50 flex justify-center px-6 pb-5 pt-8
-                        bg-gradient-to-t from-[#0d1117] via-[#0d1117]/75 to-transparent
+                        bg-gradient-to-t from-app-bg via-app-bg/75 to-transparent
                         pointer-events-none
                         animate-in fade-in slide-in-from-bottom-2 duration-200">
-            <div className="w-full max-w-[860px] pointer-events-auto">
+            <div className="w-full max-w-4xl pointer-events-auto">
                 <InputShell
                     value={value}
                     onChange={onChange}
@@ -107,7 +107,7 @@ export function InputShell({ value, onChange, onSubmit, onFocus, onBlur, onKeyDo
                     onFocus={onFocus}
                     onBlur={onBlur}
                     onKeyDown={onKeyDown}
-                    placeholder="Reply to better DEV..."
+                    placeholder="Ask a follow-up question…"
                     disabled={disabled}
                     className="flex-1 resize-none bg-transparent text-sm text-gray-100
                                placeholder-gray-500 leading-[1.5] focus:outline-none
@@ -118,10 +118,10 @@ export function InputShell({ value, onChange, onSubmit, onFocus, onBlur, onKeyDo
                 <button
                     type="submit"
                     disabled={disabled || !value.trim()}
-                    className="shrink-0 w-[30px] h-[30px] rounded-[10px] flex items-center justify-center
+                    className="shrink-0 w-[30px] h-[30px] rounded-lg flex items-center justify-center
                                bg-blue-500/20 hover:bg-blue-500/30 border border-blue-500/30 hover:border-blue-400/50
                                shadow-[0_0_10px_rgba(59,130,246,0.15)] hover:shadow-[0_0_15px_rgba(59,130,246,0.25)]
-                               active:scale-95 disabled:opacity-25 disabled:cursor-not-allowed transition-all duration-150"
+                               active:scale-95 disabled:opacity-25 disabled:cursor-not-allowed transition-all duration-200"
                 >
                     <ArrowUp className="w-[15px] h-[15px] text-white" strokeWidth={2.5} />
                 </button>
