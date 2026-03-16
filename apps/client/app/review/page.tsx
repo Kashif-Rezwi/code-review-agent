@@ -89,8 +89,11 @@ export default function ReviewPage() {
                         <button
                             key={m}
                             onClick={() => handleModeSwitch(m)}
-                            className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${mode === m ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'
-                                }`}
+                            className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 ${
+                                mode === m
+                                    ? 'bg-blue-500/15 text-blue-100 border border-blue-500/25 shadow-[0_0_10px_rgba(59,130,246,0.12)]'
+                                    : 'text-gray-500 hover:text-gray-300 border border-transparent'
+                            }`}
                         >
                             {m === 'code'
                                 ? <><Code2 className="w-4 h-4" /> Paste Code</>

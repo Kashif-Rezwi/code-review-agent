@@ -67,7 +67,7 @@ export default function HistoryPage() {
 
                 {/* Issue trends */}
                 {stats && stats.totalReviews > 0 && (
-                    <div className="rounded-xl border border-gray-700 bg-gray-900/60 p-4 space-y-3">
+                    <div className="rounded-lg border border-gray-800 bg-gray-900/40 p-4 space-y-3">
                         <div className="flex items-center justify-between">
                             <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
                                 Issue Trends
@@ -86,7 +86,7 @@ export default function HistoryPage() {
                                     return (
                                         <div
                                             key={type}
-                                            className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-gray-800 border border-gray-700 text-xs text-gray-300"
+                                            className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-gray-900/60 border border-gray-800 text-xs text-gray-400"
                                         >
                                             {Icon && <Icon className={`w-3.5 h-3.5 ${cfg.color}`} />}
                                             <span className="capitalize">{type}</span>
@@ -103,11 +103,11 @@ export default function HistoryPage() {
                 {isLoading ? (
                     <div className="space-y-3">
                         {[1, 2, 3].map((n) => (
-                            <div key={n} className="h-20 rounded-xl bg-gray-800/40 animate-pulse" />
+                            <div key={n} className="h-20 rounded-lg bg-gray-800/40 animate-pulse" />
                         ))}
                     </div>
                 ) : reviews.length === 0 ? (
-                    <div className="rounded-xl border border-gray-800 bg-gray-900/40 p-10 text-center">
+                    <div className="rounded-lg border border-gray-800 bg-gray-900/30 p-10 text-center">
                         <History className="w-8 h-8 text-gray-700 mx-auto mb-3" />
                         <p className="text-gray-500 text-sm">No reviews yet.</p>
                         <p className="text-gray-600 text-xs mt-1">
@@ -126,8 +126,8 @@ export default function HistoryPage() {
                             <Link
                                 key={review.id}
                                 href={`/history/${review.id}`}
-                                className="block rounded-xl border border-gray-700 bg-gray-900/60 p-4
-                                           hover:border-gray-600 hover:bg-gray-900/80 transition-colors"
+                                className="block rounded-lg border border-gray-800 bg-gray-900/40 p-4
+                                           hover:border-gray-700 hover:bg-gray-900/60 transition-colors"
                             >
                                 <div className="flex items-start justify-between gap-4">
                                     <div className="flex items-center gap-2 shrink-0">
@@ -135,8 +135,8 @@ export default function HistoryPage() {
                                         <span
                                             className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border ${
                                                 review.type === 'PR'
-                                                    ? 'text-purple-300 bg-purple-900/40 border-purple-700/60'
-                                                    : 'text-blue-300 bg-blue-900/40 border-blue-700/60'
+                                                    ? 'text-purple-400/80 bg-purple-950/30 border-purple-800/40'
+                                                    : 'text-blue-400/80 bg-blue-950/30 border-blue-800/40'
                                             }`}
                                         >
                                             {review.type === 'PR'

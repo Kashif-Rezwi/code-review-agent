@@ -44,7 +44,7 @@ export function ReviewInputDisplay({ type, input }: ReviewInputDisplayProps) {
     /* ── PR URL card ─────────────────────────────────────────────── */
     if (type === 'PR') {
         return (
-            <div className="rounded-xl border border-gray-700 bg-gray-900/60 p-4">
+            <div className="rounded-lg border border-blue-500/20 bg-blue-500/5 p-4 shadow-[0_0_20px_rgba(59,130,246,0.06)]">
                 <div className="flex items-center gap-2 mb-3">
                     <GitPullRequest className="w-4 h-4 text-blue-400" />
                     <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
@@ -87,7 +87,7 @@ export function ReviewInputDisplay({ type, input }: ReviewInputDisplayProps) {
     const editorHeight = Math.min(Math.max(lineCount * 19 + 32, 120), 400)
 
     return (
-        <div className="rounded-xl border border-gray-800 overflow-hidden" style={{ background: PAGE_BG }}>
+        <div className="rounded-lg border border-gray-800 overflow-hidden" style={{ background: PAGE_BG }}>
             {/* Toolbar */}
             <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-800/70">
                 <div className="flex items-center gap-2">

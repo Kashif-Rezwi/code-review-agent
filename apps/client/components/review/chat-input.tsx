@@ -119,8 +119,9 @@ export function InputShell({ value, onChange, onSubmit, onFocus, onBlur, onKeyDo
                     type="submit"
                     disabled={disabled || !value.trim()}
                     className="shrink-0 w-[30px] h-[30px] rounded-[10px] flex items-center justify-center
-                               bg-blue-600 hover:bg-blue-500 active:scale-95
-                               disabled:opacity-25 disabled:cursor-not-allowed transition-all duration-150"
+                               bg-blue-500/20 hover:bg-blue-500/30 border border-blue-500/30 hover:border-blue-400/50
+                               shadow-[0_0_10px_rgba(59,130,246,0.15)] hover:shadow-[0_0_15px_rgba(59,130,246,0.25)]
+                               active:scale-95 disabled:opacity-25 disabled:cursor-not-allowed transition-all duration-150"
                 >
                     <ArrowUp className="w-[15px] h-[15px] text-white" strokeWidth={2.5} />
                 </button>

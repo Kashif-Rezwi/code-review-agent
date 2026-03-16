@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useCallback } from 'react'
 import { apiFetch } from '@/lib/api'
 import type { ChatMessage } from '@/types/review.types'
 
@@ -25,7 +25,7 @@ export function useChatMessages(reviewId: string | null): UseChatMessages {
     const [input,    setInput]    = useState('')
     const [isSending, setIsSending] = useState(false)
 
-    const submit = async () => {
+    const submit = useCallback(async () => {
         const message = input.trim()
         if (!message || isSending || !reviewId) return
 
@@ -48,7 +48,7 @@ export function useChatMessages(reviewId: string | null): UseChatMessages {
         } finally {
             setIsSending(false)
         }
-    }
+    }, [reviewId, input, isSending])
 
     return { messages, setMessages, input, setInput, isSending, submit }
 }

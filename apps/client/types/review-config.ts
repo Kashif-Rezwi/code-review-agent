@@ -19,7 +19,7 @@ export const TYPE_CONFIG = {
 }
 
 export const SEVERITY_CONFIG = {
-    critical: { label: 'Critical', badge: 'bg-red-900/60 text-red-300 border-red-700/60' },
-    warning:  { label: 'Warning',  badge: 'bg-yellow-900/60 text-yellow-300 border-yellow-700/60' },
-    info:     { label: 'Info',     badge: 'bg-gray-800 text-gray-400 border-gray-700' },
+    critical: { label: 'Critical', badge: 'bg-red-950/40 text-red-400 border-red-800/50' },
+    warning:  { label: 'Warning',  badge: 'bg-yellow-950/40 text-yellow-400/80 border-yellow-800/50' },
+    info:     { label: 'Info',     badge: 'bg-gray-900/60 text-gray-500 border-gray-800' },
 }

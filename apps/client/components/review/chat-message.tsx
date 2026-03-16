@@ -42,7 +42,7 @@ export function InlineText({ text }: { text: string }) {
         <>
             {parts.map((part, i) =>
                 i % 2 === 1 ? (
-                    <code key={i} className="bg-gray-700 rounded px-1 py-0.5 text-xs font-mono text-gray-200">
+                    <code key={i} className="bg-gray-900 border border-gray-800 rounded px-1 py-0.5 text-xs font-mono text-gray-300">
                         {part}
                     </code>
                 ) : (
@@ -71,9 +71,9 @@ export function TextSegment({ content }: { content: string }) {
 export function CodeBlock({ lang, content }: { lang: string; content: string }) {
     const { copied, copy } = useCopyToClipboard()
     return (
-        <div className="rounded-lg overflow-hidden border border-gray-800/70 my-2">
-            <div className="flex items-center justify-between px-3 py-1.5 bg-[#0d1117] border-b border-gray-800/60">
-                <span className="text-xs text-gray-500 font-mono">{lang}</span>
+        <div className="rounded-lg overflow-hidden border border-gray-800 my-2">
+            <div className="flex items-center justify-between px-3 py-1.5 bg-[#0d1117] border-b border-gray-800">
+                <span className="text-xs text-gray-600 font-mono">{lang}</span>
                 <button
                     onClick={() => copy(content)}
                     className="flex items-center gap-1 text-xs text-gray-600 hover:text-gray-300 transition-colors"
@@ -82,7 +82,7 @@ export function CodeBlock({ lang, content }: { lang: string; content: string }) 
                     {copied ? 'Copied' : 'Copy'}
                 </button>
             </div>
-            <pre className="bg-[#0d1117] px-4 py-3 overflow-x-auto text-xs font-mono text-gray-300 leading-relaxed">
+            <pre className="bg-[#0d1117] px-4 py-3 overflow-x-auto text-xs font-mono text-gray-400 leading-relaxed">
                 <code>{content}</code>
             </pre>
         </div>
@@ -93,7 +93,7 @@ export function CodeBlock({ lang, content }: { lang: string; content: string }) 
 export function AssistantMessage({ content }: { content: string }) {
     const segments = parseSegments(content)
     return (
-        <div className="text-sm text-gray-200 space-y-1">
+        <div className="text-sm text-gray-300 space-y-1">
             {segments.map((seg, i) =>
                 seg.type === 'code' ? (
                     <CodeBlock key={i} lang={seg.lang} content={seg.content} />
@@ -109,7 +109,8 @@ export function AssistantMessage({ content }: { content: string }) {
 export function UserBubble({ content }: { content: string }) {
     return (
         <div className="flex justify-end">
-            <div className="max-w-[75%] rounded-lg px-3 py-2 text-sm leading-relaxed bg-blue-600 text-white">
+            <div className="max-w-[75%] rounded-lg px-3 py-2 text-sm leading-relaxed
+                            bg-blue-500/15 border border-blue-500/20 text-blue-100">
                 {content}
             </div>
         </div>
@@ -120,9 +121,9 @@ export function UserBubble({ content }: { content: string }) {
 export function LoadingIndicator() {
     return (
         <div className="flex items-center gap-1.5 py-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-gray-400 animate-bounce [animation-delay:0ms]" />
-            <span className="w-1.5 h-1.5 rounded-full bg-gray-400 animate-bounce [animation-delay:150ms]" />
-            <span className="w-1.5 h-1.5 rounded-full bg-gray-400 animate-bounce [animation-delay:300ms]" />
+            <span className="w-1.5 h-1.5 rounded-full bg-gray-600 animate-bounce [animation-delay:0ms]" />
+            <span className="w-1.5 h-1.5 rounded-full bg-gray-600 animate-bounce [animation-delay:150ms]" />
+            <span className="w-1.5 h-1.5 rounded-full bg-gray-600 animate-bounce [animation-delay:300ms]" />
         </div>
     )
 }

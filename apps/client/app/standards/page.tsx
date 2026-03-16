@@ -1,9 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import Link from 'next/link'
 import {
-    Code2,
     BookOpen,
     Upload,
     Trash2,
@@ -11,9 +9,9 @@ import {
     Loader2,
     AlertTriangle,
     CheckCircle2,
-    ArrowLeft,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { AppHeader } from '@/components/layout/app-header'
 
 interface Document {
     id: string
@@ -132,19 +130,7 @@ export default function StandardsPage() {
 
     return (
         <div className="min-h-screen bg-[#0d1117] text-gray-100">
-            <header className="border-b border-gray-800 px-6 py-4 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                    <Code2 className="w-5 h-5 text-blue-400" />
-                    <span className="font-semibold text-white">Code Review Agent</span>
-                </div>
-                <Link
-                    href="/review"
-                    className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-200 transition-colors"
-                >
-                    <ArrowLeft className="w-3.5 h-3.5" />
-                    Back to Review
-                </Link>
-            </header>
+            <AppHeader />
 
             <main className="max-w-3xl mx-auto p-6 space-y-8">
                 <div>
@@ -160,10 +146,10 @@ export default function StandardsPage() {
 
                 {/* Upload zone */}
                 <div
-                    className={`relative border-2 border-dashed rounded-xl p-8 text-center transition-colors cursor-pointer
+                    className={`relative border-2 border-dashed rounded-lg p-8 text-center transition-colors cursor-pointer
                         ${isDragging
-                            ? 'border-blue-500 bg-blue-950/20'
-                            : 'border-gray-700 bg-gray-900/40 hover:border-gray-600 hover:bg-gray-900/60'
+                            ? 'border-blue-500/60 bg-blue-950/10'
+                            : 'border-gray-800 bg-gray-900/30 hover:border-gray-700 hover:bg-gray-900/50'
                         }`}
                     onClick={() => !isUploading && fileInputRef.current?.click()}
                     onDrop={handleDrop}
@@ -186,8 +172,8 @@ export default function StandardsPage() {
                         </div>
                     ) : (
                         <div className="flex flex-col items-center gap-3">
-                            <div className="w-12 h-12 rounded-full bg-gray-800 flex items-center justify-center">
-                                <Upload className="w-5 h-5 text-gray-400" />
+                            <div className="w-12 h-12 rounded-xl bg-gray-900 border border-gray-800 flex items-center justify-center">
+                                <Upload className="w-5 h-5 text-gray-500" />
                             </div>
                             <div>
                                 <p className="text-sm text-gray-300 font-medium">
@@ -227,12 +213,12 @@ export default function StandardsPage() {
                             {[1, 2].map((i) => (
                                 <div
                                     key={i}
-                                    className="h-16 rounded-xl bg-gray-900/60 border border-gray-800 animate-pulse"
+                                    className="h-16 rounded-lg bg-gray-900/60 border border-gray-800 animate-pulse"
                                 />
                             ))}
                         </div>
                     ) : documents.length === 0 ? (
-                        <div className="rounded-xl border border-gray-800 bg-gray-900/40 p-8 text-center">
+                        <div className="rounded-lg border border-gray-800 bg-gray-900/40 p-8 text-center">
                             <FileText className="w-8 h-8 text-gray-700 mx-auto mb-3" />
                             <p className="text-sm text-gray-500">
                                 No standards uploaded yet.
@@ -246,7 +232,7 @@ export default function StandardsPage() {
                             {documents.map((doc) => (
                                 <li
                                     key={doc.id}
-                                    className="flex items-center gap-4 rounded-xl border border-gray-800 bg-gray-900/60 px-4 py-3"
+                                    className="flex items-center gap-4 rounded-lg border border-gray-800 bg-gray-900/60 px-4 py-3"
                                 >
                                     <FileText className="w-4 h-4 text-blue-400 shrink-0" />
                                     <div className="flex-1 min-w-0">

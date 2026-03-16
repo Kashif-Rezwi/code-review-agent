@@ -182,7 +182,7 @@ export class ReviewService {
                 return
             }
 
-            // ── Phase 3: Skip synthesis for single-cluster PRs ────────────────
+            // ── Phase 4a: Single-cluster shortcut — skip synthesis ────────────
             // Small PRs (≤3 files) produce one cluster — its review is the final output.
             if (partialReviews.length === 1) {
                 const only = partialReviews[0].review
@@ -198,7 +198,7 @@ export class ReviewService {
                 return
             }
 
-            // ── Phase 3: Synthesis agent ──────────────────────────────────────
+            // ── Phase 4b: Synthesis agent ─────────────────────────────────────
             // Final LLM call that sees all partial reviews and produces the unified
             // output — including cross-cluster issue detection.
             const synthesisMessage = buildSynthesisUserMessage(prUrl, partialReviews)
@@ -251,7 +251,7 @@ export class ReviewService {
         //   PR + investigation (×3)    → listPRFiles(1) + fetchFileContent(1-3) + JSON(1) = 3-5
         //   PR fallback + investigate  → listPRFiles(1) + fetchGithubPR(1) + fetchFileContent(1-3) + JSON(1) = 4-6
         //   worst-case autonomous max  → 8 tool calls + forced JSON(1) = 9  (+1 buffer = 10)
-        const MAX_STEPS = AGENT_MAX_STEPS.CODE
+        const MAX_STEPS = AGENT_MAX_STEPS[reviewType]
 
         try {
             const result = await generateText({
