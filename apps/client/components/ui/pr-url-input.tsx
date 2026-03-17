@@ -19,9 +19,10 @@ export function PrUrlInput({ value, onChange, onSubmit, disabled }: PrUrlInputPr
                 onChange={e => onChange(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && onSubmit()}
                 placeholder="https://github.com/owner/repo/pull/123"
-                className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-3
+                className="w-full bg-gray-900/60 border border-gray-800 rounded-lg px-4 py-3
                            text-sm text-gray-100 placeholder-gray-600
-                           focus:outline-none focus:border-blue-500 transition-colors
+                           focus:outline-none focus:border-blue-500/50 focus:shadow-[0_0_0_1px_rgba(59,130,246,0.15),0_0_15px_rgba(59,130,246,0.08)]
+                           transition-all duration-200
                            disabled:opacity-50 disabled:cursor-not-allowed"
             />
             <p className="text-xs text-gray-600">

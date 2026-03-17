@@ -1,89 +1,33 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
-import Link from 'next/link'
+import { useCallback, useRef, useState } from 'react'
 import {
-    Code2,
     BookOpen,
     Upload,
     Trash2,
     FileText,
     Loader2,
-    AlertTriangle,
-    CheckCircle2,
-    ArrowLeft,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-
-interface Document {
-    id: string
-    name: string
-    createdAt: string
-    _count: { chunks: number }
-}
+import { AppHeader } from '@/components/layout/app-header'
+import { PageHeader } from '@/components/layout/page-header'
+import { StatusMessage } from '@/components/ui/status-message'
+import { useStandardsDocuments } from '@/lib/use-standards-documents'
 
 export default function StandardsPage() {
-    const [documents, setDocuments] = useState<Document[]>([])
-    const [isLoadingDocs, setIsLoadingDocs] = useState(true)
-    const [isUploading, setIsUploading] = useState(false)
-    const [uploadError, setUploadError] = useState<string | null>(null)
-    const [uploadSuccess, setUploadSuccess] = useState<string | null>(null)
-    const [deletingId, setDeletingId] = useState<string | null>(null)
+    const {
+        documents,
+        isLoading,
+        isUploading,
+        deletingId,
+        uploadError,
+        uploadSuccess,
+        uploadFile,
+        deleteDocument,
+    } = useStandardsDocuments()
+
     const [isDragging, setIsDragging] = useState(false)
     const fileInputRef = useRef<HTMLInputElement>(null)
-
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL
-
-    const fetchDocuments = useCallback(async () => {
-        try {
-            const res = await fetch(`${apiUrl}/rag/documents`)
-            if (res.ok) setDocuments(await res.json())
-        } catch {
-            // silently ignore — list can be refetched on next interaction
-        } finally {
-            setIsLoadingDocs(false)
-        }
-    }, [apiUrl])
-
-    useEffect(() => {
-        fetchDocuments()
-    }, [fetchDocuments])
-
-    const uploadFile = useCallback(async (file: File) => {
-        const allowed = ['text/plain', 'application/pdf', 'text/markdown']
-        if (!allowed.includes(file.type)) {
-            setUploadError('Only .txt and .pdf files are supported.')
-            return
-        }
-        if (file.size > 5 * 1024 * 1024) {
-            setUploadError('File must be smaller than 5 MB.')
-            return
-        }
-
-        setIsUploading(true)
-        setUploadError(null)
-        setUploadSuccess(null)
-
-        const formData = new FormData()
-        formData.append('file', file)
-
-        try {
-            const res = await fetch(`${apiUrl}/rag/upload`, {
-                method: 'POST',
-                body: formData,
-            })
-            if (!res.ok) {
-                const msg = await res.text()
-                throw new Error(msg || 'Upload failed.')
-            }
-            setUploadSuccess(`"${file.name}" uploaded successfully.`)
-            await fetchDocuments()
-        } catch (err) {
-            setUploadError(err instanceof Error ? err.message : 'Upload failed.')
-        } finally {
-            setIsUploading(false)
-        }
-    }, [apiUrl, fetchDocuments])
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0]
@@ -108,21 +52,6 @@ export default function StandardsPage() {
     }
     const handleDragLeave = () => setIsDragging(false)
 
-    const handleDelete = async (id: string, name: string) => {
-        setDeletingId(id)
-        try {
-            const res = await fetch(`${apiUrl}/rag/documents/${id}`, { method: 'DELETE' })
-            if (res.ok) {
-                setDocuments((prev) => prev.filter((d) => d.id !== id))
-                if (uploadSuccess?.includes(name)) setUploadSuccess(null)
-            }
-        } catch {
-            // Network error — document stays in list, user can retry
-        } finally {
-            setDeletingId(null)
-        }
-    }
-
     const formatDate = (iso: string) =>
         new Date(iso).toLocaleDateString(undefined, {
             month: 'short',
@@ -131,39 +60,22 @@ export default function StandardsPage() {
         })
 
     return (
-        <div className="min-h-screen bg-[#0d1117] text-gray-100">
-            <header className="border-b border-gray-800 px-6 py-4 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                    <Code2 className="w-5 h-5 text-blue-400" />
-                    <span className="font-semibold text-white">Code Review Agent</span>
-                </div>
-                <Link
-                    href="/review"
-                    className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-200 transition-colors"
-                >
-                    <ArrowLeft className="w-3.5 h-3.5" />
-                    Back to Review
-                </Link>
-            </header>
+        <div className="min-h-screen bg-app-bg text-gray-100">
+            <AppHeader />
 
-            <main className="max-w-3xl mx-auto p-6 space-y-8">
-                <div>
-                    <h1 className="text-2xl font-bold text-white flex items-center gap-2">
-                        <BookOpen className="w-6 h-6 text-blue-400" />
-                        Coding Standards
-                    </h1>
-                    <p className="text-gray-400 text-sm mt-1">
-                        Upload your team's style guides or conventions documents. Reviews will be
-                        automatically checked against these standards.
-                    </p>
-                </div>
+            <main className="max-w-4xl mx-auto p-6 space-y-6">
+                <PageHeader
+                    icon={BookOpen}
+                    title="Coding Standards"
+                    description="Upload your team's style guides or conventions documents. Reviews will be automatically checked against these standards."
+                />
 
                 {/* Upload zone */}
                 <div
-                    className={`relative border-2 border-dashed rounded-xl p-8 text-center transition-colors cursor-pointer
+                    className={`relative border-2 border-dashed rounded-lg p-8 text-center transition-colors cursor-pointer
                         ${isDragging
-                            ? 'border-blue-500 bg-blue-950/20'
-                            : 'border-gray-700 bg-gray-900/40 hover:border-gray-600 hover:bg-gray-900/60'
+                            ? 'border-blue-500/60 bg-blue-950/10'
+                            : 'border-gray-800 bg-gray-900/30 hover:border-gray-700 hover:bg-gray-900/50'
                         }`}
                     onClick={() => !isUploading && fileInputRef.current?.click()}
                     onDrop={handleDrop}
@@ -186,8 +98,8 @@ export default function StandardsPage() {
                         </div>
                     ) : (
                         <div className="flex flex-col items-center gap-3">
-                            <div className="w-12 h-12 rounded-full bg-gray-800 flex items-center justify-center">
-                                <Upload className="w-5 h-5 text-gray-400" />
+                            <div className="w-12 h-12 rounded-lg bg-gray-900 border border-gray-800 flex items-center justify-center">
+                                <Upload className="w-5 h-5 text-gray-500" />
                             </div>
                             <div>
                                 <p className="text-sm text-gray-300 font-medium">
@@ -203,36 +115,36 @@ export default function StandardsPage() {
                 </div>
 
                 {/* Status messages */}
-                {uploadError && (
-                    <div className="flex items-center gap-2 text-sm text-red-300 bg-red-950/40 border border-red-800 rounded-lg px-4 py-3">
-                        <AlertTriangle className="w-4 h-4 shrink-0" />
-                        {uploadError}
-                    </div>
-                )}
-                {uploadSuccess && (
-                    <div className="flex items-center gap-2 text-sm text-green-300 bg-green-950/40 border border-green-800 rounded-lg px-4 py-3">
-                        <CheckCircle2 className="w-4 h-4 shrink-0" />
-                        {uploadSuccess}
-                    </div>
-                )}
+                {uploadError && <StatusMessage variant="error" message={uploadError} />}
+                {uploadSuccess && <StatusMessage variant="success" message={uploadSuccess} />}
 
                 {/* Document list */}
                 <div className="space-y-3">
                     <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                        Uploaded Standards ({documents.length})
+                        Uploaded Standards{!isLoading && ` (${documents.length})`}
                     </h2>
 
-                    {isLoadingDocs ? (
+                    {isLoading ? (
                         <div className="space-y-2">
-                            {[1, 2].map((i) => (
+                            {[1, 2, 3].map((i) => (
                                 <div
                                     key={i}
-                                    className="h-16 rounded-xl bg-gray-900/60 border border-gray-800 animate-pulse"
-                                />
+                                    className="flex items-center gap-4 rounded-lg border border-gray-800 bg-gray-900/60 px-4 py-3 animate-pulse"
+                                >
+                                    {/* File icon */}
+                                    <div className="w-4 h-4 rounded bg-gray-700 shrink-0" />
+                                    {/* Filename + meta */}
+                                    <div className="flex-1 space-y-1.5 min-w-0">
+                                        <div className="h-3.5 bg-gray-700 rounded w-44" />
+                                        <div className="h-3 bg-gray-800 rounded w-28" />
+                                    </div>
+                                    {/* Delete button */}
+                                    <div className="h-8 w-8 rounded-md bg-gray-800 shrink-0" />
+                                </div>
                             ))}
                         </div>
                     ) : documents.length === 0 ? (
-                        <div className="rounded-xl border border-gray-800 bg-gray-900/40 p-8 text-center">
+                        <div className="rounded-lg border border-gray-800 bg-gray-900/40 p-8 text-center">
                             <FileText className="w-8 h-8 text-gray-700 mx-auto mb-3" />
                             <p className="text-sm text-gray-500">
                                 No standards uploaded yet.
@@ -246,7 +158,7 @@ export default function StandardsPage() {
                             {documents.map((doc) => (
                                 <li
                                     key={doc.id}
-                                    className="flex items-center gap-4 rounded-xl border border-gray-800 bg-gray-900/60 px-4 py-3"
+                                    className="flex items-center gap-4 rounded-lg border border-gray-800 bg-gray-900/60 px-4 py-3"
                                 >
                                     <FileText className="w-4 h-4 text-blue-400 shrink-0" />
                                     <div className="flex-1 min-w-0">
@@ -263,7 +175,7 @@ export default function StandardsPage() {
                                         variant="ghost"
                                         size="sm"
                                         disabled={deletingId === doc.id}
-                                        onClick={() => handleDelete(doc.id, doc.name)}
+                                        onClick={() => deleteDocument(doc.id, doc.name)}
                                         className="text-gray-500 hover:text-red-400 hover:bg-red-950/30 h-8 w-8 p-0"
                                     >
                                         {deletingId === doc.id ? (

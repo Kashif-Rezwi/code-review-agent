@@ -41,7 +41,10 @@ export function toolStartLabel(toolName: string, args: Record<string, unknown>):
             const name = fp.split('/').pop() || fp
             return name ? `Investigating ${name}…` : 'Investigating file…'
         }
-        case 'runLinter': return 'Running linter…'
+        case 'runLinter': {
+            const name = (args.filename as string | undefined)?.split('/').pop()
+            return name ? `${name}…` : 'Analysing…'
+        }
         default: return `Calling ${toolName}…`
     }
 }
@@ -56,11 +59,7 @@ export function toolStartDetail(toolName: string, args: Record<string, unknown>)
         case 'fetchFileContent': {
             return (args.filePath as string | undefined) ?? undefined
         }
-        case 'runLinter': {
-            const lang = (args.language as string | undefined) ?? 'unknown'
-            const len = typeof args.code === 'string' ? args.code.length : 0
-            return `${lang} · ${len} chars`
-        }
+        case 'runLinter': return undefined
         default: return undefined
     }
 }
@@ -88,7 +87,19 @@ export function toolDoneLabel(
             }
             return name ? `Read ${name}` : 'File content fetched'
         }
-        case 'runLinter': return 'Linter complete'
+        case 'runLinter': {
+            const name = (args.filename as string | undefined)?.split('/').pop()
+            const lang = (args.language as string | undefined) ?? 'unknown'
+            const chars = typeof args.code === 'string' ? args.code.length : 0
+            const r = result as { errors?: unknown[]; warnings?: unknown[] } | null | undefined
+            const errs = r?.errors?.length ?? 0
+            const warns = r?.warnings?.length ?? 0
+            const outcome = errs === 0 && warns === 0
+                ? 'clean'
+                : `${errs + warns} issue${errs + warns !== 1 ? 's' : ''}`
+            const file = name ?? lang
+            return `${file} — ${outcome} · ${chars} chars`
+        }
         default: return `${toolName} complete`
     }
 }
@@ -140,14 +151,7 @@ export function toolDoneDetail(
                 ? `${filePath} · ${lines} lines · ${kb} KB`
                 : `${lines} lines · ${kb} KB`
         }
-        case 'runLinter': {
-            if (!result || typeof result !== 'object') return undefined
-            const r = result as { errors?: unknown[]; warnings?: unknown[] }
-            const errs = r.errors?.length ?? 0
-            const warns = r.warnings?.length ?? 0
-            if (errs === 0 && warns === 0) return 'No issues found'
-            return `${errs} error${errs !== 1 ? 's' : ''}, ${warns} warning${warns !== 1 ? 's' : ''}`
-        }
+        case 'runLinter': return undefined
         default: return undefined
     }
 }
