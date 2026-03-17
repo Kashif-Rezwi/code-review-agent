@@ -1,0 +1,46 @@
+/**
+ * Groups a flat list of TraceEntry items into logical RenderGroups for display.
+ *
+ * - Consecutive `thinking` entries are merged into a single ThinkingGroup so the
+ *   UI can collapse them behind one expandable row.
+ * - Consecutive `runLinter` tool calls are merged into a LinterGroup so multiple
+ *   lint passes appear as one atomic step instead of a wall of individual rows.
+ * - Every other tool call gets its own `tool` group entry.
+ */
+
+import type { TraceEntry } from '@/lib/use-review-stream'
+import type { ThinkingEntry } from '@/components/review/trace-entries'
+
+type ToolEntry = Extract<TraceEntry, { kind: 'tool' }>
+
+export type RenderGroup =
+    | { kind: 'thinking-group'; id: string; entries: ThinkingEntry[] }
+    | { kind: 'tool'; entry: ToolEntry }
+    | { kind: 'linter-group'; id: string; entries: ToolEntry[] }
+
+export function groupEntries(entries: TraceEntry[]): RenderGroup[] {
+    const groups: RenderGroup[] = []
+    for (const entry of entries) {
+        if (entry.kind === 'thinking') {
+            const last = groups.at(-1)
+            if (last?.kind === 'thinking-group') {
+                last.entries.push(entry as ThinkingEntry)
+            } else {
+                groups.push({ kind: 'thinking-group', id: `tg-${entry.id}`, entries: [entry as ThinkingEntry] })
+            }
+        } else if (entry.kind === 'tool') {
+            const toolEntry = entry as ToolEntry
+            if (toolEntry.tool === 'runLinter') {
+                const last = groups.at(-1)
+                if (last?.kind === 'linter-group') {
+                    last.entries.push(toolEntry)
+                } else {
+                    groups.push({ kind: 'linter-group', id: `lg-${entry.id}`, entries: [toolEntry] })
+                }
+            } else {
+                groups.push({ kind: 'tool', entry: toolEntry })
+            }
+        }
+    }
+    return groups
+}

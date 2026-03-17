@@ -17,7 +17,7 @@ const SKELETON_LINES: [number, [string, number][]][] = [
 
 export function EditorSkeleton() {
     return (
-        <div className="h-[300px] w-full bg-[#1e1e1e] overflow-hidden relative"
+        <div className="h-[300px] w-full bg-editor-bg overflow-hidden relative"
             style={{ fontFamily: '"JetBrains Mono","Fira Code",monospace', fontSize: 13, lineHeight: '19px' }}>
 
             {/* code rows — pt-3 matches Monaco's paddingTop:12 option */}

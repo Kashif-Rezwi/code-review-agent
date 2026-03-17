@@ -1,7 +1,8 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { createOpenAI } from '@ai-sdk/openai'
-import { generateText } from 'ai'
+import { streamText } from 'ai'
+import type { Response } from 'express'
 import { PrismaService } from '../prisma/prisma.service'
 
 type ReviewWithRelations = Awaited<ReturnType<HistoryService['getReview']>>
@@ -71,7 +72,8 @@ export class HistoryService {
         }
     }
 
-    async chat(id: string, userId = 'default', message: string) {
+    async chat(id: string, userId = 'default', message: string, res: Response) {
+        // Validate before touching res — NotFoundException is handled by NestJS before headers are set
         const review = await this.getReview(id, userId)
         const system = this.buildChatSystem(review)
 
@@ -80,23 +82,48 @@ export class HistoryService {
             content: c.content,
         }))
 
-        const { text } = await generateText({
+        // Set SSE headers
+        res.setHeader('Content-Type', 'text/event-stream')
+        res.setHeader('Cache-Control', 'no-cache')
+        res.setHeader('Connection', 'keep-alive')
+        res.setHeader('X-Accel-Buffering', 'no')
+        res.flushHeaders()
+
+        const result = streamText({
             model: this.openai('gpt-4o-mini'),
             system,
             messages: [...history, { role: 'user', content: message }],
             temperature: 0.3,
         })
 
-        await this.prisma.$transaction([
-            this.prisma.conversation.create({
-                data: { reviewId: id, role: 'user', content: message },
-            }),
-            this.prisma.conversation.create({
-                data: { reviewId: id, role: 'assistant', content: text },
-            }),
-        ])
+        let fullText = ''
+        try {
+            for await (const chunk of result.textStream) {
+                fullText += chunk
+                res.write(`data: ${JSON.stringify({ type: 'delta', text: chunk })}\n\n`)
+            }
+            res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`)
+        } catch {
+            res.write(`data: ${JSON.stringify({ type: 'error', message: 'Stream interrupted' })}\n\n`)
+        } finally {
+            res.end()
+        }
 
-        return { role: 'assistant' as const, content: text }
+        // Persist after stream completes — client is already disconnected, log failures
+        if (fullText) {
+            try {
+                await this.prisma.$transaction([
+                    this.prisma.conversation.create({
+                        data: { reviewId: id, role: 'user', content: message },
+                    }),
+                    this.prisma.conversation.create({
+                        data: { reviewId: id, role: 'assistant', content: fullText },
+                    }),
+                ])
+            } catch (err) {
+                this.logger.error(`Failed to persist chat for review ${id}`, err)
+            }
+        }
     }
 
     private buildChatSystem(review: ReviewWithRelations): string {

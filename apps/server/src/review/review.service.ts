@@ -15,9 +15,14 @@ import {
     createListPRFilesTool,
     createFetchFileContentTool,
     createRunLinterTool,
+    planClusters,
+    buildWorkerPrompt,
+    buildSynthesisUserMessage,
+    buildSynthesisSystemPrompt,
 } from '@cra/ai'
-import type { ReviewData, PRFile } from '@cra/ai'
+import type { ReviewData, PRFile, ClusterPlan } from '@cra/ai'
 import type { ReviewStreamEvent } from '@cra/types'
+import type { Prisma } from '@prisma/client'
 import { GithubService } from '../github/github.service'
 import { LinterService } from '../linter/linter.service'
 import { RagService } from '../rag/rag.service'
@@ -30,8 +35,12 @@ import {
 } from './review.formatter'
 import { ThinkingStream } from './review.thinking'
 
-/** Maximum agent loop steps per review type. CODE allows full investigation; PR streaming is pre-built. */
-const AGENT_MAX_STEPS = { CODE: 10, PR: 2 } as const
+/** Maximum agent loop steps per review type. */
+const AGENT_MAX_STEPS = { CODE: 10, PR: 2, WORKER: 5 } as const
+
+/** Maximum diff characters forwarded to each worker agent per file.
+ *  Keeps prompts within token budget while preserving most of the useful signal. */
+const MAX_PATCH_CHARS = 3_000
 
 @Injectable()
 export class ReviewService {
@@ -94,26 +103,29 @@ export class ReviewService {
     async streamAnalyzeFromPR(prUrl: string, res: Response): Promise<void> {
         this.githubService.assertValidPRUrl(prUrl)
 
-        const { send, startedAt } = initSse(res)
+        const conn = initSse(res)
+        const { send, startedAt } = conn
 
         try {
             send({ type: 'start' })
 
-            // ── Phase 1: Fetch file list (includes diff patches) ─────────────
+            // ── Phase 1: Fetch files and RAG standards in parallel ────────────
             const [standards, files] = await Promise.all([
                 this.ragService.retrieveForContext('code review standards best practices'),
                 this.githubService.fetchPRFiles(prUrl).catch(() => null),
             ])
 
+            // Fallback: if file fetch fails entirely, use old single-agent path
             if (!files || files.length === 0) {
                 return this.streamAnalysis(
                     `Please review this GitHub pull request: ${prUrl}`,
-                    standards, prUrl, 'PR', res, { send, startedAt },
+                    standards, prUrl, 'PR', res, conn,
                 )
             }
 
-            // ── Phase 2: Emit task plan + mark all files done (diffs are ready)
-            // The patch data already came with fetchPRFiles — no extra API calls needed.
+            // ── Phase 1b: Emit file list for the Data Collection stage ────────
+            // Fires before planning so the UI shows "Reading files…" first,
+            // then transitions to the Planning stage when cluster_plan arrives.
             send({
                 type: 'task_plan',
                 tasks: files.map(f => ({
@@ -121,7 +133,6 @@ export class ReviewService {
                     label: f.filename.split('/').pop() ?? f.filename,
                 })),
             })
-
             for (const f of files) {
                 const diffLines = f.patch ? f.patch.split('\n').length : 0
                 const detail = diffLines > 0
@@ -130,33 +141,85 @@ export class ReviewService {
                 send({ type: 'task_update', taskId: f.filename, status: 'done', detail })
             }
 
-            // ── Phase 3: Build prompt using diffs (keeps context well within limits)
-            // Full-file content is NOT fetched — diffs contain exactly the changed lines
-            // which is what the review needs. 15 files × ~200 diff lines ≈ 15 K tokens total.
-            const MAX_PATCH_CHARS = 3_000  // per file — prevents any single huge file from dominating
-            const fileSection = files.map(f => {
-                const patch = f.patch
-                    ? (f.patch.length > MAX_PATCH_CHARS
-                        ? f.patch.slice(0, MAX_PATCH_CHARS) + '\n… [diff truncated]'
-                        : f.patch)
-                    : `(no diff — ${f.status})`
-                return `### ${f.filename}  [+${f.additions} -${f.deletions}  status: ${f.status}]\n${patch}`
-            }).join('\n\n')
+            // ── Phase 2: Plan clusters ────────────────────────────────────────
+            // Use lightweight LLM call to plan clusters intelligently.
+            // Falls back to single "general" cluster automatically on error.
+            const clusters = await planClusters(files, this.openai)
 
-            const userMessage =
-                `Please review this GitHub pull request: ${prUrl}\n\n` +
-                `The PR has ${files.length} changed file(s). ` +
-                `Diffs for all files are provided below.\n\n` +
-                fileSection
+            // Tell the UI exactly what clusters exist — it renders panels immediately
+            send({
+                type: 'cluster_plan',
+                clusters: clusters.map(c => ({
+                    id: c.id,
+                    label: c.label,
+                    focus: c.focus,
+                    files: c.files.map(f => ({
+                        name: f.filename,
+                        additions: f.additions,
+                        deletions: f.deletions,
+                        status: f.status,
+                    })),
+                })),
+            })
 
-            // ── Phase 4: AI analysis (no file tools — context is pre-built) ──
-            return this.streamAnalysis(
-                userMessage, standards, prUrl, 'PR', res, { send, startedAt },
+            // ── Phase 3: Run all worker agents in parallel ────────────────────
+            // Promise.allSettled means one failing cluster never blocks the others.
+            const workerResults = await Promise.allSettled(
+                clusters.map(cluster => this.runWorkerAgent(cluster, standards, send))
             )
+
+            // Collect successful results — failed clusters are noted but not fatal
+            const partialReviews = workerResults
+                .map((result, i) => ({ result, cluster: clusters[i] }))
+                .filter(({ result }) => result.status === 'fulfilled')
+                .map(({ result, cluster }) => ({
+                    clusterId: cluster.id,
+                    label: cluster.label,
+                    review: (result as PromiseFulfilledResult<ReviewData>).value,
+                }))
+
+            if (partialReviews.length === 0) {
+                send({ type: 'error', message: 'All cluster agents failed. Please try again.' })
+                res.end()
+                return
+            }
+
+            // ── Phase 4a: Single-cluster shortcut — skip synthesis ────────────
+            // Small PRs (≤3 files) produce one cluster — its review is the final output.
+            if (partialReviews.length === 1) {
+                const only = partialReviews[0].review
+                const merged = { ...only, appliedStandards: standards?.appliedNames }
+                const id = await this.saveReview(prUrl, 'PR', merged, conn.getTrace())
+                send({
+                    type: 'complete',
+                    review: { ...merged, id },
+                    durationMs: Date.now() - startedAt,
+                    stepCount: 1,
+                })
+                res.end()
+                return
+            }
+
+            // ── Phase 4b: Synthesis agent ─────────────────────────────────────
+            // Two-attempt LLM synthesis with a programmatic merge fallback so a
+            // parse failure never surfaces as an error to the user.
+            const finalReview = await this.synthesizeReview(prUrl, partialReviews, standards)
+            const merged = { ...finalReview, appliedStandards: standards?.appliedNames }
+            const id = await this.saveReview(prUrl, 'PR', merged, conn.getTrace())
+
+            send({
+                type: 'complete',
+                review: { ...merged, id },
+                durationMs: Date.now() - startedAt,
+                stepCount: clusters.length + 1, // workers + synthesis
+            })
+
         } catch (err) {
             const message = err instanceof Error ? err.message : 'PR review failed'
             send({ type: 'error', message })
-            res.end()
+        } finally {
+            // Guard against double-end: the fallback streamAnalysis path ends res itself.
+            if (!res.writableEnded) res.end()
         }
     }
 
@@ -178,7 +241,7 @@ export class ReviewService {
         //   PR + investigation (×3)    → listPRFiles(1) + fetchFileContent(1-3) + JSON(1) = 3-5
         //   PR fallback + investigate  → listPRFiles(1) + fetchGithubPR(1) + fetchFileContent(1-3) + JSON(1) = 4-6
         //   worst-case autonomous max  → 8 tool calls + forced JSON(1) = 9  (+1 buffer = 10)
-        const MAX_STEPS = AGENT_MAX_STEPS.CODE
+        const MAX_STEPS = AGENT_MAX_STEPS[reviewType]
 
         try {
             const result = await generateText({
@@ -248,20 +311,19 @@ export class ReviewService {
         res: Response,
         existingConn?: SseConnection,
     ): Promise<void> {
-        let _send: (event: ReviewStreamEvent) => void
-        let _startedAt: number
+        let _conn: SseConnection
 
         if (existingConn) {
             // PR path: SSE headers already set by streamAnalyzeFromPR.
-            _send = existingConn.send
-            _startedAt = existingConn.startedAt
+            _conn = existingConn
         } else {
             // Code path: initialise SSE headers here and emit the start event.
-            const conn = initSse(res)
-            _send = conn.send
-            _startedAt = conn.startedAt
-            _send({ type: 'start' })
+            _conn = initSse(res)
+            _conn.send({ type: 'start' })
         }
+
+        const _send = _conn.send
+        const _startedAt = _conn.startedAt
 
         const promptContext = reviewType === 'PR' ? 'PR_STREAM' : 'CODE'
         const system = standards
@@ -320,7 +382,7 @@ export class ReviewService {
             }
 
             const merged = { ...review, appliedStandards: standards?.appliedNames }
-            const id = await this.saveReview(input, reviewType, merged)
+            const id = await this.saveReview(input, reviewType, merged, _conn.getTrace())
             _send({
                 type: 'complete',
                 review: { ...merged, id },
@@ -334,6 +396,86 @@ export class ReviewService {
         } finally {
             res.end()
         }
+    }
+
+    /** Run one cluster's worker agent, emitting SSE events tagged with clusterId. */
+    private async runWorkerAgent(
+        cluster: ClusterPlan,
+        standards: Awaited<ReturnType<RagService['retrieveForContext']>>,
+        send: (event: ReviewStreamEvent) => void,
+    ): Promise<ReviewData> {
+        const workerStart = Date.now()
+
+        const fileSection = cluster.files.map(f => {
+            const patch = f.patch
+                ? (f.patch.length > MAX_PATCH_CHARS
+                    ? f.patch.slice(0, MAX_PATCH_CHARS) + '\n… [diff truncated]'
+                    : f.patch)
+                : `(no diff — ${f.status})`
+            return `### ${f.filename}  [+${f.additions} -${f.deletions}  status: ${f.status}]\n${patch}`
+        }).join('\n\n')
+
+        const userMessage =
+            `Review the following files from the pull request.\n\n` +
+            `Your focus: ${cluster.focus}\n\n` +
+            fileSection
+
+        const system = buildWorkerPrompt(cluster.label, cluster.focus, standards?.content)
+
+        const tools = {
+            runLinter: createRunLinterTool(({ code, language }) =>
+                this.linterService.lint(code, language),
+            ),
+        }
+
+        const pending = new Map<string, { toolName: string; args: Record<string, unknown>; startedAt: number }>()
+        const thinking = new ThinkingStream(
+            (event) => send({ ...event, clusterId: cluster.id }),
+        )
+        const clusterSend = (event: ReviewStreamEvent) =>
+            send({ ...event, clusterId: cluster.id } as ReviewStreamEvent)
+
+        const { onChunk, onStepFinish } = this.buildStreamCallbacks(clusterSend, pending, thinking)
+
+        const result = streamText({
+            model: this.openai('gpt-4o-mini'),
+            system,
+            messages: [{ role: 'user', content: userMessage }],
+            tools,
+            temperature: 0.2,
+            stopWhen: ({ steps }) => {
+                const lastText = steps.at(-1)?.text ?? ''
+                try { this.parseReviewText(lastText); return true } catch { /* keep going */ }
+                return steps.length >= AGENT_MAX_STEPS.WORKER
+            },
+            prepareStep: ({ steps }) => {
+                if (steps.length >= AGENT_MAX_STEPS.WORKER - 1) return { toolChoice: 'none' as const }
+                return {}
+            },
+            onChunk,
+            onStepFinish,
+        })
+
+        const [finalText, steps] = await Promise.all([result.text, result.steps])
+
+        const allTexts = [finalText, ...steps.map(s => s.text).reverse()].filter(t => t.trim())
+        let review: ReviewData | undefined
+        for (const text of allTexts) {
+            try { review = this.parseReviewText(text); break } catch { /* try next */ }
+        }
+
+        if (!review) {
+            throw new Error(`Worker agent for cluster "${cluster.id}" did not return a valid review.`)
+        }
+
+        send({
+            type: 'cluster_done',
+            clusterId: cluster.id,
+            issueCount: review.issues.length,
+            durationMs: Date.now() - workerStart,
+        })
+
+        return review
     }
 
     /** Extract the onChunk / onStepFinish callbacks so streamAnalysis stays focused on control flow.
@@ -396,6 +538,84 @@ export class ReviewService {
         }
     }
 
+    /**
+     * Run the synthesis LLM with two attempts and a guaranteed programmatic fallback.
+     *
+     * Attempt 1 — standard call (temperature 0.2).
+     * Attempt 2 — temperature 0, reinforced JSON-only instruction, in case the first
+     *             attempt produced prose wrapping around the JSON.
+     * Fallback   — deterministic merge of worker reviews; always produces valid ReviewData.
+     */
+    private async synthesizeReview(
+        prUrl: string,
+        partialReviews: Array<{ clusterId: string; label: string; review: ReviewData }>,
+        standards: Awaited<ReturnType<RagService['retrieveForContext']>>,
+    ): Promise<ReviewData> {
+        const baseSystem = standards
+            ? `${buildSynthesisSystemPrompt()}\n\nYour team's coding standards:\n\n${standards.content}`
+            : buildSynthesisSystemPrompt()
+        const userMessage = buildSynthesisUserMessage(prUrl, partialReviews)
+
+        // ── Attempt 1: standard ───────────────────────────────────────────────
+        try {
+            const { text } = await generateText({
+                model: this.openai('gpt-4o-mini'),
+                system: baseSystem,
+                messages: [{ role: 'user', content: userMessage }],
+                temperature: 0.2,
+            })
+            return this.parseReviewText(text)
+        } catch (err) {
+            this.logger.warn(`Synthesis attempt 1 failed: ${err instanceof Error ? err.message : err}`)
+        }
+
+        // ── Attempt 2: temperature 0 + reinforced JSON-only instruction ───────
+        try {
+            const { text } = await generateText({
+                model: this.openai('gpt-4o-mini'),
+                system: baseSystem + '\n\nFINAL INSTRUCTION: Your entire response must be ONE JSON object. ' +
+                    'Start with a line containing only { and end with a line containing only }. ' +
+                    'Absolutely no text before or after the JSON.',
+                messages: [{ role: 'user', content: userMessage }],
+                temperature: 0,
+            })
+            return this.parseReviewText(text)
+        } catch (err) {
+            this.logger.warn(`Synthesis attempt 2 failed: ${err instanceof Error ? err.message : err}`)
+        }
+
+        // ── Fallback: deterministic merge — guaranteed valid ReviewData ────────
+        this.logger.warn(`Both synthesis attempts failed for ${prUrl} — using programmatic merge fallback`)
+        return this.mergeReviewsFallback(partialReviews)
+    }
+
+    /** Merge worker partial reviews deterministically — used when LLM synthesis fails twice. */
+    private mergeReviewsFallback(
+        partialReviews: Array<{ clusterId: string; label: string; review: ReviewData }>,
+    ): ReviewData {
+        // Deduplicate issues by type+title+location key
+        const seen = new Set<string>()
+        const issues = partialReviews
+            .flatMap(({ review }) => review.issues)
+            .filter(i => {
+                const key = `${i.type}:${i.title}:${i.location}`
+                if (seen.has(key)) return false
+                seen.add(key)
+                return true
+            })
+
+        const positives = [...new Set(partialReviews.flatMap(({ review }) => review.positives))]
+        const avgScore = Math.round(
+            partialReviews.reduce((sum, { review }) => sum + review.score, 0) / partialReviews.length,
+        )
+        const summary = partialReviews
+            .map(({ label, review }) => `${label}: ${review.summary}`)
+            .join(' · ')
+            .slice(0, 400)
+
+        return { summary, score: avgScore, issues, positives }
+    }
+
     /** Wire up the required agent tools based on whether this is a PR or pasted code review. */
     private buildAgentTools(reviewType: 'CODE' | 'PR') {
         const baseTools = {
@@ -443,6 +663,7 @@ export class ReviewService {
         input: string,
         type: 'CODE' | 'PR',
         data: ReviewData,
+        traceLog?: ReviewStreamEvent[],
     ): Promise<string | undefined> {
         if (!this.hasDb) return undefined
         try {
@@ -454,6 +675,9 @@ export class ReviewService {
                     score: data.score,
                     positives: data.positives,
                     appliedStandards: data.appliedStandards ?? [],
+                    ...(traceLog && traceLog.length > 0
+                        ? { traceLog: traceLog as unknown as Prisma.InputJsonValue }
+                        : {}),
                     issues: {
                         create: data.issues.map((i) => ({
                             type: i.type,
@@ -475,19 +699,47 @@ export class ReviewService {
         }
     }
 
-    // Extracts ReviewData from the model's text, handling three production failure modes:
-    // clean JSON, JSON wrapped in a markdown fence, and JSON embedded in surrounding prose.
+    /**
+     * Extract ReviewData from the model's text output.
+     *
+     * Handles five real-world failure modes in priority order:
+     *   ① Clean JSON (most common — workers and synthesis under normal conditions)
+     *   ② Markdown-fenced JSON  (``` json … ```)
+     *   ③ Balanced-brace extraction from every line-boundary `{` — handles prose before JSON
+     *      AND prose after JSON (the `lastIndexOf('}')` strategy breaks when the model
+     *      appends trailing commentary containing `}` characters)
+     *   ④ First `{` to matching balanced `}` — final safety net for inline JSON
+     *
+     * Throws only if all candidates fail Zod validation — the caller should then retry.
+     */
     private parseReviewText(text: string): ReviewData {
         const t = text.trim()
 
-        const candidates = [t]
+        const candidates: string[] = [t]
 
+        // ① Markdown fence — strip code fences the model adds despite instructions
         const fenceMatch = t.match(/```(?:json)?\s*([\s\S]*?)```/)
         if (fenceMatch) candidates.push(fenceMatch[1].trim())
 
-        const start = t.indexOf('{')
-        const end = t.lastIndexOf('}')
-        if (start !== -1 && end > start) candidates.push(t.slice(start, end + 1))
+        // ② & ③ All line-boundary `{` positions (last to first) using balanced extraction.
+        //   Processing last-to-first ensures we try the most recent JSON block first,
+        //   which is correct when the model outputs analysis prose before the JSON object.
+        const starts: number[] = []
+        if (t.startsWith('{')) starts.push(0)
+        let pos = 0
+        while ((pos = t.indexOf('\n{', pos)) !== -1) { starts.push(pos + 1); pos++ }
+
+        for (let i = starts.length - 1; i >= 0; i--) {
+            const end = this.findBalancedBraceEnd(t, starts[i])
+            if (end !== -1) candidates.push(t.slice(starts[i], end + 1))
+        }
+
+        // ④ First `{` to its balanced `}` — handles JSON not at a line boundary
+        const firstBrace = t.indexOf('{')
+        if (firstBrace !== -1) {
+            const end = this.findBalancedBraceEnd(t, firstBrace)
+            if (end !== -1) candidates.push(t.slice(firstBrace, end + 1))
+        }
 
         for (const candidate of candidates) {
             try {
@@ -498,5 +750,27 @@ export class ReviewService {
         throw new InternalServerErrorException(
             'The model did not return a valid review. Please try again.',
         )
+    }
+
+    /**
+     * Walk `text` from `start` (which must be `{`) to find its balanced closing `}`.
+     * Correctly skips `{` and `}` characters inside JSON string values.
+     * Returns the index of the closing `}`, or -1 if the braces are unbalanced.
+     */
+    private findBalancedBraceEnd(text: string, start: number): number {
+        let depth = 0
+        let inString = false
+        let escape = false
+
+        for (let i = start; i < text.length; i++) {
+            const ch = text[i]
+            if (escape) { escape = false; continue }
+            if (ch === '\\' && inString) { escape = true; continue }
+            if (ch === '"') { inString = !inString; continue }
+            if (inString) { continue }
+            if (ch === '{') { depth++ }
+            else if (ch === '}') { if (--depth === 0) return i }
+        }
+        return -1
     }
 }

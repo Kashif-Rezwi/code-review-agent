@@ -1,7 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
-
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
@@ -32,6 +31,17 @@
   --radius-2xl: calc(var(--radius) + 8px);
   --radius-3xl: calc(var(--radius) + 12px);
   --radius-4xl: calc(var(--radius) + 16px);
+
+  /* App background — registered so Tailwind generates bg-app-bg / bg-editor-bg */
+  --color-app-bg:    rgb(13 17 23);   /* #0d1117 — page background  */
+  --color-editor-bg: rgb(15 21 33);   /* #0f1521 — Monaco editor    */
+
+  /* Named shadows — use shadow-glow-blue-sm / shadow-float instead of bracket values */
+  --shadow-glow-blue-sm: 0 0 10px rgba(59,130,246,0.10);
+  --shadow-glow-blue-md: 0 0 20px rgba(59,130,246,0.15);
+  --shadow-glow-blue-lg: 0 0 30px rgba(59,130,246,0.20);
+  --shadow-float:        0 4px 28px rgba(0,0,0,0.45);
+  --shadow-float-lg:     0 8px 40px rgba(0,0,0,0.55);
 }
 
 :root {
@@ -54,27 +64,11 @@
   --border: oklch(0.929 0.013 255.508);
   --input: oklch(0.929 0.013 255.508);
   --ring: oklch(0.704 0.04 256.788);
-}
 
-.dark {
-  --background: oklch(0.129 0.042 264.695);
-  --foreground: oklch(0.984 0.003 247.858);
-  --card: oklch(0.208 0.042 265.755);
-  --card-foreground: oklch(0.984 0.003 247.858);
-  --popover: oklch(0.208 0.042 265.755);
-  --popover-foreground: oklch(0.984 0.003 247.858);
-  --primary: oklch(0.929 0.013 255.508);
-  --primary-foreground: oklch(0.208 0.042 265.755);
-  --secondary: oklch(0.279 0.041 260.031);
-  --secondary-foreground: oklch(0.984 0.003 247.858);
-  --muted: oklch(0.279 0.041 260.031);
-  --muted-foreground: oklch(0.704 0.04 256.788);
-  --accent: oklch(0.279 0.041 260.031);
-  --accent-foreground: oklch(0.984 0.003 247.858);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.551 0.027 264.364);
+  /* Score ring colours — referenced by SVG stroke in score-ring.tsx */
+  --color-score-high: #22c55e;  /* green-500  */
+  --color-score-mid:  #eab308;  /* yellow-500 */
+  --color-score-low:  #ef4444;  /* red-500    */
 }
 
 /* Hide scrollbar while keeping scroll behaviour */
@@ -90,16 +84,34 @@
   * {
     @apply border-border outline-ring/50;
   }
+  /* Prevent elastic over-scroll bounce at page edges */
+  html {
+    overscroll-behavior: none;
+    height: 100%;
+  }
   body {
     @apply bg-background text-foreground;
+    overscroll-behavior: none;
+    min-height: 100%;
   }
 }
 
-/* Trace-entry fade-in: new steps slide in from slight left as they stream */
+/* Trace entries slide in from the left as they stream */
 @keyframes fade-in {
   from { opacity: 0; transform: translateX(-6px); }
   to   { opacity: 1; transform: translateX(0); }
 }
 .animate-fade-in {
   animation: fade-in 0.2s ease-out both;
+}
+
+/* Streaming cursor — triggered by data-streaming attribute on AssistantMessage */
+@keyframes cursor-blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+[data-streaming] > *:last-child:not([data-code-block])::after {
+  content: " ▍";
+  animation: cursor-blink 0.75s step-end infinite;
+  color: rgb(156 163 175); /* gray-400 */
 }
