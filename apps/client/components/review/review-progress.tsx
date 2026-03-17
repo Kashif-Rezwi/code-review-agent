@@ -318,14 +318,6 @@ export function ReviewProgress({ entries, taskItems, phase, clusterMap = new Map
 
     return (
         <div className="space-y-3">
-            {/* ── Connecting placeholder ──────────────────────── */}
-            {phase === 'connecting' && taskItems.length === 0 && entries.length === 0 && mode === 'pr' && (
-                <div className="flex items-center gap-2.5 py-1 animate-fade-in pl-1 text-gray-500">
-                    <AgentIcon className="h-2.5 opacity-60 ml-0.5" />
-                    <span className="text-sm font-medium inline-flex">Connecting to agent environment</span>
-                </div>
-            )}
-
             {/* ── Stage 1: Data Collection — file list with diff stats ──────── */}
             {taskItems.length > 0 && (
                 <div>
