@@ -8,7 +8,7 @@ import { ErrorBanner } from '@/components/ui/error-banner'
 import { CodeEditor } from '@/components/review/code-editor'
 import { ReviewPanel } from '@/components/review/review-panel'
 import { ReviewProgress } from '@/components/review/review-progress'
-import { UserBubble, AssistantMessage, LoadingIndicator } from '@/components/review/chat-message'
+import { ChatThread } from '@/components/review/chat-thread'
 import { ChatInput } from '@/components/review/chat-input'
 import { useChatMessages } from '@/lib/use-chat-messages'
 import { useReviewStream } from '@/lib/use-review-stream'
@@ -20,6 +20,9 @@ import { cn } from '@/lib/utils'
 
 type Mode = 'code' | 'pr'
 
+// Pixels from the bottom at which the user is considered "at bottom" for auto-scroll.
+const SCROLL_THRESHOLD = 120
+
 export default function ReviewPage() {
     const [mode, setMode] = useState<Mode>('code')
     const [code, setCode] = useState('')
@@ -30,12 +33,16 @@ export default function ReviewPage() {
     // reviewId drives the follow-up chat — available once complete event arrives.
     const reviewId = review?.id ?? null
 
-    const { messages, input, setInput, isSending, submit: sendChat } = useChatMessages(reviewId)
+    const { messages, input, setInput, isSending, streamingContent, submit: sendChat } = useChatMessages(reviewId)
 
     const bottomRef = useRef<HTMLDivElement>(null)
+    const reviewPanelRef = useRef<HTMLDivElement>(null)
+    const chatSectionRef = useRef<HTMLDivElement>(null)
+    const isAtBottomRef = useRef(true)           // sync'd by scroll listener, never stale
+    const isProgrammaticRef = useRef(false)          // suppresses our own scroll events
+    const rafRef = useRef<number | null>(null)  // rAF handle for scroll batching
+    const [isAtBottom, setIsAtBottom] = useState(true)     // reactive — drives ↓ Latest pill
 
-    // Memoize so language detection and token counting only re-run when `code` changes,
-    // not on every SSE event or unrelated state update.
     const detectedLanguage = useMemo(() => detectLanguage(code), [code])
     const tokenCount = useMemo(() => estimateTokens(code), [code])
     const isOverLimit = tokenCount > CODE_TOKEN_LIMIT
@@ -67,10 +74,73 @@ export default function ReviewPage() {
         reset()
     }
 
-    // Scroll to bottom as the conversation grows.
+    // Sync isAtBottomRef and isAtBottom; skip our own programmatic scrolls
     useEffect(() => {
-        bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-    }, [messages, isSending])
+        const onScroll = () => {
+            if (isProgrammaticRef.current) return
+            const { scrollTop, scrollHeight, clientHeight } = document.documentElement
+            const atBottom = scrollHeight - scrollTop - clientHeight < SCROLL_THRESHOLD
+            isAtBottomRef.current = atBottom
+            setIsAtBottom(atBottom)
+        }
+        window.addEventListener('scroll', onScroll, { passive: true })
+        return () => window.removeEventListener('scroll', onScroll)
+    }, [])
+
+    const scrollToBottom = useCallback((behavior: ScrollBehavior = 'instant') => {
+        isProgrammaticRef.current = true
+        bottomRef.current?.scrollIntoView({ behavior })
+        // Delay re-enabling user-scroll detection (smooth scroll can take ~300 ms)
+        setTimeout(() => { isProgrammaticRef.current = false }, behavior === 'smooth' ? 350 : 50)
+    }, [])
+
+    // Re-arm auto-scroll when streaming starts — isAtBottomRef is false while the
+    // user is looking at the editor, so without this every trace event skips scrolling
+    useEffect(() => {
+        if (!isStreaming) return
+        isAtBottomRef.current = true
+        const id = requestAnimationFrame(() => scrollToBottom('smooth'))
+        return () => cancelAnimationFrame(id)
+    }, [isStreaming, scrollToBottom])
+
+    // Follow review stream events (trace entries, task items) as they arrive
+    useEffect(() => {
+        if (!isStreaming || !isAtBottomRef.current) return
+        if (rafRef.current) cancelAnimationFrame(rafRef.current)
+        rafRef.current = requestAnimationFrame(() => scrollToBottom('instant'))
+        return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current) }
+    }, [traceEntries, taskItems, isStreaming, scrollToBottom])
+
+    // Scroll to ReviewPanel when review completes — primitive dep fires exactly once per review;
+    // rAF defers past the layout shift so ReviewPanel is in the DOM before we scroll
+    useEffect(() => {
+        if (!reviewId) return
+        const id = requestAnimationFrame(() => {
+            reviewPanelRef.current?.scrollIntoView({ behavior: 'smooth' })
+        })
+        return () => cancelAnimationFrame(id)
+    }, [reviewId])
+
+    // Follow chat streaming tokens; rAF batches rapid updates into one scroll per frame
+    useEffect(() => {
+        if (streamingContent === null || !isAtBottomRef.current) return
+        if (rafRef.current) cancelAnimationFrame(rafRef.current)
+        rafRef.current = requestAnimationFrame(() => scrollToBottom('instant'))
+        return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current) }
+    }, [streamingContent, scrollToBottom])
+
+    // Scroll to bottom when a settled chat message is appended.
+    useEffect(() => {
+        if (messages.length === 0) return
+        if (isAtBottomRef.current) scrollToBottom('smooth')
+    }, [messages, scrollToBottom])
+
+    // Force auto-scroll when sending so the response is always visible
+    const handleSendChat = useCallback(async () => {
+        isAtBottomRef.current = true
+        scrollToBottom('smooth')
+        await sendChat()
+    }, [sendChat, scrollToBottom])
 
     return (
         <div className="min-h-screen bg-app-bg text-gray-100">
@@ -89,11 +159,10 @@ export default function ReviewPage() {
                         <button
                             key={m}
                             onClick={() => handleModeSwitch(m)}
-                            className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 ${
-                                mode === m
-                                    ? 'bg-blue-500/15 text-blue-100 border border-blue-500/25 shadow-[0_0_10px_rgba(59,130,246,0.12)]'
-                                    : 'text-gray-500 hover:text-gray-300 border border-transparent'
-                            }`}
+                            className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 ${mode === m
+                                ? 'bg-blue-500/15 text-blue-100 border border-blue-500/25 shadow-[0_0_10px_rgba(59,130,246,0.12)]'
+                                : 'text-gray-500 hover:text-gray-300 border border-transparent'
+                                }`}
                         >
                             {m === 'code'
                                 ? <><Code2 className="w-4 h-4" /> Paste Code</>
@@ -201,29 +270,33 @@ export default function ReviewPage() {
                 {/* Review results + follow-up conversation */}
                 {review && (
                     <ReviewErrorBoundary onReset={reset}>
-                        <ReviewPanel review={review} />
-
-                        {/* Messages — keyed by index (safe: list is append-only) */}
-                        {messages.map((msg, i) =>
-                            msg.role === 'user'
-                                ? <UserBubble key={i} content={msg.content} />
-                                : <AssistantMessage key={i} content={msg.content} />
-                        )}
-
-                        {isSending && <LoadingIndicator />}
-                        <div ref={bottomRef} />
+                        <div ref={reviewPanelRef} className="scroll-mt-20">
+                            <ReviewPanel review={review} />
+                        </div>
+                        <div ref={chatSectionRef}>
+                            <ChatThread
+                                messages={messages}
+                                streamingContent={streamingContent}
+                                isSending={isSending}
+                            />
+                        </div>
                     </ReviewErrorBoundary>
                 )}
+
+                {/* Scroll anchor — outside {review &&} so it exists during review streaming */}
+                <div ref={bottomRef} />
             </main>
 
-            {/* Fixed input overlay — appears when user scrolls near the bottom of the review.
-                No scrollContainerRef needed: falls back to window scroll for min-h-screen layout. */}
             {reviewId && (
                 <ChatInput
                     value={input}
                     onChange={setInput}
-                    onSubmit={sendChat}
+                    onSubmit={handleSendChat}
                     disabled={isSending}
+                    chatSectionRef={chatSectionRef}
+                    isAtBottom={isAtBottom}
+                    onScrollToReview={() => reviewPanelRef.current?.scrollIntoView({ behavior: 'smooth' })}
+                    onScrollToLatest={() => scrollToBottom('smooth')}
                 />
             )}
         </div>

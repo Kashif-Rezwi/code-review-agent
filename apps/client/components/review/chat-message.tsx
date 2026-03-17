@@ -1,78 +1,15 @@
 'use client'
 
 import { Copy, Check } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import type { Components } from 'react-markdown'
 import { useCopyToClipboard } from '@/lib/hooks'
 import { Button } from '@/components/ui/button'
-
-// ── Types ────────────────────────────────────────────────────────────────────
-
-export type Segment =
-    | { type: 'text'; content: string }
-    | { type: 'code'; lang: string; content: string }
-
-// ── Markdown parser ──────────────────────────────────────────────────────────
-
-/** Split raw text into alternating text / fenced-code-block segments. */
-export function parseSegments(raw: string): Segment[] {
-    const segments: Segment[] = []
-    const fence = /```(\w*)\n([\s\S]*?)```/g
-    let cursor = 0
-    let match: RegExpExecArray | null
-
-    while ((match = fence.exec(raw)) !== null) {
-        if (match.index > cursor) {
-            segments.push({ type: 'text', content: raw.slice(cursor, match.index) })
-        }
-        segments.push({ type: 'code', lang: match[1] || 'code', content: match[2].trimEnd() })
-        cursor = fence.lastIndex
-    }
-
-    if (cursor < raw.length) {
-        segments.push({ type: 'text', content: raw.slice(cursor) })
-    }
-
-    return segments.length ? segments : [{ type: 'text', content: raw }]
-}
-
-// ── Rendering primitives ─────────────────────────────────────────────────────
-
-/** Renders inline backtick code spans inside a text run. */
-export function InlineText({ text }: { text: string }) {
-    const parts = text.split(/`([^`\n]+)`/)
-    return (
-        <>
-            {parts.map((part, i) =>
-                i % 2 === 1 ? (
-                    <code key={i} className="bg-gray-900 border border-gray-800 rounded px-1 py-0.5 text-xs font-mono text-gray-300">
-                        {part}
-                    </code>
-                ) : (
-                    part
-                ),
-            )}
-        </>
-    )
-}
-
-export function TextSegment({ content }: { content: string }) {
-    const trimmed = content.trim()
-    if (!trimmed) return null
-
-    return (
-        <div className="space-y-1.5">
-            {trimmed.split(/\n{2,}/).map((para, i) => (
-                <p key={i} className="leading-relaxed">
-                    <InlineText text={para.replace(/\n/g, ' ')} />
-                </p>
-            ))}
-        </div>
-    )
-}
 
 export function CodeBlock({ lang, content }: { lang: string; content: string }) {
     const { copied, copy } = useCopyToClipboard()
     return (
-        <div className="rounded-lg overflow-hidden border border-gray-800 my-2">
+        <div data-code-block className="rounded-lg overflow-hidden border border-gray-800 my-2">
             <div className="flex items-center justify-between px-3 py-1.5 bg-app-bg border-b border-gray-800">
                 <span className="text-xs text-gray-600 font-mono">{lang}</span>
                 <Button
@@ -92,23 +29,78 @@ export function CodeBlock({ lang, content }: { lang: string; content: string }) 
     )
 }
 
-/** Renders an assistant message with formatted text and code blocks. */
-export function AssistantMessage({ content }: { content: string }) {
-    const segments = parseSegments(content)
+// Module-level for a stable reference — prevents ReactMarkdown from re-reconciling on every render
+const CHAT_MD_COMPONENTS: Components = {
+    // CodeBlock provides its own container, so strip the default <pre> wrapper
+    pre: ({ children }) => <>{children}</>,
+
+    // Route fenced blocks through CodeBlock; inline backticks get their own style.
+    code({ className, children }) {
+        const lang = /language-([\w.+-]+)/.exec(className || '')?.[1]
+        const isBlock = !!lang || String(children).includes('\n')
+        if (isBlock) {
+            return <CodeBlock lang={lang || 'code'} content={String(children).trimEnd()} />
+        }
+        return (
+            <code className="bg-gray-900 border border-gray-800 rounded px-1 py-0.5 text-xs font-mono text-gray-300">
+                {children}
+            </code>
+        )
+    },
+
+    // Headings
+    h1: ({ children }) => <h1 className="text-lg font-bold text-white mt-4 mb-2 first:mt-0">{children}</h1>,
+    h2: ({ children }) => <h2 className="text-base font-semibold text-white mt-3 mb-1.5">{children}</h2>,
+    h3: ({ children }) => <h3 className="text-sm font-semibold text-gray-200 mt-2 mb-1">{children}</h3>,
+
+    // Paragraphs & lists
+    p: ({ children }) => <p className="leading-relaxed mb-2 last:mb-0">{children}</p>,
+    ul: ({ children }) => <ul className="list-disc pl-5 mb-2 space-y-0.5">{children}</ul>,
+    ol: ({ children }) => <ol className="list-decimal pl-5 mb-2 space-y-0.5">{children}</ol>,
+    li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+
+    // Inline emphasis
+    strong: ({ children }) => <strong className="font-semibold text-gray-200">{children}</strong>,
+    em: ({ children }) => <em className="italic text-gray-300">{children}</em>,
+
+    // Links, dividers, blockquotes
+    a: ({ href, children }) => (
+        <a href={href} className="text-blue-400 hover:text-blue-300 underline" target="_blank" rel="noopener noreferrer">
+            {children}
+        </a>
+    ),
+    hr: () => <hr className="border-gray-800 my-3" />,
+    blockquote: ({ children }) => (
+        <blockquote className="border-l-2 border-gray-700 pl-3 text-gray-400 italic my-2">
+            {children}
+        </blockquote>
+    ),
+}
+
+// ── AssistantMessage ──────────────────────────────────────────────────────────
+
+export function AssistantMessage({ content, isStreaming }: { content: string; isStreaming?: boolean }) {
+    // No tokens yet — show a lone blinking cursor for immediate feedback
+    if (isStreaming && content === '') {
+        return (
+            <div className="text-sm text-gray-300">
+                <span className="text-gray-400 [animation:cursor-blink_0.75s_step-end_infinite]">▍</span>
+            </div>
+        )
+    }
+
     return (
-        <div className="text-sm text-gray-300 space-y-1">
-            {segments.map((seg, i) =>
-                seg.type === 'code' ? (
-                    <CodeBlock key={i} lang={seg.lang} content={seg.content} />
-                ) : (
-                    <TextSegment key={i} content={seg.content} />
-                ),
-            )}
+        // data-streaming activates the CSS cursor via globals.css [data-streaming]::after
+        <div className="text-sm text-gray-300" data-streaming={isStreaming || undefined}>
+            <ReactMarkdown components={CHAT_MD_COMPONENTS}>
+                {content}
+            </ReactMarkdown>
         </div>
     )
 }
 
-/** Right-aligned user chat bubble. */
+// ── UserBubble ────────────────────────────────────────────────────────────────
+
 export function UserBubble({ content }: { content: string }) {
     return (
         <div className="flex justify-end">
@@ -120,7 +112,9 @@ export function UserBubble({ content }: { content: string }) {
     )
 }
 
-/** Pulsing dots loading indicator for pending assistant responses. */
+// ── LoadingIndicator ──────────────────────────────────────────────────────────
+// Shown while waiting for the first streaming token to arrive.
+
 export function LoadingIndicator() {
     return (
         <div className="flex items-center gap-1.5 py-2">

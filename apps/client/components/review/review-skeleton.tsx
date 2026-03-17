@@ -1,8 +1,17 @@
-// Animated skeleton shown while the review loads — mirrors the exact ReviewPanel layout.
-// No spinner, no text — just shape placeholders that match the real card structure.
+// Animated skeleton that mirrors the full history detail page layout:
+// input display → score header → issues → positives.
 export function ReviewSkeleton() {
     return (
         <div className="space-y-4">
+            {/* Input display placeholder — PR card or code snippet */}
+            <div className="rounded-lg border border-gray-800 bg-gray-900/30 p-4 space-y-3 animate-pulse">
+                <div className="flex items-center gap-2">
+                    <div className="h-3 w-3 rounded bg-gray-800" />
+                    <div className="h-2.5 bg-gray-800 rounded w-20" />
+                </div>
+                <div className="h-3.5 bg-gray-700 rounded w-2/3" />
+            </div>
+
             {/* Header card: score ring + summary lines */}
             <div className="rounded-lg border border-gray-800 bg-gray-900/40 p-4 flex items-start gap-4">
                 {/* Score ring placeholder */}
@@ -43,7 +52,6 @@ export function ReviewSkeleton() {
 
             {/* Positives section */}
             <div className="space-y-2">
-                {/* "WHAT'S GOOD" label */}
                 <div className="h-3 bg-gray-800 rounded w-20 animate-pulse mx-1" />
                 <div className="rounded-lg border border-green-900/30 bg-green-950/10 p-4 space-y-2">
                     {[0, 1].map((i) => (

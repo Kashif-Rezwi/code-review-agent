@@ -32,13 +32,11 @@
   --radius-3xl: calc(var(--radius) + 12px);
   --radius-4xl: calc(var(--radius) + 16px);
 
-  /* ── App background tokens ─────────────────────────────────────────────── */
-  /* Registered here so Tailwind generates bg-app-bg / bg-editor-bg utilities */
-  --color-app-bg:    rgb(13 17 23);   /* #0d1117 — page background, body, header, page wrappers */
-  --color-editor-bg: rgb(15 21 33);   /* #0f1521 — Monaco editor / code card background        */
+  /* App background — registered so Tailwind generates bg-app-bg / bg-editor-bg */
+  --color-app-bg:    rgb(13 17 23);   /* #0d1117 — page background  */
+  --color-editor-bg: rgb(15 21 33);   /* #0f1521 — Monaco editor    */
 
-  /* ── Named shadow tokens ───────────────────────────────────────────────── */
-  /* Use shadow-glow-blue-sm / shadow-float etc. instead of bracket values    */
+  /* Named shadows — use shadow-glow-blue-sm / shadow-float instead of bracket values */
   --shadow-glow-blue-sm: 0 0 10px rgba(59,130,246,0.10);
   --shadow-glow-blue-md: 0 0 20px rgba(59,130,246,0.15);
   --shadow-glow-blue-lg: 0 0 30px rgba(59,130,246,0.20);
@@ -86,7 +84,7 @@
   * {
     @apply border-border outline-ring/50;
   }
-  /* Prevent elastic over-scroll bounce at page edges on all platforms */
+  /* Prevent elastic over-scroll bounce at page edges */
   html {
     overscroll-behavior: none;
     height: 100%;
@@ -98,11 +96,22 @@
   }
 }
 
-/* Trace-entry fade-in: new steps slide in from slight left as they stream */
+/* Trace entries slide in from the left as they stream */
 @keyframes fade-in {
   from { opacity: 0; transform: translateX(-6px); }
   to   { opacity: 1; transform: translateX(0); }
 }
 .animate-fade-in {
   animation: fade-in 0.2s ease-out both;
+}
+
+/* Streaming cursor — triggered by data-streaming attribute on AssistantMessage */
+@keyframes cursor-blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+[data-streaming] > *:last-child:not([data-code-block])::after {
+  content: " ▍";
+  animation: cursor-blink 0.75s step-end infinite;
+  color: rgb(156 163 175); /* gray-400 */
 }

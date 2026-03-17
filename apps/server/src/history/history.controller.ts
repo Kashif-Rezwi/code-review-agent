@@ -1,10 +1,11 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post } from '@nestjs/common'
+import { Body, Controller, Get, Param, Post, Res } from '@nestjs/common'
+import type { Response } from 'express'
 import { HistoryService } from './history.service'
 import { ChatMessageDto } from './dto/chat-message.dto'
 
 @Controller('history')
 export class HistoryController {
-    constructor(private readonly historyService: HistoryService) {}
+    constructor(private readonly historyService: HistoryService) { }
 
     // GET /history
     @Get()
@@ -12,7 +13,7 @@ export class HistoryController {
         return this.historyService.listReviews()
     }
 
-    // GET /history/stats — MUST be declared before :id to avoid NestJS treating "stats" as an id
+    // GET /history/stats — Must be declared before :id — NestJS matches literal segments first
     @Get('stats')
     getStats() {
         return this.historyService.getStats()
@@ -24,10 +25,9 @@ export class HistoryController {
         return this.historyService.getReview(id)
     }
 
-    // POST /history/:id/chat
+    // POST /history/:id/chat  — streams SSE token-by-token
     @Post(':id/chat')
-    @HttpCode(HttpStatus.OK)
-    chat(@Param('id') id: string, @Body() dto: ChatMessageDto) {
-        return this.historyService.chat(id, 'default', dto.message)
+    async chat(@Param('id') id: string, @Body() dto: ChatMessageDto, @Res() res: Response) {
+        await this.historyService.chat(id, 'default', dto.message, res)
     }
 }

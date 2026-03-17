@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useStickToBottom } from 'use-stick-to-bottom'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, Activity } from 'lucide-react'
@@ -10,7 +11,7 @@ import { ReviewPanel } from '@/components/review/review-panel'
 import { ReviewSkeleton } from '@/components/review/review-skeleton'
 import { ReviewInputDisplay } from '@/components/review/review-input-display'
 import { ReviewProgress } from '@/components/review/review-progress'
-import { UserBubble, AssistantMessage, LoadingIndicator } from '@/components/review/chat-message'
+import { ChatThread } from '@/components/review/chat-thread'
 import { ChatInput } from '@/components/review/chat-input'
 import { useChatMessages } from '@/lib/use-chat-messages'
 import { useTraceReplay } from '@/lib/use-trace-replay'
@@ -27,30 +28,32 @@ interface FullReview extends ReviewData {
 
 export default function ReviewDetailPage() {
     const { id } = useParams<{ id: string }>()
-    const [review,    setReview]    = useState<FullReview | null>(null)
+    const [review, setReview] = useState<FullReview | null>(null)
     const [isLoading, setIsLoading] = useState(true)
-    const [error,     setError]     = useState<string | null>(null)
+    const [error, setError] = useState<string | null>(null)
 
-    // `review` is set once — conversations are passed as initialMessages so
-    // useChatMessages can seed itself without exposing its internal setter.
-    const { messages, input, setInput, isSending, submit } = useChatMessages(id, review?.conversations)
+    const { messages, input, setInput, isSending, streamingContent, submit } = useChatMessages(id, review?.conversations)
 
-    const scrollContainerRef = useRef<HTMLDivElement>(null)
-    const bottomRef          = useRef<HTMLDivElement>(null)
+    const reviewPanelRef = useRef<HTMLDivElement>(null)
+    const chatSectionRef = useRef<HTMLDivElement>(null)
+
+    // use-stick-to-bottom: classifies wheel/pointer input to distinguish user scroll
+    // from programmatic scroll — eliminates the race condition that causes jitter.
+    const { scrollRef, contentRef, scrollToBottom, isAtBottom } = useStickToBottom({ initial: false })
 
     useEffect(() => {
         apiFetch<FullReview>(`/history/${id}`)
             .then(setReview)
             .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load review.'))
             .finally(() => setIsLoading(false))
-    }, [id, setReview, setError, setIsLoading])
+    }, [id])
 
-    useEffect(() => {
-        bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-    }, [messages, isSending])
+    const handleSubmit = useCallback(async () => {
+        scrollToBottom()
+        await submit()
+    }, [submit, scrollToBottom])
 
-    // Replay the stored trace synchronously — no streaming needed.
-    // Returns empty structures for pre-migration reviews (traceLog === null).
+    // Returns empty structures for pre-migration reviews (traceLog === null)
     const { traceEntries, clusterMap, taskItems, totalDurationMs, mode } =
         useTraceReplay(review?.traceLog ?? null)
 
@@ -60,14 +63,8 @@ export default function ReviewDetailPage() {
         <div className="h-screen flex flex-col bg-app-bg text-gray-100">
             <AppHeader />
 
-            <div ref={scrollContainerRef} className="flex-1 overflow-y-auto scroll-hide flex flex-col">
-                {/* Top gradient fade */}
-                <div className="sticky top-0 z-10 pointer-events-none">
-                    <div className="h-8 bg-gradient-to-b from-app-bg to-transparent" />
-                </div>
-
-                {/* pb-24 ensures content is never obscured by the fixed input overlay */}
-                <main className="flex-1 max-w-4xl mx-auto w-full px-6 space-y-6 pt-2 pb-24">
+            <div ref={scrollRef} className="flex-1 overflow-y-auto scroll-hide">
+                <main ref={contentRef} className="max-w-4xl mx-auto w-full px-6 space-y-6 pt-8 pb-24">
                     <Link
                         href="/history"
                         className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-300 transition-colors"
@@ -110,17 +107,17 @@ export default function ReviewDetailPage() {
                                 </div>
                             )}
 
-                            <ReviewPanel review={review} />
+                            <div ref={reviewPanelRef} className="scroll-mt-12">
+                                <ReviewPanel review={review} />
+                            </div>
 
-                            {/* Messages — keyed by index (safe: list is append-only) */}
-                            {messages.map((msg, i) =>
-                                msg.role === 'user'
-                                    ? <UserBubble key={i} content={msg.content} />
-                                    : <AssistantMessage key={i} content={msg.content} />
-                            )}
-
-                            {isSending && <LoadingIndicator />}
-                            <div ref={bottomRef} />
+                            <div ref={chatSectionRef}>
+                                <ChatThread
+                                    messages={messages}
+                                    streamingContent={streamingContent}
+                                    isSending={isSending}
+                                />
+                            </div>
                         </>
                     )}
                 </main>
@@ -131,9 +128,12 @@ export default function ReviewDetailPage() {
                 <ChatInput
                     value={input}
                     onChange={setInput}
-                    onSubmit={submit}
+                    onSubmit={handleSubmit}
                     disabled={isSending}
-                    scrollContainerRef={scrollContainerRef}
+                    chatSectionRef={chatSectionRef}
+                    isAtBottom={isAtBottom}
+                    onScrollToReview={() => reviewPanelRef.current?.scrollIntoView({ behavior: 'smooth' })}
+                    onScrollToLatest={() => scrollToBottom()}
                 />
             )}
         </div>
