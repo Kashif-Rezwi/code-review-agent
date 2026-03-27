@@ -17,12 +17,16 @@ interface GithubUserResponse {
     avatar_url: string
 }
 
-/** Minimal LRU entry: the resolved user + expiry timestamp. */
-interface CacheEntry {
+/** Shape of the authenticated user attached to req.user by AuthGuard. */
+export interface AuthUser {
     userId: string
     login: string
     name: string | null
     avatarUrl: string | null
+}
+
+/** Resolved user + expiry timestamp for the in-memory LRU cache. */
+interface CacheEntry extends AuthUser {
     expiresAt: number
 }
 
@@ -31,12 +35,16 @@ interface CacheEntry {
  * Results are cached in-memory for GITHUB_TOKEN_CACHE_TTL_MS (default 5 min) to
  * avoid hitting GitHub's rate limit on every SSE chunk.
  *
+ * In-flight deduplication ensures concurrent requests with the same new token
+ * only trigger one GitHub API call.
+ *
  * On success, attaches { userId, login, name, avatarUrl } to req.user.
  */
 @Injectable()
 export class AuthGuard implements CanActivate {
     private readonly logger = new Logger(AuthGuard.name)
     private readonly cache = new Map<string, CacheEntry>()
+    private readonly inFlight = new Map<string, Promise<CacheEntry>>()
     private readonly ttl: number
 
     constructor(
@@ -59,19 +67,54 @@ export class AuthGuard implements CanActivate {
             throw new UnauthorizedException('Bearer token is empty.')
         }
 
-        // Check the in-memory cache before making a GitHub API call
-        const cached = this.cache.get(token)
-        if (cached && cached.expiresAt > Date.now()) {
-            ;(req as any).user = {
-                userId: cached.userId,
-                login: cached.login,
-                name: cached.name,
-                avatarUrl: cached.avatarUrl,
-            }
-            return true
+        const entry = await this.resolve(token)
+
+        req.user = {
+            userId: entry.userId,
+            login: entry.login,
+            name: entry.name,
+            avatarUrl: entry.avatarUrl,
         }
 
-        // Validate token and fetch profile from GitHub
+        return true
+    }
+
+    /**
+     * Returns a cached entry if valid, otherwise resolves via GitHub API.
+     * Uses an in-flight map to deduplicate concurrent calls for the same token.
+     */
+    private async resolve(token: string): Promise<CacheEntry> {
+        // Cache hit
+        const cached = this.cache.get(token)
+        if (cached && cached.expiresAt > Date.now()) {
+            return cached
+        }
+
+        // In-flight dedup: if another request is already resolving this token, reuse its promise
+        const existing = this.inFlight.get(token)
+        if (existing) return existing
+
+        const promise = this.fetchAndUpsert(token)
+        this.inFlight.set(token, promise)
+
+        try {
+            const entry = await promise
+            // Prune stale entries before writing (cache never exceeds threshold)
+            if (this.cache.size >= 500) {
+                const now = Date.now()
+                for (const [k, v] of this.cache.entries()) {
+                    if (v.expiresAt <= now) this.cache.delete(k)
+                }
+            }
+            this.cache.set(token, entry)
+            return entry
+        } finally {
+            this.inFlight.delete(token)
+        }
+    }
+
+    /** Validates token against GitHub /user API and upserts the user record. */
+    private async fetchAndUpsert(token: string): Promise<CacheEntry> {
         let profile: GithubUserResponse
         try {
             const res = await fetch('https://api.github.com/user', {
@@ -92,11 +135,10 @@ export class AuthGuard implements CanActivate {
             profile = (await res.json()) as GithubUserResponse
         } catch (err) {
             if (err instanceof UnauthorizedException) throw err
-            this.logger.error(`GitHub /user API call failed: ${err}`)
+            this.logger.error(`GitHub /user API call failed: ${(err as Error).message}`)
             throw new UnauthorizedException('Could not validate credentials with GitHub.')
         }
 
-        // Upsert the User record in our database
         const user = await this.users.findOrCreate({
             id: String(profile.id),
             login: profile.login,
@@ -105,31 +147,12 @@ export class AuthGuard implements CanActivate {
             avatarUrl: profile.avatar_url,
         })
 
-        // Cache the result
-        const entry: CacheEntry = {
+        return {
             userId: user.id,
             login: user.login,
             name: user.name ?? null,
             avatarUrl: user.avatarUrl ?? null,
             expiresAt: Date.now() + this.ttl,
         }
-        this.cache.set(token, entry)
-
-        // Prune stale cache entries (simple GC — avoids unbounded growth)
-        if (this.cache.size > 500) {
-            const now = Date.now()
-            for (const [k, v] of this.cache.entries()) {
-                if (v.expiresAt <= now) this.cache.delete(k)
-            }
-        }
-
-        ;(req as any).user = {
-            userId: user.id,
-            login: user.login,
-            name: user.name ?? null,
-            avatarUrl: user.avatarUrl ?? null,
-        }
-
-        return true
     }
 }

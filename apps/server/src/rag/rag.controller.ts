@@ -44,19 +44,19 @@ export class RagController {
             )
         }
 
-        return this.ragService.ingest(file.buffer, file.mimetype, file.originalname, (req as any).user.userId)
+        return this.ragService.ingest(file.buffer, file.mimetype, file.originalname, req.user!.userId)
     }
 
     // GET /rag/documents
     @Get('documents')
     listDocuments(@Req() req: Request) {
-        return this.ragService.listDocuments((req as any).user.userId)
+        return this.ragService.listDocuments(req.user!.userId)
     }
 
     // DELETE /rag/documents/:id
     @Delete('documents/:id')
     @HttpCode(HttpStatus.NO_CONTENT)
     async deleteDocument(@Param('id') id: string, @Req() req: Request) {
-        await this.ragService.deleteDocument(id, (req as any).user.userId)
+        await this.ragService.deleteDocument(id, req.user!.userId)
     }
 }

@@ -33,10 +33,10 @@ export default function ReviewDetailPage() {
     const [isLoading, setIsLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
 
-    const { data: session } = useSession()
-    const githubToken = session?.githubToken ?? ''
+    const { data: session, status } = useSession()
+    const githubToken = session?.githubToken
 
-    const { messages, input, setInput, isSending, streamingContent, submit } = useChatMessages(id, review?.conversations, githubToken)
+    const { messages, input, setInput, isSending, streamingContent, submit } = useChatMessages(id, review?.conversations, githubToken ?? '')
 
     const reviewPanelRef = useRef<HTMLDivElement>(null)
     const chatSectionRef = useRef<HTMLDivElement>(null)
@@ -57,6 +57,18 @@ export default function ReviewDetailPage() {
         scrollToBottom()
         await submit()
     }, [submit, scrollToBottom])
+
+    if (status === 'loading') {
+        return (
+            <div className="h-screen flex flex-col bg-app-bg text-gray-100">
+                <AppHeader />
+                <main className="max-w-4xl mx-auto w-full px-6 pt-8 space-y-6">
+                    <div className="h-4 w-24 bg-gray-800 rounded animate-pulse" />
+                    <div className="h-full w-full bg-gray-900/40 border border-gray-800 rounded-lg animate-pulse" style={{ minHeight: 300 }} />
+                </main>
+            </div>
+        )
+    }
 
     // Returns empty structures for pre-migration reviews (traceLog === null)
     const { traceEntries, clusterMap, taskItems, totalDurationMs, mode } =
