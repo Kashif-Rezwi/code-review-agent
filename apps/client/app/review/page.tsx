@@ -52,6 +52,8 @@ export default function ReviewPage() {
     const isOverLimit = tokenCount > CODE_TOKEN_LIMIT
 
     const isStreaming = phase === 'connecting' || phase === 'streaming'
+    // Lock inputs the moment Review is submitted and keep them locked until Clear is pressed
+    const isLocked = isStreaming || phase === 'complete' || phase === 'error'
 
     const canSubmit =
         mode === 'code'
@@ -162,11 +164,12 @@ export default function ReviewPage() {
                     {(['code', 'pr'] as Mode[]).map((m) => (
                         <button
                             key={m}
-                            onClick={() => handleModeSwitch(m)}
+                            onClick={() => !isLocked && handleModeSwitch(m)}
+                            disabled={isLocked}
                             className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 ${mode === m
                                 ? 'bg-blue-500/15 text-blue-100 border border-blue-500/25 shadow-[0_0_10px_rgba(59,130,246,0.12)]'
                                 : 'text-gray-500 hover:text-gray-300 border border-transparent'
-                                }`}
+                                } ${isLocked ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}`}
                         >
                             {m === 'code'
                                 ? <><Code2 className="w-4 h-4" /> Paste Code</>
@@ -182,14 +185,15 @@ export default function ReviewPage() {
                         language={detectedLanguage}
                         tokenCount={tokenCount}
                         isOverLimit={isOverLimit}
-                        onChange={handleEditorChange}
+                        onChange={isLocked ? undefined : handleEditorChange}
+                        readOnly={isLocked}
                     />
                 ) : (
                     <PrUrlInput
                         value={prUrl}
                         onChange={setPrUrl}
                         onSubmit={handleReview}
-                        disabled={isStreaming}
+                        disabled={isStreaming || isLocked}
                     />
                 )}
 
@@ -246,7 +250,7 @@ export default function ReviewPage() {
                             )}
                         </div>
                     )}
-                    {(code || prUrl || review) && !isStreaming && (
+                    {(code || prUrl || review || isLocked) && (
                         <button
                             onClick={handleClear}
                             className="px-4 py-2.5 text-sm font-medium text-gray-400 hover:text-gray-200 hover:bg-gray-800/60 rounded-lg transition-all duration-200 cursor-pointer"
