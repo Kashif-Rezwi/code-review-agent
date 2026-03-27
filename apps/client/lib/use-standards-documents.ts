@@ -31,7 +31,7 @@ interface UseStandardsDocuments {
 const ALLOWED_TYPES = ['text/plain', 'application/pdf', 'text/markdown']
 const MAX_SIZE_BYTES = 5 * 1024 * 1024 // 5 MB
 
-export function useStandardsDocuments(): UseStandardsDocuments {
+export function useStandardsDocuments(githubToken?: string): UseStandardsDocuments {
     const [documents,     setDocuments]     = useState<StandardsDocument[]>([])
     const [isLoading,     setIsLoading]     = useState(true)
     const [isUploading,   setIsUploading]   = useState(false)
@@ -41,14 +41,14 @@ export function useStandardsDocuments(): UseStandardsDocuments {
 
     const fetchDocuments = useCallback(async () => {
         try {
-            const docs = await apiFetch<StandardsDocument[]>('/rag/documents')
+            const docs = await apiFetch<StandardsDocument[]>('/rag/documents', undefined, githubToken)
             setDocuments(docs)
         } catch {
             // silently ignore — list can be refetched on next interaction
         } finally {
             setIsLoading(false)
         }
-    }, [])
+    }, [githubToken])
 
     useEffect(() => { fetchDocuments() }, [fetchDocuments])
 
@@ -70,7 +70,7 @@ export function useStandardsDocuments(): UseStandardsDocuments {
         formData.append('file', file)
 
         try {
-            await apiFetch<unknown>('/rag/upload', { method: 'POST', body: formData })
+            await apiFetch<unknown>('/rag/upload', { method: 'POST', body: formData }, githubToken)
             setUploadSuccess(`"${file.name}" uploaded successfully.`)
             await fetchDocuments()
         } catch (err) {
@@ -83,7 +83,7 @@ export function useStandardsDocuments(): UseStandardsDocuments {
     const deleteDocument = useCallback(async (id: string, name: string) => {
         setDeletingId(id)
         try {
-            await apiFetch<void>(`/rag/documents/${id}`, { method: 'DELETE' })
+            await apiFetch<void>(`/rag/documents/${id}`, { method: 'DELETE' }, githubToken)
             setDocuments(prev => prev.filter(d => d.id !== id))
             setUploadSuccess(prev => (prev?.includes(name) ? null : prev))
         } catch {

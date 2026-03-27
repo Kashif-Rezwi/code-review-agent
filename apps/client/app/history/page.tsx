@@ -10,6 +10,7 @@ import { ScoreBadge } from '@/components/review/score-badge'
 import { Badge } from '@/components/ui/badge'
 import { apiFetch } from '@/lib/api'
 import { TYPE_CONFIG } from '@/types/review-config'
+import { useSession } from 'next-auth/react'
 
 interface ReviewSummary {
     id: string
@@ -32,12 +33,16 @@ export default function HistoryPage() {
     const [isLoading, setIsLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
 
+    const { data: session } = useSession()
+    const githubToken = session?.githubToken ?? ''
+
     useEffect(() => {
+        if (!githubToken) return
         const load = async () => {
             try {
                 const [reviewsData, statsData] = await Promise.all([
-                    apiFetch<ReviewSummary[]>('/history'),
-                    apiFetch<Stats>('/history/stats'),
+                    apiFetch<ReviewSummary[]>('/history', undefined, githubToken),
+                    apiFetch<Stats>('/history/stats', undefined, githubToken),
                 ])
                 setReviews(reviewsData)
                 setStats(statsData)
@@ -48,7 +53,7 @@ export default function HistoryPage() {
             }
         }
         load()
-    }, [])
+    }, [githubToken])
 
     return (
         <div className="min-h-screen bg-app-bg text-gray-100">

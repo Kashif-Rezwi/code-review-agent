@@ -16,6 +16,7 @@ import { ChatInput } from '@/components/review/chat-input'
 import { useChatMessages } from '@/lib/use-chat-messages'
 import { useTraceReplay } from '@/lib/use-trace-replay'
 import { apiFetch } from '@/lib/api'
+import { useSession } from 'next-auth/react'
 import type { ReviewData, ChatMessage, ReviewStreamEvent } from '@/types/review.types'
 
 interface FullReview extends ReviewData {
@@ -32,7 +33,10 @@ export default function ReviewDetailPage() {
     const [isLoading, setIsLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
 
-    const { messages, input, setInput, isSending, streamingContent, submit } = useChatMessages(id, review?.conversations)
+    const { data: session } = useSession()
+    const githubToken = session?.githubToken ?? ''
+
+    const { messages, input, setInput, isSending, streamingContent, submit } = useChatMessages(id, review?.conversations, githubToken)
 
     const reviewPanelRef = useRef<HTMLDivElement>(null)
     const chatSectionRef = useRef<HTMLDivElement>(null)
@@ -42,11 +46,12 @@ export default function ReviewDetailPage() {
     const { scrollRef, contentRef, scrollToBottom, isAtBottom } = useStickToBottom({ initial: false })
 
     useEffect(() => {
-        apiFetch<FullReview>(`/history/${id}`)
+        if (!githubToken) return
+        apiFetch<FullReview>(`/history/${id}`, undefined, githubToken)
             .then(setReview)
             .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load review.'))
             .finally(() => setIsLoading(false))
-    }, [id])
+    }, [id, githubToken])
 
     const handleSubmit = useCallback(async () => {
         scrollToBottom()
