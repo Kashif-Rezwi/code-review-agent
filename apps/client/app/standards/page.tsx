@@ -13,8 +13,12 @@ import { AppHeader } from '@/components/layout/app-header'
 import { PageHeader } from '@/components/layout/page-header'
 import { StatusMessage } from '@/components/ui/status-message'
 import { useStandardsDocuments } from '@/lib/use-standards-documents'
+import { useSession } from 'next-auth/react'
 
 export default function StandardsPage() {
+    const { data: session } = useSession()
+    const githubToken = session?.githubToken ?? ''
+
     const {
         documents,
         isLoading,
@@ -24,7 +28,7 @@ export default function StandardsPage() {
         uploadSuccess,
         uploadFile,
         deleteDocument,
-    } = useStandardsDocuments()
+    } = useStandardsDocuments(githubToken)
 
     const [isDragging, setIsDragging] = useState(false)
     const fileInputRef = useRef<HTMLInputElement>(null)

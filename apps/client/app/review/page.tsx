@@ -17,6 +17,7 @@ import { isValidPrUrl } from '@/lib/validate'
 import { PrUrlInput } from '@/components/ui/pr-url-input'
 import { ReviewErrorBoundary } from '@/components/ui/error-boundary'
 import { cn } from '@/lib/utils'
+import { useSession } from 'next-auth/react'
 
 type Mode = 'code' | 'pr'
 
@@ -28,12 +29,15 @@ export default function ReviewPage() {
     const [code, setCode] = useState('')
     const [prUrl, setPrUrl] = useState('')
 
-    const { phase, taskItems, traceEntries, clusterMap, review, error, totalDurationMs, submit, reset } = useReviewStream()
+    const { data: session, status } = useSession()
+    const githubToken = session?.githubToken
+
+    const { phase, taskItems, traceEntries, clusterMap, review, error, totalDurationMs, submit, reset } = useReviewStream(githubToken ?? '')
 
     // reviewId drives the follow-up chat — available once complete event arrives.
     const reviewId = review?.id ?? null
 
-    const { messages, input, setInput, isSending, streamingContent, submit: sendChat } = useChatMessages(reviewId)
+    const { messages, input, setInput, isSending, streamingContent, submit: sendChat } = useChatMessages(reviewId, undefined, githubToken ?? '')
 
     const bottomRef = useRef<HTMLDivElement>(null)
     const reviewPanelRef = useRef<HTMLDivElement>(null)
@@ -221,7 +225,7 @@ export default function ReviewPage() {
                                 {phase === 'connecting' && mode === 'pr' && 'Connecting'}
                                 {(phase === 'streaming' || (phase === 'connecting' && mode === 'code')) && (
                                     <span className="inline-flex items-center">
-                                        <span className="bg-gradient-to-r from-blue-400 to-indigo-400 text-transparent bg-clip-text font-semibold tracking-wide">Running AI Review</span>
+                                        <span className="bg-gradient-to-r from-blue-300 to-blue-500 text-transparent bg-clip-text font-semibold tracking-wide">Running AI Review</span>
                                         <Loader2 className="h-4 w-4 shrink-0 animate-spin text-blue-400 ml-3" />
                                     </span>
                                 )}
