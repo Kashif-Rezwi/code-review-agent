@@ -71,7 +71,7 @@ export function AppHeader() {
                         <button
                             id="user-menu-btn"
                             onClick={() => setMenuOpen(o => !o)}
-                            className="flex items-center gap-2 group"
+                            className="flex items-center gap-2 group cursor-pointer"
                             aria-label="Account menu"
                         >
                             {session.user.image ? (
@@ -110,7 +110,7 @@ export function AppHeader() {
                                     <button
                                         id="signout-btn"
                                         onClick={() => signOut({ callbackUrl: '/login' })}
-                                        className="w-full flex items-center gap-3 px-3.5 py-2.5 text-sm font-medium text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-xl transition-colors"
+                                        className="w-full flex items-center gap-3 px-3.5 py-2.5 text-sm font-medium text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-xl transition-colors cursor-pointer"
                                     >
                                         <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24" aria-hidden>
                                             <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
