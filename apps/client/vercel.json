@@ -1,4 +1,5 @@
 {
     "installCommand": "cd ../.. && pnpm install --frozen-lockfile",
-    "buildCommand": "cd ../.. && pnpm --filter client build"
+    "buildCommand": "cd ../.. && pnpm --filter client build",
+    "ignoreCommand": "bash -c 'if [ \"$VERCEL_GIT_COMMIT_REF\" != \"main\" ]; then exit 0; else git diff --quiet HEAD^ HEAD ./ ../../packages/ && exit 0 || exit 1; fi'"
 }
