@@ -279,7 +279,7 @@ export function useReviewStream(githubToken?: string): UseReviewStreamReturn {
                 setPhase('error')
             }
         })()
-    }, [resetState])
+    }, [githubToken, resetState])
 
     return { phase, taskItems, traceEntries, clusterMap, review, error, totalDurationMs, submit, reset }
 }

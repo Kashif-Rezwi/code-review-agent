@@ -32,12 +32,12 @@ export default function ReviewPage() {
     const { data: session, status } = useSession()
     const githubToken = session?.githubToken
 
-    const { phase, taskItems, traceEntries, clusterMap, review, error, totalDurationMs, submit, reset } = useReviewStream(githubToken ?? '')
+    const { phase, taskItems, traceEntries, clusterMap, review, error, totalDurationMs, submit, reset } = useReviewStream(githubToken)
 
     // reviewId drives the follow-up chat — available once complete event arrives.
     const reviewId = review?.id ?? null
 
-    const { messages, input, setInput, isSending, streamingContent, submit: sendChat } = useChatMessages(reviewId, undefined, githubToken ?? '')
+    const { messages, input, setInput, isSending, streamingContent, submit: sendChat } = useChatMessages(reviewId, undefined, githubToken)
 
     const bottomRef = useRef<HTMLDivElement>(null)
     const reviewPanelRef = useRef<HTMLDivElement>(null)
