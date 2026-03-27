@@ -8,28 +8,40 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
+// ── Auth: Users ──────────────────────────────────────────────────────────────
+// Keyed by GitHub numeric user ID (stored as string).
+// findOrCreate on every authenticated request via AuthGuard.
+
+model User {
+  id        String   @id          // GitHub user ID as string, e.g. "12345678"
+  login     String   @unique      // GitHub username, e.g. "kashifrezwi"
+  name      String?
+  email     String?
+  avatarUrl String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
 // ── RAG: Coding Standards ───────────────────────────────────────────────────
-// userId defaults to "default" until Week 6 wires real auth.
 
 model Document {
   id        String          @id @default(cuid())
-  userId    String          @default("default")
+  userId    String          // GitHub user ID; existing rows with "default" are ignored
   name      String
   chunks    DocumentChunk[]
   createdAt DateTime        @default(now())
 }
 
 model DocumentChunk {
-  id         String                     @id @default(cuid())
+  id         String                      @id @default(cuid())
   documentId String
-  document   Document                   @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  document   Document                    @relation(fields: [documentId], references: [id], onDelete: Cascade)
   content    String
   embedding  Unsupported("vector(1536)")?
   metadata   Json?
 }
 
 // ── Memory: Review History ───────────────────────────────────────────────────
-// userId defaults to "default" until Week 6 wires real auth.
 
 enum ReviewType {
   CODE
@@ -38,7 +50,7 @@ enum ReviewType {
 
 model Review {
   id               String         @id @default(cuid())
-  userId           String         @default("default")
+  userId           String         // GitHub user ID; existing rows with "default" are ignored
   type             ReviewType
   input            String         @db.Text
   summary          String         @db.Text

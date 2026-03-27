@@ -19,7 +19,7 @@ export class HistoryService {
         this.openai = createOpenAI({ apiKey: config.get<string>('OPENAI_API_KEY') })
     }
 
-    listReviews(userId = 'default') {
+    listReviews(userId: string) {
         return this.prisma.review.findMany({
             where: { userId },
             select: {
@@ -34,7 +34,7 @@ export class HistoryService {
         })
     }
 
-    async getReview(id: string, userId = 'default') {
+    async getReview(id: string, userId: string) {
         const review = await this.prisma.review.findFirst({
             where: { id, userId },
             include: {
@@ -46,7 +46,7 @@ export class HistoryService {
         return review
     }
 
-    async getStats(userId = 'default') {
+    async getStats(userId: string) {
         const [totalReviews, byType, bySeverity] = await Promise.all([
             this.prisma.review.count({ where: { userId } }),
             this.prisma.issue.groupBy({
@@ -72,7 +72,7 @@ export class HistoryService {
         }
     }
 
-    async chat(id: string, userId = 'default', message: string, res: Response) {
+    async chat(id: string, userId: string, message: string, res: Response) {
         // Validate before touching res — NotFoundException is handled by NestJS before headers are set
         const review = await this.getReview(id, userId)
         const system = this.buildChatSystem(review)
