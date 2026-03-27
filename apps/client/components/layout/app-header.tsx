@@ -39,7 +39,7 @@ export function AppHeader() {
             {/* Brand */}
             <div className="flex items-center gap-2">
                 <Code2 className="w-5 h-5 text-blue-400" />
-                <span className="font-semibold text-white">Code Review Agent</span>
+                <span className="font-semibold text-white">Code Review <span className="text-blue-400">Agent</span></span>
             </div>
 
             {/* Right side: nav + profile */}
@@ -80,10 +80,10 @@ export function AppHeader() {
                                     alt={session.user.name ?? 'User'}
                                     width={28}
                                     height={28}
-                                    className="rounded-full ring-2 ring-indigo-400/50"
+                                    className="rounded-full ring-2 ring-blue-400/50"
                                 />
                             ) : (
-                                <div className="w-7 h-7 rounded-full bg-indigo-500/20 flex items-center justify-center text-xs text-indigo-300 font-semibold ring-2 ring-indigo-400/50">
+                                <div className="w-7 h-7 rounded-full bg-blue-500/20 flex items-center justify-center text-xs text-blue-300 font-semibold ring-2 ring-blue-400/50">
                                     {session.user.name?.[0] ?? '?'}
                                 </div>
                             )}

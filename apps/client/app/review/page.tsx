@@ -225,7 +225,7 @@ export default function ReviewPage() {
                                 {phase === 'connecting' && mode === 'pr' && 'Connecting'}
                                 {(phase === 'streaming' || (phase === 'connecting' && mode === 'code')) && (
                                     <span className="inline-flex items-center">
-                                        <span className="bg-gradient-to-r from-blue-400 to-indigo-400 text-transparent bg-clip-text font-semibold tracking-wide">Running AI Review</span>
+                                        <span className="bg-gradient-to-r from-blue-300 to-blue-500 text-transparent bg-clip-text font-semibold tracking-wide">Running AI Review</span>
                                         <Loader2 className="h-4 w-4 shrink-0 animate-spin text-blue-400 ml-3" />
                                     </span>
                                 )}

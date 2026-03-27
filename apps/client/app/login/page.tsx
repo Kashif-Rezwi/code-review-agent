@@ -25,43 +25,10 @@ export default function LoginPage() {
                 alignItems: 'center',
                 justifyContent: 'center',
                 overflow: 'hidden',
-                backgroundColor: '#080810',
+                backgroundColor: '#090e13',
                 fontFamily: 'var(--font-geist-sans), system-ui, sans-serif',
             }}
         >
-            {/* Orb 1 — top-left, indigo, 600×600px, opacity 0.3 */}
-            <div
-                aria-hidden
-                style={{
-                    position: 'absolute',
-                    top: '-20%',
-                    left: '-10%',
-                    width: 600,
-                    height: 600,
-                    borderRadius: '50%',
-                    opacity: 0.3,
-                    background: 'radial-gradient(circle, rgba(99,102,241,0.4) 0%, transparent 70%)',
-                    pointerEvents: 'none',
-                    animation: 'orbFloat 8s ease-in-out infinite',
-                }}
-            />
-
-            {/* Orb 2 — bottom-right, purple, 500×500px, opacity 0.2 */}
-            <div
-                aria-hidden
-                style={{
-                    position: 'absolute',
-                    bottom: '-15%',
-                    right: '-5%',
-                    width: 500,
-                    height: 500,
-                    borderRadius: '50%',
-                    opacity: 0.2,
-                    background: 'radial-gradient(circle, rgba(168,85,247,0.4) 0%, transparent 70%)',
-                    pointerEvents: 'none',
-                    animation: 'orbFloat 10s ease-in-out infinite reverse',
-                }}
-            />
 
             {/* Content */}
             <div
@@ -85,7 +52,7 @@ export default function LoginPage() {
                                 lineHeight: 1.1,
                             }}
                         >
-                            Code Review<span style={{ color: '#818cf8' }}> Agent</span>
+                            Code Review<span style={{ color: '#60a5fa' }}> Agent</span>
                         </span>
                     </div>
                     <p
@@ -101,17 +68,17 @@ export default function LoginPage() {
                     </p>
                 </div>
 
-                {/* Glass card — glass + glow-indigo */}
+                {/* Glass card — glass + blue glow */}
                 <div
                     style={{
                         width: '100%',
                         maxWidth: 360,
-                        backgroundColor: 'rgba(255,255,255,0.04)',
+                        backgroundColor: 'rgba(255,255,255,0.025)',
                         border: '1px solid rgba(255,255,255,0.08)',
                         borderRadius: 16,
                         padding: '28px 28px 24px',
                         textAlign: 'center',
-                        boxShadow: 'rgba(99,102,241,0.25) 0px 0px 40px 0px',
+                        boxShadow: '0 0 0 1px rgba(59,130,246,0.1), 0 0 32px rgba(59,130,246,0.12)',
                     }}
                 >
                     <p
@@ -148,7 +115,7 @@ export default function LoginPage() {
                             fontFamily: 'inherit',
                         }}
                         onMouseEnter={e => {
-                            e.currentTarget.style.boxShadow = '0 0 20px rgba(99,102,241,0.3)'
+                            e.currentTarget.style.boxShadow = 'rgba(9,14,19,0.6) 0px 8px 24px 0px'
                             e.currentTarget.style.transform = 'scale(1.02)'
                         }}
                         onMouseLeave={e => {
@@ -179,12 +146,7 @@ export default function LoginPage() {
                 </p>
             </div>
 
-            <style>{`
-                @keyframes orbFloat {
-                    0%, 100% { transform: translateY(0px) scale(1); }
-                    50% { transform: translateY(-20px) scale(1.05); }
-                }
-            `}</style>
+
         </main>
     )
 }
