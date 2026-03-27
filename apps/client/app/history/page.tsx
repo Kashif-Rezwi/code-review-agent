@@ -10,6 +10,7 @@ import { ScoreBadge } from '@/components/review/score-badge'
 import { Badge } from '@/components/ui/badge'
 import { apiFetch } from '@/lib/api'
 import { TYPE_CONFIG } from '@/types/review-config'
+import { useSession } from 'next-auth/react'
 
 interface ReviewSummary {
     id: string
@@ -32,12 +33,16 @@ export default function HistoryPage() {
     const [isLoading, setIsLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
 
+    const { data: session, status } = useSession()
+    const githubToken = session?.githubToken
+
     useEffect(() => {
+        if (!githubToken) return
         const load = async () => {
             try {
                 const [reviewsData, statsData] = await Promise.all([
-                    apiFetch<ReviewSummary[]>('/history'),
-                    apiFetch<Stats>('/history/stats'),
+                    apiFetch<ReviewSummary[]>('/history', undefined, githubToken),
+                    apiFetch<Stats>('/history/stats', undefined, githubToken),
                 ])
                 setReviews(reviewsData)
                 setStats(statsData)
@@ -48,9 +53,24 @@ export default function HistoryPage() {
             }
         }
         load()
-    }, [])
+    }, [githubToken])
 
-    return (
+    if (status === 'loading') {
+        return (
+            <div className="min-h-screen bg-app-bg text-gray-100">
+                <AppHeader />
+                <main className="max-w-4xl mx-auto p-6 space-y-6">
+                    <div className="h-8 w-48 rounded-lg bg-gray-800 animate-pulse" />
+                    <div className="space-y-2">
+                        {[1, 2, 3].map(n => (
+                            <div key={n} className="rounded-lg border border-gray-800 bg-gray-900/40 h-16 animate-pulse" />
+                        ))}
+                    </div>
+                </main>
+            </div>
+        )
+    }
+
         <div className="min-h-screen bg-app-bg text-gray-100">
             <AppHeader />
 

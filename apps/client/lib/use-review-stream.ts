@@ -65,7 +65,7 @@ export interface UseReviewStreamReturn {
 
 // ── Hook ──────────────────────────────────────────────────────────────────────
 
-export function useReviewStream(): UseReviewStreamReturn {
+export function useReviewStream(githubToken?: string): UseReviewStreamReturn {
     const [phase, setPhase] = useState<StreamPhase>('idle')
     const [taskItems, setTaskItems] = useState<TaskItem[]>([])
     const [traceEntries, setTraceEntries] = useState<TraceEntry[]>([])
@@ -117,7 +117,10 @@ export function useReviewStream(): UseReviewStreamReturn {
             try {
                 const response = await fetch(`${API_URL}${endpoint}`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...(githubToken ? { Authorization: `Bearer ${githubToken}` } : {}),
+                    },
                     body: JSON.stringify(payload),
                     signal: controller.signal,
                 })

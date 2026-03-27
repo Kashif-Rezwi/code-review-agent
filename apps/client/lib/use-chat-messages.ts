@@ -23,6 +23,7 @@ interface UseChatMessages {
 export function useChatMessages(
     reviewId: string | null,
     initialMessages?: ChatMessage[],
+    githubToken?: string,
 ): UseChatMessages {
     const [messages, setMessages] = useState<ChatMessage[]>([])
     const [input, setInput] = useState('')
@@ -67,7 +68,10 @@ export function useChatMessages(
         try {
             const res = await fetch(`${API_URL}/history/${reviewId}/chat`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(githubToken ? { Authorization: `Bearer ${githubToken}` } : {}),
+                },
                 body: JSON.stringify({ message }),
             })
 

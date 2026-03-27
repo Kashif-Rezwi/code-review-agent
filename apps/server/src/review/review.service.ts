@@ -61,26 +61,29 @@ export class ReviewService {
         this.hasDb = !!this.config.get('DATABASE_URL')
     }
 
-    async analyzeCode(code: string): Promise<ReviewData> {
-        const standards = await this.ragService.retrieveForContext(code)
+    async analyzeCode(code: string, userId: string): Promise<ReviewData> {
+        const standards = await this.ragService.retrieveForContext(code, userId)
         return this.runAgent(
             `Please review the following code:\n\`\`\`\n${code}\n\`\`\``,
             standards,
             code,
             'CODE',
+            userId,
         )
     }
 
-    async analyzeFromPR(prUrl: string): Promise<ReviewData> {
+    async analyzeFromPR(prUrl: string, userId: string): Promise<ReviewData> {
         this.githubService.assertValidPRUrl(prUrl)
         const standards = await this.ragService.retrieveForContext(
             'code review standards best practices',
+            userId,
         )
         return this.runAgent(
             `Please review this GitHub pull request: ${prUrl}`,
             standards,
             prUrl,
             'PR',
+            userId,
         )
     }
 
@@ -89,18 +92,19 @@ export class ReviewService {
     // instead of returning a Promise<ReviewData>.  The controller injects the
     // raw Express Response so the service can write directly.
 
-    async streamAnalyzeCode(code: string, res: Response): Promise<void> {
-        const standards = await this.ragService.retrieveForContext(code)
+    async streamAnalyzeCode(code: string, res: Response, userId: string): Promise<void> {
+        const standards = await this.ragService.retrieveForContext(code, userId)
         return this.streamAnalysis(
             `Please review the following code:\n\`\`\`\n${code}\n\`\`\``,
             standards,
             code,
             'CODE',
             res,
+            userId,
         )
     }
 
-    async streamAnalyzeFromPR(prUrl: string, res: Response): Promise<void> {
+    async streamAnalyzeFromPR(prUrl: string, res: Response, userId: string): Promise<void> {
         this.githubService.assertValidPRUrl(prUrl)
 
         const conn = initSse(res)
@@ -111,7 +115,7 @@ export class ReviewService {
 
             // ── Phase 1: Fetch files and RAG standards in parallel ────────────
             const [standards, files] = await Promise.all([
-                this.ragService.retrieveForContext('code review standards best practices'),
+                this.ragService.retrieveForContext('code review standards best practices', userId),
                 this.githubService.fetchPRFiles(prUrl).catch(() => null),
             ])
 
@@ -119,7 +123,7 @@ export class ReviewService {
             if (!files || files.length === 0) {
                 return this.streamAnalysis(
                     `Please review this GitHub pull request: ${prUrl}`,
-                    standards, prUrl, 'PR', res, conn,
+                    standards, prUrl, 'PR', res, userId, conn,
                 )
             }
 
@@ -189,7 +193,7 @@ export class ReviewService {
             if (partialReviews.length === 1) {
                 const only = partialReviews[0].review
                 const merged = { ...only, appliedStandards: standards?.appliedNames }
-                const id = await this.saveReview(prUrl, 'PR', merged, conn.getTrace())
+                const id = await this.saveReview(prUrl, 'PR', merged, userId, conn.getTrace())
                 send({
                     type: 'complete',
                     review: { ...merged, id },
@@ -205,7 +209,7 @@ export class ReviewService {
             // parse failure never surfaces as an error to the user.
             const finalReview = await this.synthesizeReview(prUrl, partialReviews, standards)
             const merged = { ...finalReview, appliedStandards: standards?.appliedNames }
-            const id = await this.saveReview(prUrl, 'PR', merged, conn.getTrace())
+            const id = await this.saveReview(prUrl, 'PR', merged, userId, conn.getTrace())
 
             send({
                 type: 'complete',
@@ -230,6 +234,7 @@ export class ReviewService {
         standards: Awaited<ReturnType<RagService['retrieveForContext']>>,
         input: string,
         reviewType: 'CODE' | 'PR',
+        userId: string,
     ): Promise<ReviewData> {
         const system = standards
             ? `${buildSystemPrompt(reviewType)}\n\nYour team's coding standards — apply these during the review:\n\n${standards.content}`
@@ -289,7 +294,7 @@ export class ReviewService {
             }
 
             const merged = { ...review, appliedStandards: standards?.appliedNames }
-            const id = await this.saveReview(input, reviewType, merged)
+            const id = await this.saveReview(input, reviewType, merged, userId)
             return { ...merged, id }
         } catch (err: unknown) {
             if (err instanceof HttpException) throw err
@@ -309,6 +314,7 @@ export class ReviewService {
         input: string,
         reviewType: 'CODE' | 'PR',
         res: Response,
+        userId: string,
         existingConn?: SseConnection,
     ): Promise<void> {
         let _conn: SseConnection
@@ -382,7 +388,7 @@ export class ReviewService {
             }
 
             const merged = { ...review, appliedStandards: standards?.appliedNames }
-            const id = await this.saveReview(input, reviewType, merged, _conn.getTrace())
+            const id = await this.saveReview(input, reviewType, merged, userId, _conn.getTrace())
             _send({
                 type: 'complete',
                 review: { ...merged, id },
@@ -663,12 +669,14 @@ export class ReviewService {
         input: string,
         type: 'CODE' | 'PR',
         data: ReviewData,
+        userId: string,
         traceLog?: ReviewStreamEvent[],
     ): Promise<string | undefined> {
         if (!this.hasDb) return undefined
         try {
             const saved = await this.prisma.review.create({
                 data: {
+                    userId,
                     type,
                     input,
                     summary: data.summary,

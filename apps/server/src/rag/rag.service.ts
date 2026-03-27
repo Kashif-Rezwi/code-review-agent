@@ -33,7 +33,7 @@ export class RagService {
 
     // ── Ingest ───────────────────────────────────────────────────────────────
 
-    async ingest(buffer: Buffer, mimeType: string, fileName: string, userId = 'default') {
+    async ingest(buffer: Buffer, mimeType: string, fileName: string, userId: string) {
         const text = await this.extractText(buffer, mimeType)
         const chunks = chunkText(text)
 
@@ -71,7 +71,7 @@ export class RagService {
      * Returns null — never throws — so reviews degrade gracefully when
      * no standards are uploaded or the DB is unavailable.
      */
-    async retrieveForContext(queryText: string, userId = 'default'): Promise<RetrievedStandards | null> {
+    async retrieveForContext(queryText: string, userId: string): Promise<RetrievedStandards | null> {
         if (!this.hasDb) return null
 
         try {
@@ -106,7 +106,7 @@ export class RagService {
 
     // ── List & Delete ─────────────────────────────────────────────────────────
 
-    listDocuments(userId = 'default') {
+    listDocuments(userId: string) {
         return this.prisma.document.findMany({
             where: { userId },
             select: {
@@ -119,7 +119,7 @@ export class RagService {
         })
     }
 
-    deleteDocument(id: string, userId = 'default') {
+    deleteDocument(id: string, userId: string) {
         return this.prisma.document.delete({ where: { id, userId } })
     }
 
