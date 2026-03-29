@@ -17,7 +17,7 @@ import { useSession } from 'next-auth/react'
 
 export default function StandardsPage() {
     const { data: session } = useSession()
-    const githubToken = session?.githubToken ?? ''
+    const githubToken = session?.githubToken
 
     const {
         documents,

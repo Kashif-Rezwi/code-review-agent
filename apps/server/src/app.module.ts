@@ -5,6 +5,7 @@ import { RagModule } from './rag/rag.module'
 import { ReviewModule } from './review/review.module'
 import { HistoryModule } from './history/history.module'
 import { AuthModule } from './auth/auth.module'
+import { HealthController } from './health.controller'
 
 @Module({
     imports: [
@@ -15,5 +16,6 @@ import { AuthModule } from './auth/auth.module'
         ReviewModule,
         HistoryModule,
     ],
+    controllers: [HealthController],
 })
 export class AppModule {}

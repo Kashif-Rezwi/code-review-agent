@@ -103,7 +103,7 @@ export function useChatMessages(
             setStreamingContent(null)
             setIsSending(false)
         }
-    }, [reviewId, input])
+    }, [reviewId, input, githubToken])
 
     return { messages, input, setInput, isSending, streamingContent, submit }
 }

@@ -36,7 +36,7 @@ export default function ReviewDetailPage() {
     const { data: session, status } = useSession()
     const githubToken = session?.githubToken
 
-    const { messages, input, setInput, isSending, streamingContent, submit } = useChatMessages(id, review?.conversations, githubToken ?? '')
+    const { messages, input, setInput, isSending, streamingContent, submit } = useChatMessages(id, review?.conversations, githubToken)
 
     const reviewPanelRef = useRef<HTMLDivElement>(null)
     const chatSectionRef = useRef<HTMLDivElement>(null)

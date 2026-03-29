@@ -1,0 +1,32 @@
+# ── Git ──────────────────────────────────────────────────────────────────────
+.git
+.gitignore
+.gitattributes
+
+# ── Dependencies (reinstalled fresh inside Docker) ───────────────────────────
+**/node_modules/
+
+# ── Build outputs (rebuilt inside Docker) ────────────────────────────────────
+apps/client/.next/
+apps/server/dist/
+packages/*/dist/
+
+# ── TypeScript build info ─────────────────────────────────────────────────────
+**/*.tsbuildinfo
+
+# ── Environment files (injected at runtime) ───────────────────────────────────
+**/.env
+**/.env.*
+!**/.env.example
+
+# ── Editor & OS ───────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+*.log
+npm-debug.log*
+
+# ── Test & CI artifacts ────────────────────────────────────────────────────────
+**/coverage/
+**/*.spec.ts
+**/*.e2e-spec.ts
