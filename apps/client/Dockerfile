@@ -6,9 +6,6 @@ FROM node:22-alpine AS base
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
 
-# git is required because @nanostores/react is a git+https:// dependency
-RUN apk add --no-cache git
-
 RUN corepack enable && corepack prepare pnpm@10.30.3 --activate
 
 WORKDIR /app
@@ -18,8 +15,12 @@ WORKDIR /app
 # ─────────────────────────────────────────────────────────────────────────────
 FROM base AS deps
 
+# git is required because @nanostores/react is a git+https:// dependency.
+# Installed here (not in base) so it doesn't pollute unrelated stages.
+RUN apk add --no-cache git
+
 # Copy manifests for all workspace members so pnpm can resolve the full graph
-COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
+COPY pnpm-workspace.yaml pnpm-lock.yaml package.json .npmrc ./
 COPY apps/client/package.json ./apps/client/
 COPY packages/ai/package.json ./packages/ai/
 COPY packages/types/package.json ./packages/types/
@@ -50,8 +51,8 @@ ARG NEXT_PUBLIC_API_URL
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 
 # 2. Build Next.js app (produces .next/standalone via output: 'standalone')
-WORKDIR /app/apps/client
-RUN mkdir -p public && pnpm build
+#    Keep WORKDIR at /app and use --filter to avoid fragile directory hops.
+RUN mkdir -p apps/client/public && pnpm --filter client build
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Stage 4: runner — minimal standalone image
@@ -59,6 +60,9 @@ RUN mkdir -p public && pnpm build
 FROM node:22-alpine AS runner
 
 ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV PORT=3000
+ENV HOSTNAME="0.0.0.0"
 
 WORKDIR /app
 
@@ -73,12 +77,6 @@ COPY --from=build /app/apps/client/public           ./apps/client/public
 USER node
 
 EXPOSE 3000
-
-# Disable Next.js telemetry for faster build and privacy
-ENV NEXT_TELEMETRY_DISABLED=1
-
-ENV PORT=3000
-ENV HOSTNAME="0.0.0.0"
 
 # Next.js standalone entrypoint
 CMD ["node", "apps/client/server.js"]

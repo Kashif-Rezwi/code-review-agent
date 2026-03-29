@@ -16,7 +16,7 @@ WORKDIR /app
 FROM base AS deps
 
 # Copy manifests for all workspace members so pnpm can resolve the full graph
-COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
+COPY pnpm-workspace.yaml pnpm-lock.yaml package.json .npmrc ./
 COPY apps/server/package.json ./apps/server/
 COPY packages/ai/package.json ./packages/ai/
 COPY packages/types/package.json ./packages/types/
@@ -41,19 +41,20 @@ RUN pnpm --filter @cra/ai   build
 # Copy server application code AFTER packages are built
 COPY apps/server    ./apps/server
 
-# 2. Build-time ARGs for Prisma schema validation (ARG-only — never baked into the image)
-ARG DATABASE_URL
-ARG DIRECT_URL
-
-# 3. Build NestJS
+# 2. Build NestJS (prisma generate is separated out — runs after deploy below)
 RUN pnpm --filter server build
 
-# 4. Isolate the server and its production dependencies (including shared workspace packages) into a standalone folder
-RUN pnpm deploy --filter server --prod --legacy /app/deploy
+# 3. Isolate the server and its production dependencies into a standalone folder
+RUN pnpm deploy --filter server --prod /app/deploy
 
-# 5. Generate Prisma client directly inside the isolated deploy folder (single layer)
+# 4. Generate Prisma client inside the isolated deploy folder.
+#    DATABASE_URL only needs to point at *any* valid-looking URL for codegen —
+#    the real URLs are injected at runtime via env_file.
 RUN cp -r apps/server/prisma /app/deploy/prisma && \
-    cd /app/deploy && npx prisma@6 generate
+    cd /app/deploy && \
+    DATABASE_URL="postgresql://dummy:dummy@localhost/dummy" \
+    DIRECT_URL="postgresql://dummy:dummy@localhost/dummy" \
+    npx prisma@6 generate
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Stage 4: runner — minimal production image
@@ -64,7 +65,10 @@ ENV NODE_ENV=production
 
 WORKDIR /app
 
-# Copy the completely isolated, production-ready server and perfectly baked Prisma client
+# Install curl for the healthcheck (more reliable than nc on Alpine)
+RUN apk add --no-cache curl
+
+# Copy the completely isolated, production-ready server and baked Prisma client
 COPY --from=build /app/deploy ./
 
 # Run as non-root user
@@ -72,9 +76,9 @@ USER node
 
 EXPOSE 4000
 
-# Healthcheck — TCP-level check: if port 4000 is open, the server process is alive
-# Using nc instead of wget because busybox wget exits 1 on any 4xx HTTP response
+# Healthcheck — HTTP-level check against the /health endpoint.
+# curl -fs: -f fails on 4xx/5xx, -s suppresses progress output.
 HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=3 \
-  CMD nc -z localhost 4000 || exit 1
+  CMD curl -fs http://localhost:4000/health || exit 1
 
 CMD ["node", "dist/main"]

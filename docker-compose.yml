@@ -8,10 +8,8 @@ services:
     build:
       context: .                        # build from repo root to access workspace files
       dockerfile: apps/server/Dockerfile
-      args:
-        # Pass DATABASE_URL at build time for prisma generate
-        DATABASE_URL: ${DATABASE_URL}
-        DIRECT_URL: ${DIRECT_URL}
+      # No DB URL args needed — prisma generate uses a dummy URL at build time.
+      # Real URLs are injected at runtime via env_file below.
     image: cra-server:local
     container_name: cra-server
     env_file:
@@ -52,6 +50,12 @@ services:
     depends_on:
       server:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
     restart: unless-stopped
 
 networks:
