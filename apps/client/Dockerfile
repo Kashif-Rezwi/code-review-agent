@@ -79,4 +79,7 @@ USER node
 EXPOSE 3000
 
 # Next.js standalone entrypoint
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
+  CMD wget -qO- http://localhost:3000 || exit 1
+
 CMD ["node", "apps/client/server.js"]
