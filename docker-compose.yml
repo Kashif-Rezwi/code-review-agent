@@ -1,26 +1,46 @@
+version: '3.8'
 name: code-review-agent
 
 services:
+  # ─────────────────────────────────────────────────────────
+  # Redis Queue Broker
+  # ─────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: cra-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
   # ─────────────────────────────────────────────────────────
   # NestJS Backend
   # ─────────────────────────────────────────────────────────
   server:
     build:
-      context: .                        # build from repo root to access workspace files
+      context: .
       dockerfile: apps/server/Dockerfile
-      # No DB URL args needed — prisma generate uses a dummy URL at build time.
-      # Real URLs are injected at runtime via env_file below.
     image: cra-server:local
     container_name: cra-server
     env_file:
-      - apps/server/.env                # runtime env vars (port, API keys, DB URL)
+      - apps/server/.env
     environment:
       NODE_ENV: production
       PORT: 4000
+      REDIS_URL: redis://redis:6379
     ports:
       - "4000:4000"
     networks:
       - app-network
+    depends_on:
+      redis:
+        condition: service_healthy
     restart: unless-stopped
 
   # ─────────────────────────────────────────────────────────
@@ -28,20 +48,18 @@ services:
   # ─────────────────────────────────────────────────────────
   client:
     build:
-      context: .                        # build from repo root to access workspace files
+      context: .
       dockerfile: apps/client/Dockerfile
       args:
-        # NEXT_PUBLIC_* vars must be baked in at build time
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000}
     image: cra-client:local
     container_name: cra-client
     env_file:
-      - apps/client/.env                # runtime env vars (NEXTAUTH_SECRET, etc.)
+      - apps/client/.env
     environment:
       NODE_ENV: production
       PORT: 3000
       HOSTNAME: 0.0.0.0
-      # Tell the client where to reach the server (server-to-server inside Docker)
       NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
     ports:
       - "3000:3000"
@@ -49,7 +67,7 @@ services:
       - app-network
     depends_on:
       server:
-        condition: service_healthy
+        condition: service_started
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000"]
       interval: 15s

@@ -7,5 +7,6 @@ import { AuthModule } from '../auth/auth.module'
     imports: [AuthModule],
     controllers: [HistoryController],
     providers: [HistoryService],
+    exports: [HistoryService], // Added so ReviewController can fetch review instances
 })
 export class HistoryModule {}

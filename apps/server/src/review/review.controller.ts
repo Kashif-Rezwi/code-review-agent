@@ -1,14 +1,99 @@
-import { Body, Controller, Post, HttpCode, Res, Req, UseGuards } from '@nestjs/common'
+import { Body, Controller, Post, Get, Param, HttpCode, Res, Req, UseGuards, UnauthorizedException } from '@nestjs/common'
 import { Response, Request } from 'express'
 import { ReviewService } from './review.service'
 import { CreateReviewDto } from './dto/create-review.dto'
 import { CreatePRReviewDto } from './dto/create-pr-review.dto'
 import { AuthGuard } from '../auth/auth.guard'
+import { QueueService } from '../queue/queue.service'
+import { HistoryService } from '../history/history.service'
+import { RedisService } from '../queue/redis.service'
 
 @UseGuards(AuthGuard)
 @Controller('review')
 export class ReviewController {
-    constructor(private readonly reviewService: ReviewService) { }
+    constructor(
+        private readonly reviewService: ReviewService,
+        private readonly queueService: QueueService,
+        private readonly historyService: HistoryService,
+        private readonly redisService: RedisService,
+    ) { }
+
+    // ── Queue & Session Endpoints ─────────────────────────────────────────────
+
+    @Post('session')
+    @HttpCode(201)
+    async createSession(@Body() dto: { type: 'CODE'|'PR'; input: string }, @Req() req: Request) {
+        const review = await this.reviewService.createSession(dto.type, dto.input, req.user!.userId)
+        return { reviewId: review.id }
+    }
+
+    @Post('enqueue')
+    @HttpCode(202)
+    async enqueueJob(@Body() dto: { reviewId: string }, @Req() req: Request) {
+        const review = await this.historyService.getReview(dto.reviewId, req.user!.userId)
+        if (!review) throw new UnauthorizedException('Review not found')
+
+        await this.queueService.enqueue({
+            reviewId: dto.reviewId,
+            type: review.type as 'CODE' | 'PR',
+            input: review.input,
+            userId: req.user!.userId,
+        })
+        return { queued: true }
+    }
+
+    @Get(':reviewId/stream')
+    async streamReview(@Param('reviewId') reviewId: string, @Res() res: Response, @Req() req: Request) {
+        const review = await this.historyService.getReview(reviewId, req.user!.userId)
+        
+        res.setHeader('Content-Type', 'text/event-stream')
+        res.setHeader('Cache-Control', 'no-cache')
+        res.setHeader('Connection', 'keep-alive')
+        res.setHeader('X-Accel-Buffering', 'no')
+        res.flushHeaders()
+
+        // Replay history
+        const history = await this.redisService.getLog(reviewId)
+        for (const msg of history) {
+            const event = JSON.parse(msg)
+            res.write(`event: ${event.type}\ndata: ${msg}\n\n`)
+        }
+
+        // DB Status sync (in case worker finished or crashed)
+        if (review.status === 'COMPLETE' || review.status === 'FAILED') {
+            // If the Redis log has expired but the DB is COMPLETE, 
+            // we MUST send a terminal event so the client closes the EventSource.
+            if (history.length === 0) {
+                if (review.status === 'COMPLETE') {
+                    res.write(`event: complete\ndata: {"type":"complete","review":{"id":"${review.id}"}}\n\n`)
+                } else {
+                    res.write(`event: error\ndata: {"type":"error","message":"${review.summary || 'Review failed'}"}\n\n`)
+                }
+            }
+            res.end()
+            return
+        }
+
+        // Subscribe to live events
+        const sub = this.redisService.createSubscriber()
+        await sub.subscribe(`re:${reviewId}`)
+        sub.on('message', (channel, msg) => {
+            const event = JSON.parse(msg)
+            res.write(`event: ${event.type}\ndata: ${msg}\n\n`)
+            if (event.type === 'complete' || event.type === 'error') {
+                res.end()
+                sub.quit()
+            }
+        })
+
+        // Clean up on disconnect
+        res.on('close', () => sub.quit())
+    }
+
+    @Get(':reviewId')
+    async getReview(@Param('reviewId') reviewId: string, @Req() req: Request) {
+        return this.historyService.getReview(reviewId, req.user!.userId)
+    }
 
     // ── Batch (non-streaming) endpoints ───────────────────────────────────────
 

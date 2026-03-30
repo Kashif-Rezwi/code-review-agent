@@ -3,6 +3,7 @@
 import { useCallback, useRef, useState } from 'react'
 import { API_URL } from './api'
 import { consumeSSEStream } from './sse'
+import { parseTraceLog } from './use-trace-replay'
 import type { ReviewData, ReviewStreamEvent } from '@/types/review.types'
 
 // ── Public types ──────────────────────────────────────────────────────────────
@@ -44,22 +45,16 @@ export type ClusterState = {
 
 export interface UseReviewStreamReturn {
     phase: StreamPhase
-    /** Pre-fetch task board — one item per changed PR file. */
     taskItems: TaskItem[]
-    /** Ordered trace entries — tool calls interleaved with thinking steps (single-agent path). */
     traceEntries: TraceEntry[]
-    /**
-     * Per-cluster trace state — only populated on the multi-agent clustered PR path.
-     * Empty map on the single-agent (code review) path.
-     */
     clusterMap: Map<string, ClusterState>
     review: ReviewData | null
     error: string | null
-    /** Total wall-clock duration of the entire stream in milliseconds. */
     totalDurationMs: number | null
-    /** Start streaming a new review.  Pass `{ code }` or `{ prUrl }`. */
-    submit: (payload: { code: string } | { prUrl: string }) => void
-    /** Abort any in-progress stream and reset all state to idle. */
+    /** Connect to an existing review session and begin streaming. */
+    submit: (reviewId: string) => void
+    /** Instantly hydrate state from an already completed review */
+    hydrate: (review: ReviewData, traceLog: ReviewStreamEvent[] | null, errorMsg?: string | null) => void
     reset: () => void
 }
 
@@ -75,12 +70,7 @@ export function useReviewStream(githubToken?: string): UseReviewStreamReturn {
     const [totalDurationMs, setTotalDurationMs] = useState<number | null>(null)
 
     const abortRef = useRef<AbortController | null>(null)
-    // Monotonically increasing counter for thinking entry IDs — kept in a ref
-    // so it persists across renders without triggering re-renders, and is
-    // scoped to this hook instance (no module-level global mutation).
     const thinkingSeqRef = useRef(0)
-
-    // ── Shared state reset ─────────────────────────────────────────────────────
 
     const resetState = useCallback(() => {
         setPhase('idle')
@@ -92,16 +82,31 @@ export function useReviewStream(githubToken?: string): UseReviewStreamReturn {
         setTotalDurationMs(null)
     }, [])
 
-    // ── Reset ─────────────────────────────────────────────────────────────────
-
     const reset = useCallback(() => {
         abortRef.current?.abort()
         resetState()
     }, [resetState])
 
-    // ── Submit ────────────────────────────────────────────────────────────────
+    const hydrate = useCallback((reviewData: ReviewData, traceLog: ReviewStreamEvent[] | null, errorMsg?: string | null) => {
+        abortRef.current?.abort()
+        const { traceEntries: hyTrace, clusterMap: hyMap, taskItems: hyTask, totalDurationMs: hyDur } = parseTraceLog(traceLog)
+        
+        if (errorMsg) {
+            setPhase('error')
+            setError(errorMsg)
+        } else {
+            setPhase('complete')
+            setError(null)
+        }
+        
+        setReview(reviewData)
+        setTraceEntries(hyTrace)
+        setClusterMap(hyMap)
+        setTaskItems(hyTask)
+        setTotalDurationMs(hyDur)
+    }, [])
 
-    const submit = useCallback((payload: { code: string } | { prUrl: string }) => {
+    const submit = useCallback((reviewId: string) => {
         abortRef.current?.abort()
         const controller = new AbortController()
         abortRef.current = controller
@@ -109,19 +114,31 @@ export function useReviewStream(githubToken?: string): UseReviewStreamReturn {
         resetState()
         setPhase('connecting')
 
-        const endpoint = 'prUrl' in payload
-            ? '/review/from-pr/stream'
-            : '/review/from-code/stream'
-
         void (async () => {
             try {
-                const response = await fetch(`${API_URL}${endpoint}`, {
+                // 1. Enqueue the job (idempotent, harmless if already enqueued)
+                const enqRes = await fetch(`${API_URL}/review/enqueue`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                         ...(githubToken ? { Authorization: `Bearer ${githubToken}` } : {}),
                     },
-                    body: JSON.stringify(payload),
+                    body: JSON.stringify({ reviewId }),
+                    signal: controller.signal,
+                })
+
+                if (!enqRes.ok) {
+                    const text = await enqRes.text()
+                    throw new Error(`Enqueue failed: ${text}`)
+                }
+
+                // 2. Consume SSE stream via GET
+                const response = await fetch(`${API_URL}/review/${reviewId}/stream`, {
+                    method: 'GET',
+                    headers: {
+                        'Accept': 'text/event-stream',
+                        ...(githubToken ? { Authorization: `Bearer ${githubToken}` } : {}),
+                    },
                     signal: controller.signal,
                 })
 
@@ -281,5 +298,5 @@ export function useReviewStream(githubToken?: string): UseReviewStreamReturn {
         })()
     }, [githubToken, resetState])
 
-    return { phase, taskItems, traceEntries, clusterMap, review, error, totalDurationMs, submit, reset }
+    return { phase, taskItems, traceEntries, clusterMap, review, error, totalDurationMs, submit, hydrate, reset }
 }
