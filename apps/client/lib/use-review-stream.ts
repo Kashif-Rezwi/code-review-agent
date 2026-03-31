@@ -43,18 +43,11 @@ export type ClusterState = {
 
 export interface UseReviewStreamReturn {
     phase: StreamPhase
-    /** Pre-fetch task board — one item per changed PR file. */
     taskItems: TaskItem[]
-    /** Ordered trace entries — tool calls interleaved with thinking steps (single-agent path). */
     traceEntries: TraceEntry[]
-    /**
-     * Per-cluster trace state — only populated on the multi-agent clustered PR path.
-     * Empty map on the single-agent (code review) path.
-     */
     clusterMap: Map<string, ClusterState>
     review: ReviewData | null
     error: string | null
-    /** Total wall-clock duration of the entire stream in milliseconds. */
     totalDurationMs: number | null
     /** Session inputs fetched when connecting to an existing stream. */
     sessionData: { type: 'CODE' | 'PR', input: string } | null
@@ -92,8 +85,6 @@ export function useReviewStream(initialReviewId?: string | null, githubToken?: s
         setError(null)
         setTotalDurationMs(null)
     }, [])
-
-    // ── Reset ─────────────────────────────────────────────────────────────────
 
     const reset = useCallback(() => {
         if (eventSourceRef.current) {

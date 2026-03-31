@@ -115,3 +115,8 @@
   animation: cursor-blink 0.75s step-end infinite;
   color: rgb(156 163 175); /* gray-400 */
 }
+
+/* Shimmer effect for premium loading states */
+@keyframes shimmer {
+  100% { transform: translateX(100%); }
+}

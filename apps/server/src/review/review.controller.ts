@@ -25,7 +25,7 @@ export class ReviewController {
     async createSession(@Body() dto: { type: 'CODE' | 'PR'; input: string }, @Req() req: Request) {
         // Create DB record
         const review = await this.reviewService.createSession(dto.type, dto.input, req.user!.userId)
-        
+
         // Push directly to BullMQ
         await this.queueService.enqueue({
             reviewId: review.id,
@@ -33,7 +33,7 @@ export class ReviewController {
             input: review.input,
             userId: req.user!.userId,
         })
-        
+
         return { reviewId: review.id }
     }
 
