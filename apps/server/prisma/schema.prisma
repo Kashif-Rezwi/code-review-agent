@@ -1,11 +1,13 @@
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  directUrl  = env("DIRECT_URL")
+  extensions = [vector]
 }
 
 // ── Auth: Users ──────────────────────────────────────────────────────────────
@@ -43,6 +45,12 @@ model DocumentChunk {
 
 // ── Memory: Review History ───────────────────────────────────────────────────
 
+enum ReviewStatus {
+  PENDING
+  COMPLETE
+  FAILED
+}
+
 enum ReviewType {
   CODE
   PR
@@ -50,13 +58,14 @@ enum ReviewType {
 
 model Review {
   id               String         @id @default(cuid())
-  userId           String         // GitHub user ID; existing rows with "default" are ignored
+  userId           String         // GitHub user ID
   type             ReviewType
+  status           ReviewStatus   @default(PENDING)
   input            String         @db.Text
-  summary          String         @db.Text
-  score            Int
-  positives        String[]
-  appliedStandards String[]
+  summary          String?        @db.Text   // null until the AI pipeline completes
+  score            Int?                      // null until the AI pipeline completes
+  positives        String[]       @default([])
+  appliedStandards String[]       @default([])
   traceLog         Json?          // ordered array of ReviewStreamEvent; null for pre-migration rows
   issues           Issue[]
   conversations    Conversation[]

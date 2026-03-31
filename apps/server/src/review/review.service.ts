@@ -61,6 +61,36 @@ export class ReviewService {
         this.hasDb = !!this.config.get('DATABASE_URL')
     }
 
+    async createSession(type: 'CODE' | 'PR', input: string, userId: string) {
+        if (!this.hasDb) throw new InternalServerErrorException('Database not configured')
+        return this.prisma.review.create({
+            data: { userId, type, input, status: 'PENDING' }
+        })
+    }
+
+    async markFailed(reviewId: string, message: string) {
+        if (!this.hasDb) return
+        await this.prisma.review.update({
+            where: { id: reviewId },
+            data: { status: 'FAILED', summary: message }
+        }).catch(() => null)
+    }
+
+    async runForQueue(reviewId: string, type: 'CODE' | 'PR', input: string, userId: string, conn: SseConnection): Promise<void> {
+        try {
+            if (type === 'PR') {
+                this.githubService.assertValidPRUrl(input)
+                await this.streamAnalyzeFromPR(input, null, userId, conn, reviewId)
+            } else {
+                await this.streamAnalyzeCode(input, null, userId, conn, reviewId)
+            }
+        } catch (err) {
+            const message = err instanceof Error ? err.message : 'Review failed'
+            conn.send({ type: 'error', message })
+            await this.markFailed(reviewId, message)
+        }
+    }
+
     async analyzeCode(code: string, userId: string): Promise<ReviewData> {
         const standards = await this.ragService.retrieveForContext(code, userId)
         return this.runAgent(
@@ -92,7 +122,7 @@ export class ReviewService {
     // instead of returning a Promise<ReviewData>.  The controller injects the
     // raw Express Response so the service can write directly.
 
-    async streamAnalyzeCode(code: string, res: Response, userId: string): Promise<void> {
+    async streamAnalyzeCode(code: string, res: Response | null, userId: string, connOverride?: SseConnection, reviewId?: string): Promise<void> {
         const standards = await this.ragService.retrieveForContext(code, userId)
         return this.streamAnalysis(
             `Please review the following code:\n\`\`\`\n${code}\n\`\`\``,
@@ -101,13 +131,15 @@ export class ReviewService {
             'CODE',
             res,
             userId,
+            connOverride,
+            reviewId
         )
     }
 
-    async streamAnalyzeFromPR(prUrl: string, res: Response, userId: string): Promise<void> {
+    async streamAnalyzeFromPR(prUrl: string, res: Response | null, userId: string, connOverride?: SseConnection, reviewId?: string): Promise<void> {
         this.githubService.assertValidPRUrl(prUrl)
 
-        const conn = initSse(res)
+        const conn = connOverride ?? initSse(res!)
         const { send, startedAt } = conn
 
         try {
@@ -123,7 +155,7 @@ export class ReviewService {
             if (!files || files.length === 0) {
                 return this.streamAnalysis(
                     `Please review this GitHub pull request: ${prUrl}`,
-                    standards, prUrl, 'PR', res, userId, conn,
+                    standards, prUrl, 'PR', res, userId, conn, reviewId
                 )
             }
 
@@ -184,7 +216,7 @@ export class ReviewService {
 
             if (partialReviews.length === 0) {
                 send({ type: 'error', message: 'All cluster agents failed. Please try again.' })
-                res.end()
+                res?.end()
                 return
             }
 
@@ -193,14 +225,14 @@ export class ReviewService {
             if (partialReviews.length === 1) {
                 const only = partialReviews[0].review
                 const merged = { ...only, appliedStandards: standards?.appliedNames }
-                const id = await this.saveReview(prUrl, 'PR', merged, userId, conn.getTrace())
                 send({
                     type: 'complete',
-                    review: { ...merged, id },
+                    review: { ...merged, id: reviewId ?? '' },
                     durationMs: Date.now() - startedAt,
                     stepCount: 1,
                 })
-                res.end()
+                const id = await this.saveReview(prUrl, 'PR', merged, userId, conn.getTrace(), reviewId)
+                if (res) res.end()
                 return
             }
 
@@ -209,21 +241,24 @@ export class ReviewService {
             // parse failure never surfaces as an error to the user.
             const finalReview = await this.synthesizeReview(prUrl, partialReviews, standards)
             const merged = { ...finalReview, appliedStandards: standards?.appliedNames }
-            const id = await this.saveReview(prUrl, 'PR', merged, userId, conn.getTrace())
 
             send({
                 type: 'complete',
-                review: { ...merged, id },
+                review: { ...merged, id: reviewId ?? '' },
                 durationMs: Date.now() - startedAt,
                 stepCount: clusters.length + 1, // workers + synthesis
             })
+            const id = await this.saveReview(prUrl, 'PR', merged, userId, conn.getTrace(), reviewId)
 
         } catch (err) {
             const message = err instanceof Error ? err.message : 'PR review failed'
             send({ type: 'error', message })
+            if (reviewId) {
+                await this.markFailed(reviewId, message)
+            }
         } finally {
             // Guard against double-end: the fallback streamAnalysis path ends res itself.
-            if (!res.writableEnded) res.end()
+            if (res && !res.writableEnded) res.end()
         }
     }
 
@@ -313,18 +348,23 @@ export class ReviewService {
         standards: Awaited<ReturnType<RagService['retrieveForContext']>>,
         input: string,
         reviewType: 'CODE' | 'PR',
-        res: Response,
+        res: Response | null,
         userId: string,
         existingConn?: SseConnection,
+        reviewId?: string,
     ): Promise<void> {
         let _conn: SseConnection
 
         if (existingConn) {
             // PR path: SSE headers already set by streamAnalyzeFromPR.
+            // Queue CODE path: Provide the start event since streamAnalyzeCode bypasses it.
             _conn = existingConn
+            if (reviewType === 'CODE') {
+                _conn.send({ type: 'start' })
+            }
         } else {
-            // Code path: initialise SSE headers here and emit the start event.
-            _conn = initSse(res)
+            // Old HTTP code path: initialise SSE headers here and emit the start event.
+            _conn = initSse(res!)
             _conn.send({ type: 'start' })
         }
 
@@ -388,19 +428,22 @@ export class ReviewService {
             }
 
             const merged = { ...review, appliedStandards: standards?.appliedNames }
-            const id = await this.saveReview(input, reviewType, merged, userId, _conn.getTrace())
             _send({
                 type: 'complete',
-                review: { ...merged, id },
+                review: { ...merged, id: reviewId ?? '' },
                 durationMs: Date.now() - _startedAt,
                 stepCount: getToolCallCount(),
             })
+            const id = await this.saveReview(input, reviewType, merged, userId, _conn.getTrace(), reviewId)
         } catch (err: unknown) {
             const message = err instanceof Error ? err.message : 'Code review failed.'
             thinking.flushPending()
             _send({ type: 'error', message })
+            if (reviewId) {
+                await this.markFailed(reviewId, message)
+            }
         } finally {
-            res.end()
+            if (res && !res.writableEnded) res.end()
         }
     }
 
@@ -671,31 +714,45 @@ export class ReviewService {
         data: ReviewData,
         userId: string,
         traceLog?: ReviewStreamEvent[],
+        reviewId?: string,
     ): Promise<string | undefined> {
         if (!this.hasDb) return undefined
         try {
+            const reviewData = {
+                summary: data.summary,
+                score: data.score,
+                positives: data.positives,
+                appliedStandards: data.appliedStandards ?? [],
+                ...(traceLog && traceLog.length > 0
+                    ? { traceLog: traceLog as unknown as Prisma.InputJsonValue }
+                    : {}),
+                issues: {
+                    create: data.issues.map((i) => ({
+                        type: i.type,
+                        severity: i.severity,
+                        title: i.title,
+                        location: i.location,
+                        description: i.description,
+                        recommendation: i.recommendation,
+                    })),
+                },
+            }
+
+            if (reviewId) {
+                const saved = await this.prisma.review.update({
+                    where: { id: reviewId },
+                    data: { ...reviewData, status: 'COMPLETE' },
+                })
+                return saved.id
+            }
+
             const saved = await this.prisma.review.create({
                 data: {
                     userId,
                     type,
                     input,
-                    summary: data.summary,
-                    score: data.score,
-                    positives: data.positives,
-                    appliedStandards: data.appliedStandards ?? [],
-                    ...(traceLog && traceLog.length > 0
-                        ? { traceLog: traceLog as unknown as Prisma.InputJsonValue }
-                        : {}),
-                    issues: {
-                        create: data.issues.map((i) => ({
-                            type: i.type,
-                            severity: i.severity,
-                            title: i.title,
-                            location: i.location,
-                            description: i.description,
-                            recommendation: i.recommendation,
-                        })),
-                    },
+                    status: 'COMPLETE',
+                    ...reviewData,
                 },
             })
             return saved.id

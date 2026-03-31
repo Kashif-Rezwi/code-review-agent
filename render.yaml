@@ -1,13 +1,15 @@
 version: "1"
 services:
+  - type: redis
+    name: code-review-agent-redis
+    plan: free
+    ipAllowList: []
+
   - type: web
     name: code-review-agent-api
     env: node
-    # Only deploy from the main branch
     branch: main
-    # Root Directory must be empty for pnpm monorepo to resolve workspace packages
     rootDir: ""
-    # Only rebuild the backend if server code, shared packages, or root dependencies change
     buildFilter:
       paths:
         - apps/server/**
@@ -26,3 +28,8 @@ services:
         sync: false
       - key: OPENAI_API_KEY
         sync: false
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: code-review-agent-redis
+          property: connectionString
