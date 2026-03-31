@@ -140,8 +140,8 @@ export class HistoryService {
 ORIGINAL ${review.type === 'PR' ? 'PR URL' : 'CODE'}:
 ${review.input.slice(0, 2000)}${review.input.length > 2000 ? '\n[truncated]' : ''}
 
-REVIEW SUMMARY: ${review.summary}
-SCORE: ${review.score}/10
+REVIEW SUMMARY: ${review.summary || '(Not completed yet)'}
+SCORE: ${review.score !== null ? review.score : '-'}/10
 
 ISSUES FOUND:
 ${issueList}

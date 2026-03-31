@@ -6,6 +6,7 @@ import { ReviewModule } from './review/review.module'
 import { HistoryModule } from './history/history.module'
 import { AuthModule } from './auth/auth.module'
 import { HealthController } from './health.controller'
+import { QueueModule } from './queue/queue.module'
 
 @Module({
     imports: [
@@ -15,6 +16,7 @@ import { HealthController } from './health.controller'
         RagModule,
         ReviewModule,
         HistoryModule,
+        QueueModule,
     ],
     controllers: [HealthController],
 })
