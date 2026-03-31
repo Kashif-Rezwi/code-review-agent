@@ -16,7 +16,7 @@ export function PrUrlInput({ value, onChange, onSubmit, disabled, isLoading }: P
 
             {isLoading ? (
                 <div className="w-full bg-gray-900/60 border border-gray-800 rounded-lg h-[46px] flex items-center px-4 overflow-hidden relative">
-                    <div className="h-3 w-2/5 bg-[#569cd6] rounded animate-pulse opacity-45" />
+                    <div className="h-4 w-2/5 bg-[#569cd6] rounded animate-pulse opacity-45" />
                 </div>
             ) : (
                 <input
