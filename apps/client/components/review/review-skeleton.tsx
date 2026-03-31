@@ -1,16 +1,19 @@
 // Animated skeleton that mirrors the full history detail page layout:
 // input display → score header → issues → positives.
-export function ReviewSkeleton() {
+export function ReviewSkeleton({ compact = false }: { compact?: boolean }) {
     return (
         <div className="space-y-4">
             {/* Input display placeholder — PR card or code snippet */}
-            <div className="rounded-lg border border-gray-800 bg-gray-900/30 p-4 space-y-3 animate-pulse">
+            <div className={`rounded-lg border border-gray-800 bg-gray-900/30 p-4 space-y-3 animate-pulse ${compact ? 'min-h-[140px] flex flex-col justify-center' : ''}`}>
                 <div className="flex items-center gap-2">
                     <div className="h-3 w-3 rounded bg-gray-800" />
                     <div className="h-2.5 bg-gray-800 rounded w-20" />
                 </div>
                 <div className="h-3.5 bg-gray-700 rounded w-2/3" />
             </div>
+
+            {!compact && (
+                <>
 
             {/* Header card: score ring + summary lines */}
             <div className="rounded-lg border border-gray-800 bg-gray-900/40 p-4 flex items-start gap-4">
@@ -62,6 +65,8 @@ export function ReviewSkeleton() {
                     ))}
                 </div>
             </div>
+            </>
+            )}
         </div>
     )
 }

@@ -48,6 +48,7 @@ interface CodeEditorProps {
     readOnly?: boolean
     label?: string          // toolbar label — defaults to 'Code' or 'Reviewed Code'
     height?: number | string
+    isLoading?: boolean
 }
 
 /**
@@ -68,6 +69,7 @@ export function CodeEditor({
     readOnly = false,
     label,
     height,
+    isLoading,
 }: CodeEditorProps) {
     const { copied, copy } = useCopyToClipboard()
     const handleChange = useCallback(
@@ -121,38 +123,42 @@ export function CodeEditor({
             </div>
 
             {/* ── Monaco ──────────────────────────────────────────── */}
-            <MonacoEditor
-                height={editorHeight}
-                language={language}
-                value={value}
-                theme="cra-dark"
-                beforeMount={registerEditorTheme}
-                loading={<EditorSkeleton />}
-                onChange={readOnly ? undefined : handleChange}
-                options={{
-                    readOnly,
-                    domReadOnly: readOnly,
-                    fontSize: 13,
-                    fontFamily: '"JetBrains Mono", "Fira Code", monospace',
-                    minimap: { enabled: false },
-                    scrollBeyondLastLine: false,
-                    lineNumbers: 'on',
-                    wordWrap: 'on',
-                    renderLineHighlight: 'line',
-                    scrollbar: { vertical: 'auto', horizontal: 'hidden' },
-                    overviewRulerLanes: 0,
-                    padding: { top: 10, bottom: 10 },
-                    automaticLayout: true,
-                    // Extra read-only hardening
-                    ...(readOnly && {
-                        folding: false,
-                        contextmenu: false,
-                        cursorStyle: 'line',
-                        cursorBlinking: 'solid',
-                        renderWhitespace: 'none',
-                    }),
-                }}
-            />
+            {isLoading ? (
+                <EditorSkeleton />
+            ) : (
+                <MonacoEditor
+                    height={editorHeight}
+                    language={language}
+                    value={value}
+                    theme="cra-dark"
+                    beforeMount={registerEditorTheme}
+                    loading={<EditorSkeleton />}
+                    onChange={readOnly ? undefined : handleChange}
+                    options={{
+                        readOnly,
+                        domReadOnly: readOnly,
+                        fontSize: 13,
+                        fontFamily: '"JetBrains Mono", "Fira Code", monospace',
+                        minimap: { enabled: false },
+                        scrollBeyondLastLine: false,
+                        lineNumbers: 'on',
+                        wordWrap: 'on',
+                        renderLineHighlight: 'line',
+                        scrollbar: { vertical: 'auto', horizontal: 'hidden' },
+                        overviewRulerLanes: 0,
+                        padding: { top: 10, bottom: 10 },
+                        automaticLayout: true,
+                        // Extra read-only hardening
+                        ...(readOnly && {
+                            folding: false,
+                            contextmenu: false,
+                            cursorStyle: 'line',
+                            cursorBlinking: 'solid',
+                            renderWhitespace: 'none',
+                        }),
+                    }}
+                />
+            )}
         </div>
     )
 }
