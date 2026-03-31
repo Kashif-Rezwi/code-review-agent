@@ -7,7 +7,6 @@ import {
 import { ConfigService } from '@nestjs/config'
 import { createOpenAI } from '@ai-sdk/openai'
 import { generateText, streamText } from 'ai'
-import { Response } from 'express'
 import {
     buildSystemPrompt,
     ReviewDataSchema,
@@ -27,7 +26,7 @@ import { GithubService } from '../github/github.service'
 import { LinterService } from '../linter/linter.service'
 import { RagService } from '../rag/rag.service'
 import { PrismaService } from '../prisma/prisma.service'
-import { initSse, type SseConnection } from './review.sse'
+import type { SseConnection } from './review.sse'
 import {
     parseArgs, pickArgs,
     toolStartLabel, toolStartDetail,
@@ -80,70 +79,40 @@ export class ReviewService {
         try {
             if (type === 'PR') {
                 this.githubService.assertValidPRUrl(input)
-                await this.streamAnalyzeFromPR(input, null, userId, conn, reviewId)
+                await this.streamAnalyzeFromPR(input, userId, conn, reviewId)
             } else {
-                await this.streamAnalyzeCode(input, null, userId, conn, reviewId)
+                await this.streamAnalyzeCode(input, userId, conn, reviewId)
             }
         } catch (err) {
             const message = err instanceof Error ? err.message : 'Review failed'
-            conn.send({ type: 'error', message })
+            conn.send({ type: 'error' as const, message })
             await this.markFailed(reviewId, message)
         }
     }
 
-    async analyzeCode(code: string, userId: string): Promise<ReviewData> {
-        const standards = await this.ragService.retrieveForContext(code, userId)
-        return this.runAgent(
-            `Please review the following code:\n\`\`\`\n${code}\n\`\`\``,
-            standards,
-            code,
-            'CODE',
-            userId,
-        )
-    }
+    // ── BullMQ Background Streaming ───────────────────────────────────────────
+    // These orchestrate the pipeline and emit events directly to the Redis connection.
 
-    async analyzeFromPR(prUrl: string, userId: string): Promise<ReviewData> {
-        this.githubService.assertValidPRUrl(prUrl)
-        const standards = await this.ragService.retrieveForContext(
-            'code review standards best practices',
-            userId,
-        )
-        return this.runAgent(
-            `Please review this GitHub pull request: ${prUrl}`,
-            standards,
-            prUrl,
-            'PR',
-            userId,
-        )
-    }
-
-    // ── Streaming variants ────────────────────────────────────────────────────
-    // These mirror analyzeCode / analyzeFromPR but emit SSE events via `res`
-    // instead of returning a Promise<ReviewData>.  The controller injects the
-    // raw Express Response so the service can write directly.
-
-    async streamAnalyzeCode(code: string, res: Response | null, userId: string, connOverride?: SseConnection, reviewId?: string): Promise<void> {
+    async streamAnalyzeCode(code: string, userId: string, conn: SseConnection, reviewId?: string): Promise<void> {
         const standards = await this.ragService.retrieveForContext(code, userId)
         return this.streamAnalysis(
             `Please review the following code:\n\`\`\`\n${code}\n\`\`\``,
             standards,
             code,
             'CODE',
-            res,
             userId,
-            connOverride,
+            conn,
             reviewId
         )
     }
 
-    async streamAnalyzeFromPR(prUrl: string, res: Response | null, userId: string, connOverride?: SseConnection, reviewId?: string): Promise<void> {
+    async streamAnalyzeFromPR(prUrl: string, userId: string, conn: SseConnection, reviewId?: string): Promise<void> {
         this.githubService.assertValidPRUrl(prUrl)
 
-        const conn = connOverride ?? initSse(res!)
         const { send, startedAt } = conn
 
         try {
-            send({ type: 'start' })
+            send({ type: 'start' as const })
 
             // ── Phase 1: Fetch files and RAG standards in parallel ────────────
             const [standards, files] = await Promise.all([
@@ -155,7 +124,7 @@ export class ReviewService {
             if (!files || files.length === 0) {
                 return this.streamAnalysis(
                     `Please review this GitHub pull request: ${prUrl}`,
-                    standards, prUrl, 'PR', res, userId, conn, reviewId
+                    standards, prUrl, 'PR', userId, conn, reviewId
                 )
             }
 
@@ -163,7 +132,7 @@ export class ReviewService {
             // Fires before planning so the UI shows "Reading files…" first,
             // then transitions to the Planning stage when cluster_plan arrives.
             send({
-                type: 'task_plan',
+                type: 'task_plan' as const,
                 tasks: files.map(f => ({
                     id: f.filename,
                     label: f.filename.split('/').pop() ?? f.filename,
@@ -174,7 +143,7 @@ export class ReviewService {
                 const detail = diffLines > 0
                     ? `+${f.additions} -${f.deletions} · ${diffLines} diff lines`
                     : f.status
-                send({ type: 'task_update', taskId: f.filename, status: 'done', detail })
+                send({ type: 'task_update' as const, taskId: f.filename, status: 'done', detail })
             }
 
             // ── Phase 2: Plan clusters ────────────────────────────────────────
@@ -184,7 +153,7 @@ export class ReviewService {
 
             // Tell the UI exactly what clusters exist — it renders panels immediately
             send({
-                type: 'cluster_plan',
+                type: 'cluster_plan' as const,
                 clusters: clusters.map(c => ({
                     id: c.id,
                     label: c.label,
@@ -215,8 +184,8 @@ export class ReviewService {
                 }))
 
             if (partialReviews.length === 0) {
-                send({ type: 'error', message: 'All cluster agents failed. Please try again.' })
-                res?.end()
+                send({ type: 'error' as const, message: 'All cluster agents failed. Please try again.' })
+                if (reviewId) await this.markFailed(reviewId, 'All cluster agents failed')
                 return
             }
 
@@ -226,13 +195,12 @@ export class ReviewService {
                 const only = partialReviews[0].review
                 const merged = { ...only, appliedStandards: standards?.appliedNames }
                 send({
-                    type: 'complete',
+                    type: 'complete' as const,
                     review: { ...merged, id: reviewId ?? '' },
                     durationMs: Date.now() - startedAt,
                     stepCount: 1,
                 })
-                const id = await this.saveReview(prUrl, 'PR', merged, userId, conn.getTrace(), reviewId)
-                if (res) res.end()
+                await this.saveReview(prUrl, 'PR', merged, userId, conn.getTrace(), reviewId)
                 return
             }
 
@@ -243,133 +211,40 @@ export class ReviewService {
             const merged = { ...finalReview, appliedStandards: standards?.appliedNames }
 
             send({
-                type: 'complete',
+                type: 'complete' as const,
                 review: { ...merged, id: reviewId ?? '' },
                 durationMs: Date.now() - startedAt,
                 stepCount: clusters.length + 1, // workers + synthesis
             })
-            const id = await this.saveReview(prUrl, 'PR', merged, userId, conn.getTrace(), reviewId)
+            await this.saveReview(prUrl, 'PR', merged, userId, conn.getTrace(), reviewId)
 
         } catch (err) {
             const message = err instanceof Error ? err.message : 'PR review failed'
-            send({ type: 'error', message })
+            send({ type: 'error' as const, message })
             if (reviewId) {
                 await this.markFailed(reviewId, message)
             }
-        } finally {
-            // Guard against double-end: the fallback streamAnalysis path ends res itself.
-            if (res && !res.writableEnded) res.end()
         }
     }
 
 
 
-    private async runAgent(
-        userMessage: string,
-        standards: Awaited<ReturnType<RagService['retrieveForContext']>>,
-        input: string,
-        reviewType: 'CODE' | 'PR',
-        userId: string,
-    ): Promise<ReviewData> {
-        const system = standards
-            ? `${buildSystemPrompt(reviewType)}\n\nYour team's coding standards — apply these during the review:\n\n${standards.content}`
-            : buildSystemPrompt(reviewType)
-
-        // Step budget:
-        //   code review                → runLinter(1) + JSON(1) = 2
-        //   PR review                  → listPRFiles(1) + JSON(1) = 2
-        //   PR + investigation (×3)    → listPRFiles(1) + fetchFileContent(1-3) + JSON(1) = 3-5
-        //   PR fallback + investigate  → listPRFiles(1) + fetchGithubPR(1) + fetchFileContent(1-3) + JSON(1) = 4-6
-        //   worst-case autonomous max  → 8 tool calls + forced JSON(1) = 9  (+1 buffer = 10)
-        const MAX_STEPS = AGENT_MAX_STEPS[reviewType]
-
-        try {
-            const result = await generateText({
-                model: this.openai('gpt-4o-mini'),
-                system,
-                messages: [{ role: 'user', content: userMessage }],
-                tools: this.buildAgentTools(reviewType),
-                temperature: 0.2,
-
-                // Exit the loop the moment a step produces a parseable review.
-                // Falls back to the hard cap so the loop always terminates.
-                stopWhen: ({ steps }) => {
-                    const lastText = steps.at(-1)?.text ?? ''
-                    try { this.parseReviewText(lastText); return true } catch { /* keep going */ }
-                    return steps.length >= MAX_STEPS
-                },
-
-                // On the last allowed step, remove tools entirely so the model
-                // is physically unable to make another tool call — it must respond
-                // with text (i.e. the JSON review).
-                prepareStep: ({ steps }) => {
-                    if (steps.length >= MAX_STEPS - 1) return { toolChoice: 'none' as const }
-                    return {}
-                },
-            })
-
-            // With the two guards above result.text should always contain the JSON.
-            // The step scan is a final paranoia safety net for unexpected model behaviour.
-            const allTexts = [result.text, ...result.steps.map(s => s.text).reverse()]
-                .filter(t => t.trim())
-
-            let review: ReviewData | undefined
-            for (const text of allTexts) {
-                try { review = this.parseReviewText(text); break } catch { /* try next */ }
-            }
-
-            if (!review) {
-                this.logger.error(
-                    `Review parsing failed — steps: ${result.steps.length}, ` +
-                    `last text: ${JSON.stringify(result.text.slice(0, 300))}`,
-                )
-                throw new InternalServerErrorException(
-                    'The model did not return a valid review. Please try again.',
-                )
-            }
-
-            const merged = { ...review, appliedStandards: standards?.appliedNames }
-            const id = await this.saveReview(input, reviewType, merged, userId)
-            return { ...merged, id }
-        } catch (err: unknown) {
-            if (err instanceof HttpException) throw err
-            const cause = (err as { cause?: unknown })?.cause
-            if (cause instanceof HttpException) throw cause
-            throw new InternalServerErrorException(
-                err instanceof Error ? err.message : 'Code review failed.',
-            )
-        }
-    }
-
-    /** SSE-only AI streaming phase — runs the model and emits thinking/tool/complete events.
-     *  Pass `existingConn` when SSE headers are already set (PR path); omit for fresh setup. */
+    /** AI streaming phase — runs the model and emits thinking/tool/complete events. */
     private async streamAnalysis(
         userMessage: string,
         standards: Awaited<ReturnType<RagService['retrieveForContext']>>,
         input: string,
         reviewType: 'CODE' | 'PR',
-        res: Response | null,
         userId: string,
-        existingConn?: SseConnection,
+        conn: SseConnection,
         reviewId?: string,
     ): Promise<void> {
-        let _conn: SseConnection
-
-        if (existingConn) {
-            // PR path: SSE headers already set by streamAnalyzeFromPR.
-            // Queue CODE path: Provide the start event since streamAnalyzeCode bypasses it.
-            _conn = existingConn
-            if (reviewType === 'CODE') {
-                _conn.send({ type: 'start' })
-            }
-        } else {
-            // Old HTTP code path: initialise SSE headers here and emit the start event.
-            _conn = initSse(res!)
-            _conn.send({ type: 'start' })
+        if (reviewType === 'CODE') {
+            conn.send({ type: 'start' as const })
         }
 
-        const _send = _conn.send
-        const _startedAt = _conn.startedAt
+        const _send = conn.send
+        const _startedAt = conn.startedAt
 
         const promptContext = reviewType === 'PR' ? 'PR_STREAM' : 'CODE'
         const system = standards
@@ -423,27 +298,25 @@ export class ReviewService {
                     `Stream: review parsing failed — steps: ${steps.length}, ` +
                     `last text: ${JSON.stringify(finalText.slice(0, 300))}`,
                 )
-                _send({ type: 'error', message: 'The model did not return a valid review. Please try again.' })
+                _send({ type: 'error' as const, message: 'The model did not return a valid review. Please try again.' })
                 return
             }
 
             const merged = { ...review, appliedStandards: standards?.appliedNames }
             _send({
-                type: 'complete',
+                type: 'complete' as const,
                 review: { ...merged, id: reviewId ?? '' },
                 durationMs: Date.now() - _startedAt,
                 stepCount: getToolCallCount(),
             })
-            const id = await this.saveReview(input, reviewType, merged, userId, _conn.getTrace(), reviewId)
+            await this.saveReview(input, reviewType, merged, userId, conn.getTrace(), reviewId)
         } catch (err: unknown) {
             const message = err instanceof Error ? err.message : 'Code review failed.'
             thinking.flushPending()
-            _send({ type: 'error', message })
+            _send({ type: 'error' as const, message })
             if (reviewId) {
                 await this.markFailed(reviewId, message)
             }
-        } finally {
-            if (res && !res.writableEnded) res.end()
         }
     }
 
@@ -518,7 +391,7 @@ export class ReviewService {
         }
 
         send({
-            type: 'cluster_done',
+            type: 'cluster_done' as const,
             clusterId: cluster.id,
             issueCount: review.issues.length,
             durationMs: Date.now() - workerStart,
@@ -546,7 +419,7 @@ export class ReviewService {
                     pending.set(chunk.toolCallId, { toolName: chunk.toolName, args, startedAt: Date.now() })
                     toolCallCount++
                     _send({
-                        type: 'tool_start',
+                        type: 'tool_start' as const,
                         tool: chunk.toolName,
                         callId: chunk.toolCallId,
                         label: toolStartLabel(chunk.toolName, args),
@@ -574,7 +447,7 @@ export class ReviewService {
                     const output = tr.output ?? tr.result
                     const startedAt = p?.startedAt ?? Date.now()
                     _send({
-                        type: 'tool_done',
+                        type: 'tool_done' as const,
                         callId: tr.toolCallId,
                         label: toolDoneLabel(tr.toolName, args, output),
                         detail: toolDoneDetail(tr.toolName, args, output),
