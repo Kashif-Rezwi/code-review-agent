@@ -1,5 +1,4 @@
-import { Processor, WorkerHost } from '@nestjs/bullmq'
-import { OnModuleInit } from '@nestjs/common'
+import { Processor, WorkerHost, OnWorkerEvent } from '@nestjs/bullmq'
 import { Job } from 'bullmq'
 import { ReviewService } from './review.service'
 import { RedisService } from '../queue/redis.service'
@@ -12,7 +11,7 @@ import type { ReviewJobPayload } from '../queue/queue.service'
  * Part of the ReviewModule (so it can inject ReviewService without circular dependencies).
  */
 @Processor('review-jobs')
-export class ReviewProcessor extends WorkerHost implements OnModuleInit {
+export class ReviewProcessor extends WorkerHost {
     constructor(
         private readonly reviewService: ReviewService,
         private readonly redisService: RedisService,
@@ -22,15 +21,27 @@ export class ReviewProcessor extends WorkerHost implements OnModuleInit {
     }
 
     /**
-     * Clean up stuck jobs if the server crashes while a review is RUNNING/PENDING.
-     * BullMQ will retry/handle its own internal jobs, but this fixes the Postgres state.
+     * Rescues stuck jobs if BullMQ inherently terminates them (e.g. Node process stall/eviction).
+     * Binds strictly to the BullMQ failed event instead of using brittle DB polling timeouts.
      */
-    async onModuleInit() {
-        const thirtyMinsAgo = new Date(Date.now() - 30 * 60 * 1000)
+    @OnWorkerEvent('failed')
+    async onFailed(job: Job<ReviewJobPayload> | undefined, error: Error) {
+        if (!job) return
+        const { reviewId } = job.data
+
+        // Force Postgres state sync
         await this.prisma.review.updateMany({
-            where: { status: 'PENDING', createdAt: { lt: thirtyMinsAgo } },
-            data: { status: 'FAILED', summary: 'Review did not complete — server restarted.' },
+            where: { id: reviewId, status: 'PENDING' },
+            data: { status: 'FAILED', summary: `Review failed unexpectedly: ${error.message}` },
         }).catch(() => null)
+
+        // Force terminate any live SSE clients spinning in the browser
+        try {
+            const msg = JSON.stringify({ type: 'error', message: `Background job failed: ${error.message}` })
+            await this.redisService.emitEvent(reviewId, msg)
+        } catch (e) {
+            console.error('Failed to emit terminal failure event', e)
+        }
     }
 
     async process(job: Job<ReviewJobPayload>): Promise<void> {

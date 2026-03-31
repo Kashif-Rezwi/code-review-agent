@@ -133,23 +133,6 @@ export function useReviewStream(initialReviewId?: string | null, githubToken?: s
 
             const { reviewId } = await sessionRes.json()
 
-            // 2. Enqueue Job
-            const enqueueRes = await fetch(`${API_URL}/review/enqueue`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    ...(githubToken ? { Authorization: `Bearer ${githubToken}` } : {}),
-                },
-                body: JSON.stringify({ reviewId }),
-            })
-
-            if (!enqueueRes.ok) {
-                const text = await enqueueRes.text()
-                try { message = (JSON.parse(text) as { message?: string }).message ?? message }
-                catch { message = text || message }
-                throw new Error(message)
-            }
-
             return reviewId
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed to start review')
@@ -318,23 +301,13 @@ export function useReviewStream(initialReviewId?: string | null, githubToken?: s
             }
         }
 
-        const handleEvent = (e: MessageEvent) => {
+        es.onmessage = (e: MessageEvent) => {
             try {
                 dispatch(JSON.parse(e.data))
             } catch {
                 // Ignore malformed events
             }
         }
-
-        const eventTypes = [
-            'start', 'task_plan', 'task_update', 'cluster_plan',
-            'cluster_done', 'thinking', 'tool_start', 'tool_done',
-            'complete', 'error'
-        ]
-
-        eventTypes.forEach(type => {
-            es.addEventListener(type, handleEvent as EventListener)
-        })
 
         es.onerror = (e) => {
             if (es.readyState === EventSource.CLOSED) {

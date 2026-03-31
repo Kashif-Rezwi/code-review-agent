@@ -21,12 +21,17 @@ export class RedisService implements OnModuleDestroy {
     }
 
     /**
-     * Appends an event to the replay list and refreshes the TTL to 1 hour.
+     * Appends an event to the replay list, sets TTL, and broadcasts it atomically 
+     * via a Redis pipeline to eliminate network round-trip overhead.
      */
-    async addToLog(reviewId: string, message: string): Promise<void> {
+    async emitEvent(reviewId: string, message: string): Promise<void> {
         const key = `rl:${reviewId}`
-        await this.publisher.rpush(key, message)
-        await this.publisher.expire(key, 3600)
+        await this.publisher
+            .pipeline()
+            .rpush(key, message)
+            .expire(key, 3600)
+            .publish(`re:${reviewId}`, message)
+            .exec()
     }
 
     /**
@@ -34,13 +39,6 @@ export class RedisService implements OnModuleDestroy {
      */
     async getLog(reviewId: string): Promise<string[]> {
         return this.publisher.lrange(`rl:${reviewId}`, 0, -1)
-    }
-
-    /**
-     * Broadcasts an event to all live subscribers.
-     */
-    async broadcast(reviewId: string, message: string): Promise<void> {
-        await this.publisher.publish(`re:${reviewId}`, message)
     }
 
     onModuleDestroy() {

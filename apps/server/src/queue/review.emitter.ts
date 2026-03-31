@@ -17,8 +17,7 @@ export function createRedisEmitter(
         send: (event: ReviewStreamEvent) => {
             trace.push(event)
             const msg = JSON.stringify(event)
-            redis.addToLog(reviewId, msg).catch(console.error)
-            redis.broadcast(reviewId, msg).catch(console.error)
+            redis.emitEvent(reviewId, msg).catch(console.error)
         },
         getTrace: () => trace,
         startedAt: Date.now(),

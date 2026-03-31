@@ -18,28 +18,23 @@ export class ReviewController {
         private readonly redisService: RedisService,
     ) { }
 
-    // ── Queue & Session Endpoints ─────────────────────────────────────────────
+    // ── Session & Queue Endpoint ──────────────────────────────────────────────
 
     @Post('session')
     @HttpCode(201)
     async createSession(@Body() dto: { type: 'CODE' | 'PR'; input: string }, @Req() req: Request) {
+        // Create DB record
         const review = await this.reviewService.createSession(dto.type, dto.input, req.user!.userId)
-        return { reviewId: review.id }
-    }
-
-    @Post('enqueue')
-    @HttpCode(202)
-    async enqueueJob(@Body() dto: { reviewId: string }, @Req() req: Request) {
-        const review = await this.historyService.getReview(dto.reviewId, req.user!.userId)
-        if (!review) throw new UnauthorizedException('Review not found')
-
+        
+        // Push directly to BullMQ
         await this.queueService.enqueue({
-            reviewId: dto.reviewId,
+            reviewId: review.id,
             type: review.type as 'CODE' | 'PR',
             input: review.input,
             userId: req.user!.userId,
         })
-        return { queued: true }
+        
+        return { reviewId: review.id }
     }
 
     @Get(':reviewId/stream')
@@ -57,8 +52,7 @@ export class ReviewController {
         if (history.length > 0) {
             let buffer = ''
             for (const msg of history) {
-                const event = JSON.parse(msg)
-                buffer += `event: ${event.type}\ndata: ${msg}\n\n`
+                buffer += `data: ${msg}\n\n`
             }
             res.write(buffer)
             if ((res as any).flush) (res as any).flush()
@@ -70,9 +64,9 @@ export class ReviewController {
             // we MUST send a terminal event so the client closes the EventSource.
             if (history.length === 0) {
                 if (review.status === 'COMPLETE') {
-                    res.write(`event: complete\ndata: {"type":"complete","review":{"id":"${review.id}"}}\n\n`)
+                    res.write(`data: {"type":"complete","review":{"id":"${review.id}"}}\n\n`)
                 } else {
-                    res.write(`event: error\ndata: {"type":"error","message":"${review.summary || 'Review failed'}"}\n\n`)
+                    res.write(`data: {"type":"error","message":"${review.summary || 'Review failed'}"}\n\n`)
                 }
                 if ((res as any).flush) (res as any).flush()
             }
@@ -85,7 +79,7 @@ export class ReviewController {
         await sub.subscribe(`re:${reviewId}`)
         sub.on('message', (channel, msg) => {
             const event = JSON.parse(msg)
-            res.write(`event: ${event.type}\ndata: ${msg}\n\n`)
+            res.write(`data: ${msg}\n\n`)
             if ((res as any).flush) (res as any).flush()
             if (event.type === 'complete' || event.type === 'error') {
                 res.end()
