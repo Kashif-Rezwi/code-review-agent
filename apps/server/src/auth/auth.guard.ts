@@ -57,14 +57,16 @@ export class AuthGuard implements CanActivate {
     async canActivate(context: ExecutionContext): Promise<boolean> {
         const req = context.switchToHttp().getRequest<Request>()
         const authHeader = req.headers['authorization']
+        let token: string | undefined
 
-        if (!authHeader?.startsWith('Bearer ')) {
-            throw new UnauthorizedException('Missing or malformed Authorization header.')
+        if (authHeader?.startsWith('Bearer ')) {
+            token = authHeader.slice(7).trim()
+        } else if (req.query.token && typeof req.query.token === 'string') {
+            token = req.query.token
         }
 
-        const token = authHeader.slice(7).trim()
         if (!token) {
-            throw new UnauthorizedException('Bearer token is empty.')
+            throw new UnauthorizedException('Missing or malformed Authorization token.')
         }
 
         const entry = await this.resolve(token)

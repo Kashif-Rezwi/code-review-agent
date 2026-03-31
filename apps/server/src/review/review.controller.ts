@@ -22,7 +22,7 @@ export class ReviewController {
 
     @Post('session')
     @HttpCode(201)
-    async createSession(@Body() dto: { type: 'CODE'|'PR'; input: string }, @Req() req: Request) {
+    async createSession(@Body() dto: { type: 'CODE' | 'PR'; input: string }, @Req() req: Request) {
         const review = await this.reviewService.createSession(dto.type, dto.input, req.user!.userId)
         return { reviewId: review.id }
     }
@@ -45,7 +45,7 @@ export class ReviewController {
     @Get(':reviewId/stream')
     async streamReview(@Param('reviewId') reviewId: string, @Res() res: Response, @Req() req: Request) {
         const review = await this.historyService.getReview(reviewId, req.user!.userId)
-        
+
         res.setHeader('Content-Type', 'text/event-stream')
         res.setHeader('Cache-Control', 'no-cache')
         res.setHeader('Connection', 'keep-alive')
@@ -54,9 +54,14 @@ export class ReviewController {
 
         // Replay history
         const history = await this.redisService.getLog(reviewId)
-        for (const msg of history) {
-            const event = JSON.parse(msg)
-            res.write(`event: ${event.type}\ndata: ${msg}\n\n`)
+        if (history.length > 0) {
+            let buffer = ''
+            for (const msg of history) {
+                const event = JSON.parse(msg)
+                buffer += `event: ${event.type}\ndata: ${msg}\n\n`
+            }
+            res.write(buffer)
+            if ((res as any).flush) (res as any).flush()
         }
 
         // DB Status sync (in case worker finished or crashed)
@@ -69,6 +74,7 @@ export class ReviewController {
                 } else {
                     res.write(`event: error\ndata: {"type":"error","message":"${review.summary || 'Review failed'}"}\n\n`)
                 }
+                if ((res as any).flush) (res as any).flush()
             }
             res.end()
             return
@@ -80,6 +86,7 @@ export class ReviewController {
         sub.on('message', (channel, msg) => {
             const event = JSON.parse(msg)
             res.write(`event: ${event.type}\ndata: ${msg}\n\n`)
+            if ((res as any).flush) (res as any).flush()
             if (event.type === 'complete' || event.type === 'error') {
                 res.end()
                 sub.quit()
@@ -87,7 +94,7 @@ export class ReviewController {
         })
 
         // Clean up on disconnect
-        res.on('close', () => sub.quit())
+        req.on('close', () => sub.quit())
     }
 
     @Get(':reviewId')
