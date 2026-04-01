@@ -41,8 +41,10 @@ RUN pnpm --filter @cra/ai   build
 # Copy server application code AFTER packages are built
 COPY apps/server    ./apps/server
 
-# 2. Build NestJS (prisma generate is separated out — runs after deploy below)
-RUN pnpm --filter server build
+# 2. Build NestJS (prisma generate requires dummy env vars to parse the schema)
+RUN DATABASE_URL="postgresql://dummy:dummy@localhost/dummy" \
+    DIRECT_URL="postgresql://dummy:dummy@localhost/dummy" \
+    pnpm --filter server build
 
 # 3. Isolate the server and its production dependencies into a standalone folder
 RUN pnpm deploy --filter server --prod /app/deploy

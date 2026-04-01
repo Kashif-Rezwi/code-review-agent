@@ -5,8 +5,8 @@ import {
     Logger,
 } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
-import { createOpenAI } from '@ai-sdk/openai'
 import { generateText, streamText } from 'ai'
+import { AiService } from '../ai/ai.service'
 import {
     buildSystemPrompt,
     ReviewDataSchema,
@@ -21,12 +21,12 @@ import {
 } from '@cra/ai'
 import type { ReviewData, PRFile, ClusterPlan } from '@cra/ai'
 import type { ReviewStreamEvent } from '@cra/types'
-import type { Prisma } from '@prisma/client'
 import { GithubService } from '../github/github.service'
 import { LinterService } from '../linter/linter.service'
 import { RagService } from '../rag/rag.service'
-import { PrismaService } from '../prisma/prisma.service'
+import { ReviewRepository } from './review.repository'
 import type { SseConnection } from './review.sse'
+import { parseReviewText } from './review-parser.util'
 import {
     parseArgs, pickArgs,
     toolStartLabel, toolStartDetail,
@@ -44,35 +44,24 @@ const MAX_PATCH_CHARS = 3_000
 @Injectable()
 export class ReviewService {
     private readonly logger = new Logger(ReviewService.name)
-    private openai
-    private readonly hasDb: boolean
-
     constructor(
         private config: ConfigService,
-        private prisma: PrismaService,
+        private reviewRepository: ReviewRepository,
         private githubService: GithubService,
         private linterService: LinterService,
         private ragService: RagService,
+        private aiService: AiService,
     ) {
-        this.openai = createOpenAI({
-            apiKey: this.config.get<string>('OPENAI_API_KEY'),
-        })
-        this.hasDb = !!this.config.get('DATABASE_URL')
     }
 
     async createSession(type: 'CODE' | 'PR', input: string, userId: string) {
-        if (!this.hasDb) throw new InternalServerErrorException('Database not configured')
-        return this.prisma.review.create({
-            data: { userId, type, input, status: 'PENDING' }
-        })
+        const session = await this.reviewRepository.createSession(type, input, userId)
+        if (!session) throw new InternalServerErrorException('Database not configured or failed to create session')
+        return session
     }
 
     async markFailed(reviewId: string, message: string) {
-        if (!this.hasDb) return
-        await this.prisma.review.update({
-            where: { id: reviewId },
-            data: { status: 'FAILED', summary: message }
-        }).catch(() => null)
+        await this.reviewRepository.markFailed(reviewId, message)
     }
 
     async runForQueue(reviewId: string, type: 'CODE' | 'PR', input: string, userId: string, conn: SseConnection): Promise<void> {
@@ -149,7 +138,7 @@ export class ReviewService {
             // ── Phase 2: Plan clusters ────────────────────────────────────────
             // Use lightweight LLM call to plan clusters intelligently.
             // Falls back to single "general" cluster automatically on error.
-            const clusters = await planClusters(files, this.openai)
+            const clusters = await planClusters(files, this.aiService.provider)
 
             // Tell the UI exactly what clusters exist — it renders panels immediately
             send({
@@ -200,7 +189,7 @@ export class ReviewService {
                     durationMs: Date.now() - startedAt,
                     stepCount: 1,
                 })
-                await this.saveReview(prUrl, 'PR', merged, userId, conn.getTrace(), reviewId)
+                await this.reviewRepository.saveReview(prUrl, 'PR', merged, userId, conn.getTrace(), reviewId)
                 return
             }
 
@@ -216,7 +205,7 @@ export class ReviewService {
                 durationMs: Date.now() - startedAt,
                 stepCount: clusters.length + 1, // workers + synthesis
             })
-            await this.saveReview(prUrl, 'PR', merged, userId, conn.getTrace(), reviewId)
+            await this.reviewRepository.saveReview(prUrl, 'PR', merged, userId, conn.getTrace(), reviewId)
 
         } catch (err) {
             const message = err instanceof Error ? err.message : 'PR review failed'
@@ -261,7 +250,7 @@ export class ReviewService {
 
         try {
             const result = streamText({
-                model: this.openai('gpt-4o-mini'),
+                model: this.aiService.defaultModel,
                 system,
                 messages: [{ role: 'user', content: userMessage }],
                 // PR path: NO tools — context is fully pre-built from diffs. Giving the
@@ -272,7 +261,7 @@ export class ReviewService {
 
                 stopWhen: ({ steps }) => {
                     const lastText = steps.at(-1)?.text ?? ''
-                    try { this.parseReviewText(lastText); return true } catch { /* keep going */ }
+                    try { parseReviewText(lastText); return true } catch { /* keep going */ }
                     return steps.length >= MAX_STEPS
                 },
 
@@ -290,7 +279,7 @@ export class ReviewService {
             const allTexts = [finalText, ...steps.map(s => s.text).reverse()].filter(t => t.trim())
             let review: ReviewData | undefined
             for (const text of allTexts) {
-                try { review = this.parseReviewText(text); break } catch { /* try next */ }
+                try { review = parseReviewText(text); break } catch { /* try next */ }
             }
 
             if (!review) {
@@ -309,7 +298,7 @@ export class ReviewService {
                 durationMs: Date.now() - _startedAt,
                 stepCount: getToolCallCount(),
             })
-            await this.saveReview(input, reviewType, merged, userId, conn.getTrace(), reviewId)
+            await this.reviewRepository.saveReview(input, reviewType, merged, userId, conn.getTrace(), reviewId)
         } catch (err: unknown) {
             const message = err instanceof Error ? err.message : 'Code review failed.'
             thinking.flushPending()
@@ -360,14 +349,14 @@ export class ReviewService {
         const { onChunk, onStepFinish } = this.buildStreamCallbacks(clusterSend, pending, thinking)
 
         const result = streamText({
-            model: this.openai('gpt-4o-mini'),
+            model: this.aiService.defaultModel,
             system,
             messages: [{ role: 'user', content: userMessage }],
             tools,
             temperature: 0.2,
             stopWhen: ({ steps }) => {
                 const lastText = steps.at(-1)?.text ?? ''
-                try { this.parseReviewText(lastText); return true } catch { /* keep going */ }
+                try { parseReviewText(lastText); return true } catch { /* keep going */ }
                 return steps.length >= AGENT_MAX_STEPS.WORKER
             },
             prepareStep: ({ steps }) => {
@@ -383,7 +372,7 @@ export class ReviewService {
         const allTexts = [finalText, ...steps.map(s => s.text).reverse()].filter(t => t.trim())
         let review: ReviewData | undefined
         for (const text of allTexts) {
-            try { review = this.parseReviewText(text); break } catch { /* try next */ }
+            try { review = parseReviewText(text); break } catch { /* try next */ }
         }
 
         if (!review) {
@@ -481,12 +470,12 @@ export class ReviewService {
         // ── Attempt 1: standard ───────────────────────────────────────────────
         try {
             const { text } = await generateText({
-                model: this.openai('gpt-4o-mini'),
+                model: this.aiService.defaultModel,
                 system: baseSystem,
                 messages: [{ role: 'user', content: userMessage }],
                 temperature: 0.2,
             })
-            return this.parseReviewText(text)
+            return parseReviewText(text)
         } catch (err) {
             this.logger.warn(`Synthesis attempt 1 failed: ${err instanceof Error ? err.message : err}`)
         }
@@ -494,14 +483,14 @@ export class ReviewService {
         // ── Attempt 2: temperature 0 + reinforced JSON-only instruction ───────
         try {
             const { text } = await generateText({
-                model: this.openai('gpt-4o-mini'),
+                model: this.aiService.defaultModel,
                 system: baseSystem + '\n\nFINAL INSTRUCTION: Your entire response must be ONE JSON object. ' +
                     'Start with a line containing only { and end with a line containing only }. ' +
                     'Absolutely no text before or after the JSON.',
                 messages: [{ role: 'user', content: userMessage }],
                 temperature: 0,
             })
-            return this.parseReviewText(text)
+            return parseReviewText(text)
         } catch (err) {
             this.logger.warn(`Synthesis attempt 2 failed: ${err instanceof Error ? err.message : err}`)
         }
@@ -579,136 +568,5 @@ export class ReviewService {
 
     private errMsg(err: unknown): string {
         return err instanceof Error ? err.message : String(err)
-    }
-
-    private async saveReview(
-        input: string,
-        type: 'CODE' | 'PR',
-        data: ReviewData,
-        userId: string,
-        traceLog?: ReviewStreamEvent[],
-        reviewId?: string,
-    ): Promise<string | undefined> {
-        if (!this.hasDb) return undefined
-        try {
-            const reviewData = {
-                summary: data.summary,
-                score: data.score,
-                positives: data.positives,
-                appliedStandards: data.appliedStandards ?? [],
-                ...(traceLog && traceLog.length > 0
-                    ? { traceLog: traceLog as unknown as Prisma.InputJsonValue }
-                    : {}),
-                issues: {
-                    create: data.issues.map((i) => ({
-                        type: i.type,
-                        severity: i.severity,
-                        title: i.title,
-                        location: i.location,
-                        description: i.description,
-                        recommendation: i.recommendation,
-                    })),
-                },
-            }
-
-            if (reviewId) {
-                const saved = await this.prisma.review.update({
-                    where: { id: reviewId },
-                    data: { ...reviewData, status: 'COMPLETE' },
-                })
-                return saved.id
-            }
-
-            const saved = await this.prisma.review.create({
-                data: {
-                    userId,
-                    type,
-                    input,
-                    status: 'COMPLETE',
-                    ...reviewData,
-                },
-            })
-            return saved.id
-        } catch (err) {
-            this.logger.warn(
-                `Failed to save review: ${err instanceof Error ? err.message : err}`,
-            )
-            return undefined
-        }
-    }
-
-    /**
-     * Extract ReviewData from the model's text output.
-     *
-     * Handles five real-world failure modes in priority order:
-     *   ① Clean JSON (most common — workers and synthesis under normal conditions)
-     *   ② Markdown-fenced JSON  (``` json … ```)
-     *   ③ Balanced-brace extraction from every line-boundary `{` — handles prose before JSON
-     *      AND prose after JSON (the `lastIndexOf('}')` strategy breaks when the model
-     *      appends trailing commentary containing `}` characters)
-     *   ④ First `{` to matching balanced `}` — final safety net for inline JSON
-     *
-     * Throws only if all candidates fail Zod validation — the caller should then retry.
-     */
-    private parseReviewText(text: string): ReviewData {
-        const t = text.trim()
-
-        const candidates: string[] = [t]
-
-        // ① Markdown fence — strip code fences the model adds despite instructions
-        const fenceMatch = t.match(/```(?:json)?\s*([\s\S]*?)```/)
-        if (fenceMatch) candidates.push(fenceMatch[1].trim())
-
-        // ② & ③ All line-boundary `{` positions (last to first) using balanced extraction.
-        //   Processing last-to-first ensures we try the most recent JSON block first,
-        //   which is correct when the model outputs analysis prose before the JSON object.
-        const starts: number[] = []
-        if (t.startsWith('{')) starts.push(0)
-        let pos = 0
-        while ((pos = t.indexOf('\n{', pos)) !== -1) { starts.push(pos + 1); pos++ }
-
-        for (let i = starts.length - 1; i >= 0; i--) {
-            const end = this.findBalancedBraceEnd(t, starts[i])
-            if (end !== -1) candidates.push(t.slice(starts[i], end + 1))
-        }
-
-        // ④ First `{` to its balanced `}` — handles JSON not at a line boundary
-        const firstBrace = t.indexOf('{')
-        if (firstBrace !== -1) {
-            const end = this.findBalancedBraceEnd(t, firstBrace)
-            if (end !== -1) candidates.push(t.slice(firstBrace, end + 1))
-        }
-
-        for (const candidate of candidates) {
-            try {
-                return ReviewDataSchema.parse(JSON.parse(candidate))
-            } catch { /* try next candidate */ }
-        }
-
-        throw new InternalServerErrorException(
-            'The model did not return a valid review. Please try again.',
-        )
-    }
-
-    /**
-     * Walk `text` from `start` (which must be `{`) to find its balanced closing `}`.
-     * Correctly skips `{` and `}` characters inside JSON string values.
-     * Returns the index of the closing `}`, or -1 if the braces are unbalanced.
-     */
-    private findBalancedBraceEnd(text: string, start: number): number {
-        let depth = 0
-        let inString = false
-        let escape = false
-
-        for (let i = start; i < text.length; i++) {
-            const ch = text[i]
-            if (escape) { escape = false; continue }
-            if (ch === '\\' && inString) { escape = true; continue }
-            if (ch === '"') { inString = !inString; continue }
-            if (inString) { continue }
-            if (ch === '{') { depth++ }
-            else if (ch === '}') { if (--depth === 0) return i }
-        }
-        return -1
     }
 }

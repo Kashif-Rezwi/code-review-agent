@@ -2,7 +2,7 @@ import { Processor, WorkerHost, OnWorkerEvent } from '@nestjs/bullmq'
 import { Job } from 'bullmq'
 import { ReviewService } from './review.service'
 import { RedisService } from '../queue/redis.service'
-import { PrismaService } from '../prisma/prisma.service'
+import { ReviewRepository } from './review.repository'
 import { createRedisEmitter } from '../queue/review.emitter'
 import type { ReviewJobPayload } from '../queue/queue.service'
 
@@ -15,7 +15,7 @@ export class ReviewProcessor extends WorkerHost {
     constructor(
         private readonly reviewService: ReviewService,
         private readonly redisService: RedisService,
-        private readonly prisma: PrismaService,
+        private readonly reviewRepository: ReviewRepository,
     ) {
         super()
     }
@@ -30,10 +30,7 @@ export class ReviewProcessor extends WorkerHost {
         const { reviewId } = job.data
 
         // Force Postgres state sync
-        await this.prisma.review.updateMany({
-            where: { id: reviewId, status: 'PENDING' },
-            data: { status: 'FAILED', summary: `Review failed unexpectedly: ${error.message}` },
-        }).catch(() => null)
+        await this.reviewRepository.markFailed(reviewId, `Review failed unexpectedly: ${error.message}`).catch(() => null)
 
         // Force terminate any live SSE clients spinning in the browser
         try {

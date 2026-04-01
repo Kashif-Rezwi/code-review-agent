@@ -1,79 +1,36 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common'
-import { ConfigService } from '@nestjs/config'
-import { createOpenAI } from '@ai-sdk/openai'
-import { streamText } from 'ai'
-import type { Response } from 'express'
-import { PrismaService } from '../prisma/prisma.service'
 
-type ReviewWithRelations = Awaited<ReturnType<HistoryService['getReview']>>
+import { AiService } from '../ai/ai.service'
+import { streamText } from 'ai'
+import { HistoryRepository, ReviewWithRelations } from './history.repository'
 
 @Injectable()
 export class HistoryService {
     private readonly logger = new Logger(HistoryService.name)
-    private readonly openai: ReturnType<typeof createOpenAI>
-
     constructor(
-        private readonly prisma: PrismaService,
-        config: ConfigService,
-    ) {
-        this.openai = createOpenAI({ apiKey: config.get<string>('OPENAI_API_KEY') })
-    }
+        private readonly historyRepository: HistoryRepository,
+        private readonly aiService: AiService,
+    ) {}
 
     listReviews(userId: string) {
-        return this.prisma.review.findMany({
-            where: { userId },
-            select: {
-                id: true,
-                type: true,
-                summary: true,
-                score: true,
-                createdAt: true,
-                _count: { select: { issues: true } },
-            },
-            orderBy: { createdAt: 'desc' },
-        })
+        return this.historyRepository.listReviews(userId)
     }
 
     async getReview(id: string, userId: string) {
-        const review = await this.prisma.review.findFirst({
-            where: { id, userId },
-            include: {
-                issues: true,
-                conversations: { orderBy: { createdAt: 'asc' } },
-            },
-        })
+        const review = await this.historyRepository.getReview(id, userId)
         if (!review) throw new NotFoundException(`Review ${id} not found.`)
         return review
     }
 
     async getStats(userId: string) {
-        const [totalReviews, byType, bySeverity] = await Promise.all([
-            this.prisma.review.count({ where: { userId } }),
-            this.prisma.issue.groupBy({
-                by: ['type'],
-                where: { review: { userId } },
-                _count: { type: true },
-                orderBy: { _count: { type: 'desc' } },
-            }),
-            this.prisma.issue.groupBy({
-                by: ['severity'],
-                where: { review: { userId } },
-                _count: { severity: true },
-            }),
-        ])
-
-        return {
-            totalReviews,
-            issuesByType: byType.map((r) => ({ type: r.type, count: r._count.type })),
-            issuesBySeverity: bySeverity.map((r) => ({
-                severity: r.severity,
-                count: r._count.severity,
-            })),
-        }
+        return this.historyRepository.getStats(userId)
     }
 
-    async chat(id: string, userId: string, message: string, res: Response) {
-        // Validate before touching res — NotFoundException is handled by NestJS before headers are set
+    /**
+     * Streams the chat completion from the LLM, yielding text chunks.
+     * Persists the conversation securely to the database when the stream naturally completes.
+     */
+    async *chatGenerator(id: string, userId: string, message: string): AsyncGenerator<string, void, unknown> {
         const review = await this.getReview(id, userId)
         const system = this.buildChatSystem(review)
 
@@ -82,47 +39,23 @@ export class HistoryService {
             content: c.content,
         }))
 
-        // Set SSE headers
-        res.setHeader('Content-Type', 'text/event-stream')
-        res.setHeader('Cache-Control', 'no-cache')
-        res.setHeader('Connection', 'keep-alive')
-        res.setHeader('X-Accel-Buffering', 'no')
-        res.flushHeaders()
-
         const result = streamText({
-            model: this.openai('gpt-4o-mini'),
+            model: this.aiService.defaultModel,
             system,
             messages: [...history, { role: 'user', content: message }],
             temperature: 0.3,
         })
 
         let fullText = ''
-        try {
-            for await (const chunk of result.textStream) {
-                fullText += chunk
-                res.write(`data: ${JSON.stringify({ type: 'delta', text: chunk })}\n\n`)
-            }
-            res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`)
-        } catch {
-            res.write(`data: ${JSON.stringify({ type: 'error', message: 'Stream interrupted' })}\n\n`)
-        } finally {
-            res.end()
+        
+        // Let any AI SDK errors throw naturally back to the controller
+        for await (const chunk of result.textStream) {
+            fullText += chunk
+            yield chunk
         }
 
-        // Persist after stream completes — client is already disconnected, log failures
         if (fullText) {
-            try {
-                await this.prisma.$transaction([
-                    this.prisma.conversation.create({
-                        data: { reviewId: id, role: 'user', content: message },
-                    }),
-                    this.prisma.conversation.create({
-                        data: { reviewId: id, role: 'assistant', content: fullText },
-                    }),
-                ])
-            } catch (err) {
-                this.logger.error(`Failed to persist chat for review ${id}`, err)
-            }
+            await this.historyRepository.saveChatQuery(id, message, fullText)
         }
     }
 
