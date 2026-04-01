@@ -28,7 +28,7 @@ interface FullReview extends ReviewData {
 }
 
 export default function ReviewDetailPage() {
-    const { id } = useParams<{ id: string }>()
+    const { reviewType, reviewId } = useParams<{ reviewType: string, reviewId: string }>()
     const [review, setReview] = useState<FullReview | null>(null)
     const [isLoading, setIsLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
@@ -36,7 +36,7 @@ export default function ReviewDetailPage() {
     const { data: session, status } = useSession()
     const githubToken = session?.githubToken
 
-    const { messages, input, setInput, isSending, streamingContent, submit } = useChatMessages(id, review?.conversations, githubToken)
+    const { messages, input, setInput, isSending, streamingContent, submit } = useChatMessages(reviewId, review?.conversations, githubToken)
 
     const reviewPanelRef = useRef<HTMLDivElement>(null)
     const chatSectionRef = useRef<HTMLDivElement>(null)
@@ -47,11 +47,11 @@ export default function ReviewDetailPage() {
 
     useEffect(() => {
         if (!githubToken) return
-        apiFetch<FullReview>(`/history/${id}`, undefined, githubToken)
+        apiFetch<FullReview>(`/history/${reviewId}`, undefined, githubToken)
             .then(setReview)
             .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load review.'))
             .finally(() => setIsLoading(false))
-    }, [id, githubToken])
+    }, [reviewId, githubToken])
 
     const handleSubmit = useCallback(async () => {
         scrollToBottom()

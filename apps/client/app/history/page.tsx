@@ -174,7 +174,7 @@ export default function HistoryPage() {
                         {reviews.map((review) => (
                             <Link
                                 key={review.id}
-                                href={`/history/${review.id}`}
+                                href={`/history/${review.type === 'PR' ? 'github_pr' : 'paste_code'}/${review.id}`}
                                 className="block rounded-lg border border-gray-800 bg-gray-900/40 p-4
                                            hover:border-gray-700 hover:bg-gray-900/60 transition-colors"
                             >
