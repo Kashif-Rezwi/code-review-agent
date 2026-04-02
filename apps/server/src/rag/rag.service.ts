@@ -1,67 +1,46 @@
 import { Injectable, Logger, BadRequestException } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
-import { createOpenAI } from '@ai-sdk/openai'
 import { embed, embedMany } from 'ai'
-import { randomUUID } from 'crypto'
 import { chunkText } from '@cra/ai'
-import { PrismaService } from '../prisma/prisma.service'
-
-export interface RetrievedStandards {
-    content: string
-    appliedNames: string[]
-}
-
-interface ChunkRow {
-    content: string
-    name: string
-}
+import { RagRepository, RetrievedStandards } from './rag.repository'
+import { extractText } from './document-parser.util'
+import { AiService } from '../ai/ai.service'
 
 @Injectable()
 export class RagService {
     private readonly logger = new Logger(RagService.name)
-    private readonly openai: ReturnType<typeof createOpenAI>
-    /** Cached at startup — avoids a config lookup on every retrieval. */
     private readonly hasDb: boolean
 
     constructor(
-        private readonly prisma: PrismaService,
+        private readonly ragRepository: RagRepository,
+        private readonly aiService: AiService,
         config: ConfigService,
     ) {
-        this.openai = createOpenAI({ apiKey: config.get<string>('OPENAI_API_KEY') })
         this.hasDb = !!config.get('DATABASE_URL')
     }
 
     // ── Ingest ───────────────────────────────────────────────────────────────
 
     async ingest(buffer: Buffer, mimeType: string, fileName: string, userId: string) {
-        const text = await this.extractText(buffer, mimeType)
+        this.logger.log(`[RAG Ingest] Booting ingestion for "${fileName}" (${mimeType}).`)
+        const text = await extractText(buffer, mimeType)
         const chunks = chunkText(text)
 
         if (!chunks.length) {
+            this.logger.warn(`[RAG Ingest] Failed - Document has no readable content.`)
             throw new BadRequestException('Document has no readable content.')
         }
 
+        this.logger.log(`[RAG Ingest] Extracted ${chunks.length} chunks. Generating embeddings...`)
         // One batched API call for all chunks — far fewer round-trips than a loop
         const { embeddings } = await embedMany({
-            model: this.openai.embedding('text-embedding-3-small'),
+            model: this.aiService.embeddingModel,
             values: chunks,
         })
 
-        // Atomic: if any INSERT fails the whole document is rolled back
-        return this.prisma.$transaction(async (tx) => {
-            const doc = await tx.document.create({ data: { userId, name: fileName } })
-
-            for (let i = 0; i < chunks.length; i++) {
-                // Prisma ORM cannot write vector columns — raw INSERT is required
-                await tx.$executeRaw`
-                    INSERT INTO "DocumentChunk" (id, "documentId", content, embedding)
-                    VALUES (${randomUUID()}, ${doc.id}, ${chunks[i]}, ${`[${embeddings[i].join(',')}]`}::vector)
-                `
-            }
-
-            this.logger.log(`Ingested "${fileName}" → ${chunks.length} chunk(s)`)
-            return { id: doc.id, name: doc.name, createdAt: doc.createdAt }
-        })
+        // Delegate persistence and SQL vectors to Repository
+        this.logger.log(`[RAG Ingest SUCCESS] Persisting ${chunks.length} vector chunks to pgvector.`)
+        return this.ragRepository.insertDocumentWithEmbeddings(fileName, userId, chunks, embeddings)
     }
 
     // ── Retrieve ─────────────────────────────────────────────────────────────
@@ -72,33 +51,30 @@ export class RagService {
      * no standards are uploaded or the DB is unavailable.
      */
     async retrieveForContext(queryText: string, userId: string): Promise<RetrievedStandards | null> {
-        if (!this.hasDb) return null
+        if (!this.hasDb) {
+            this.logger.log(`[RAG Retrieve] Bypassed - no active DB Connection.`)
+            return null
+        }
 
         try {
+            this.logger.log(`[RAG Retrieve] Encoding context query: \n\n"${queryText}"\n\n...`)
             const { embedding } = await embed({
-                model: this.openai.embedding('text-embedding-3-small'),
+                model: this.aiService.embeddingModel,
                 value: queryText,
             })
 
-            const rows = await this.prisma.$queryRaw<ChunkRow[]>`
-                SELECT dc.content, d.name
-                FROM "DocumentChunk" dc
-                JOIN "Document" d ON dc."documentId" = d.id
-                WHERE d."userId" = ${userId}
-                  AND dc.embedding IS NOT NULL
-                ORDER BY dc.embedding <=> ${`[${embedding.join(',')}]`}::vector
-                LIMIT 5
-            `
+            const standards = await this.ragRepository.querySimilarChunks(embedding, userId)
 
-            if (!rows.length) return null
-
-            return {
-                content: rows.map((r) => r.content).join('\n\n---\n\n'),
-                appliedNames: [...new Set(rows.map((r) => r.name))],
+            if (standards && standards.appliedNames.length > 0) {
+                this.logger.log(`[RAG Retrieve SUCCESS] Embedded ${standards.appliedNames.length} custom standard rules into Model context!`)
+            } else {
+                this.logger.log(`[RAG Retrieve INFO] No uploaded coding standards found for AI Review injection.`)
             }
+
+            return standards
         } catch (err) {
             this.logger.warn(
-                `RAG retrieval failed, review will proceed without standards: ${err instanceof Error ? err.message : err}`,
+                `RAG retrieval encountered an embedding API failure: ${err instanceof Error ? err.message : err}`,
             )
             return null
         }
@@ -107,30 +83,10 @@ export class RagService {
     // ── List & Delete ─────────────────────────────────────────────────────────
 
     listDocuments(userId: string) {
-        return this.prisma.document.findMany({
-            where: { userId },
-            select: {
-                id: true,
-                name: true,
-                createdAt: true,
-                _count: { select: { chunks: true } },
-            },
-            orderBy: { createdAt: 'desc' },
-        })
+        return this.ragRepository.listDocuments(userId)
     }
 
     deleteDocument(id: string, userId: string) {
-        return this.prisma.document.delete({ where: { id, userId } })
-    }
-
-    // ── Private helpers ───────────────────────────────────────────────────────
-
-    private async extractText(buffer: Buffer, mimeType: string): Promise<string> {
-        if (mimeType === 'application/pdf') {
-            // Dynamic import — pdf-parse has side-effects that break Jest at the top level
-            const pdfParse = (await import('pdf-parse')).default
-            return (await pdfParse(buffer)).text
-        }
-        return buffer.toString('utf-8')
+        return this.ragRepository.deleteDocument(id, userId)
     }
 }

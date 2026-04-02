@@ -27,7 +27,7 @@ COPY packages/types/package.json ./packages/types/
 
 # Mount pnpm store cache — avoids re-downloading packages on every build
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
-    pnpm install --frozen-lockfile
+    pnpm install --no-frozen-lockfile
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Stage 3: build — compile workspace packages then Next.js

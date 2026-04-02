@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useRef, useState, useCallback } from 'react'
+import { useVisibilitySensor } from '@/lib/hooks/use-visibility-sensor'
 import { ArrowUp, ChevronUp, ChevronDown } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -24,20 +25,8 @@ export function ChatInput({
     chatSectionRef, isAtBottom = true,
     onScrollToReview, onScrollToLatest,
 }: ChatInputProps) {
-    const [isVisible, setIsVisible] = useState(false)
     const [isFocused, setIsFocused] = useState(false)
-
-    // Show when the chat section sentinel enters the viewport.
-    useEffect(() => {
-        const el = chatSectionRef?.current
-        if (!el) { setIsVisible(true); return }
-        const observer = new IntersectionObserver(
-            ([entry]) => setIsVisible(entry.isIntersecting),
-            { threshold: 0 },
-        )
-        observer.observe(el)
-        return () => observer.disconnect()
-    }, [chatSectionRef])
+    const isVisible = useVisibilitySensor(chatSectionRef || { current: null }, true)
 
     const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
         if (e.key === 'Enter' && !e.shiftKey) {

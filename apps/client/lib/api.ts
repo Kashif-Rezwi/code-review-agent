@@ -23,3 +23,34 @@ export async function apiFetch<T>(path: string, init?: RequestInit, token?: stri
     }
     return res.json() as Promise<T>
 }
+
+// ── Structured API Endpoints ──────────────────────────────────────────────────
+
+export const historyService = {
+    getReviews: <T = any[]>(token?: string) => 
+        apiFetch<T>('/history', undefined, token),
+    getStats: <T = any>(token?: string) => 
+        apiFetch<T>('/history/stats', undefined, token),
+    getReview: <T = any>(id: string, token?: string) => 
+        apiFetch<T>(`/history/${id}`, undefined, token),
+}
+
+export const reviewService = {
+    getSession: <T = { type: 'CODE' | 'PR'; input: string }>(id: string, token?: string) => 
+        apiFetch<T>(`/review/${id}`, undefined, token),
+    createSession: (payload: { type: string, input: string }, token?: string) =>
+        apiFetch<{ reviewId: string }>('/review/session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        }, token),
+}
+
+export const ragService = {
+    getDocuments: <T = any[]>(token?: string) => 
+        apiFetch<T>('/rag/documents', undefined, token),
+    uploadDocument: <T = unknown>(formData: FormData, token?: string) => 
+        apiFetch<T>('/rag/upload', { method: 'POST', body: formData }, token),
+    deleteDocument: (id: string, token?: string) => 
+        apiFetch<void>(`/rag/documents/${id}`, { method: 'DELETE' }, token)
+}
