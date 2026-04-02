@@ -1,0 +1,269 @@
+# Deployment & Infrastructure
+
+## Overview
+
+Code Review Agent is a split-deployment system: the **NestJS API** runs on [Render.com](https://render.com) alongside a managed Redis instance, and the **Next.js client** is deployed to [Vercel](https://vercel.com). For local development, a Docker Compose configuration runs all three services together. The Neon PostgreSQL database (with pgvector) is a shared external dependency across all environments.
+
+---
+
+## Production Architecture
+
+```
+Users
+  │
+  ▼
+Vercel CDN / Edge
+  Next.js Client
+  (SSR + static assets)
+        │
+        │ HTTPS API calls
+        ▼
+Render.com (Web Service)
+  NestJS API — PORT 10000
+        │
+        ├── Redis (Render managed)    ← BullMQ queue + pub/sub + replay lists
+        └── Neon PostgreSQL           ← Users, Reviews, RAG vectors
+              (external — shared across envs)
+```
+
+---
+
+## Render.com — API + Redis
+
+Defined in [`render.yaml`](../render.yaml) at the repository root.
+
+### Redis
+
+```yaml
+- type: redis
+  name: code-review-agent-redis
+  plan: free
+  ipAllowList: []
+```
+
+A managed Redis instance. The `REDIS_URL` environment variable is automatically injected into the API service via `fromService.property: connectionString`. No manual configuration needed.
+
+### NestJS Web Service
+
+```yaml
+- type: web
+  name: code-review-agent-api
+  env: node
+  branch: main
+  buildCommand: pnpm install && pnpm build:packages && pnpm --filter server build
+  startCommand: pnpm --filter server start:prod
+```
+
+**Build filter:** Only triggers a redeploy when files under `apps/server/**`, `packages/**`, `package.json`, `pnpm-lock.yaml`, or `pnpm-workspace.yaml` change. Client-only changes do not trigger API rebuilds.
+
+**Build steps:**
+1. `pnpm install` — installs all workspace dependencies
+2. `pnpm build:packages` — compiles `@cra/types` then `@cra/ai`
+3. `pnpm --filter server build` — runs `tsc` on the NestJS app
+
+**Start:** `pnpm --filter server start:prod` — runs the compiled `dist/main.js` via `node`.
+
+**Port:** `10000` (Render's default for web services).
+
+### Required Environment Variables (Render Dashboard)
+
+| Variable | Notes |
+|---|---|
+| `NODE_ENV` | Set to `production` in `render.yaml` |
+| `PORT` | Set to `10000` in `render.yaml` |
+| `REDIS_URL` | Auto-injected from the managed Redis service |
+| `FRONTEND_URL` | The Vercel deployment URL (for CORS) |
+| `OPENAI_API_KEY` | Required — all AI calls fail without this |
+| `DATABASE_URL` | Neon pooled connection string |
+| `DIRECT_URL` | Neon direct connection string (for Prisma) |
+| `GITHUB_CLIENT_ID` | GitHub OAuth App |
+| `GITHUB_CLIENT_SECRET` | GitHub OAuth App |
+| `GITHUB_TOKEN` | *(Optional)* For private repo PR reviews |
+| `HELICONE_API_KEY` | *(Optional)* AI observability |
+
+---
+
+## Vercel — Next.js Client
+
+Configured in [`apps/client/vercel.json`](../apps/client/vercel.json).
+
+Vercel auto-detects Next.js and handles SSR, static export, and Edge functions. The client is deployed from the monorepo root; Vercel's build detects the `apps/client` directory as the Next.js app.
+
+### Required Environment Variables (Vercel Dashboard)
+
+| Variable | Notes |
+|---|---|
+| `NEXTAUTH_URL` | Full public URL of the Vercel deployment |
+| `NEXTAUTH_SECRET` | Random 32+ character secret (generate with `openssl rand -base64 32`) |
+| `GITHUB_CLIENT_ID` | Same GitHub OAuth App as the server |
+| `GITHUB_CLIENT_SECRET` | Same GitHub OAuth App as the server |
+| `NEXT_PUBLIC_API_URL` | The Render.com API URL, e.g. `https://code-review-agent-api.onrender.com` |
+| `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` | *(Optional)* Stripe publishable key |
+
+---
+
+## GitHub OAuth App Setup
+
+Both environments (and local dev) require a GitHub OAuth App.
+
+1. Go to **GitHub → Settings → Developer settings → OAuth Apps → New OAuth App**
+2. Set **Homepage URL** to your client URL (e.g. `https://your-app.vercel.app`) 
+3. Set **Authorization callback URL** to `{NEXTAUTH_URL}/api/auth/callback/github`
+4. Copy **Client ID** and **Client Secret** into both `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`
+
+For local development, create a **separate OAuth App** pointing to `http://localhost:3000`.
+
+---
+
+## Local Development
+
+### Option A — `pnpm dev` (recommended for active development)
+
+Requires a local or cloud Redis and a Postgres database.
+
+```bash
+# 1. Install dependencies
+pnpm install
+
+# 2. Fill in environment files
+cp apps/server/.env.example apps/server/.env
+cp apps/client/.env.example apps/client/.env
+# Edit both .env files
+
+# 3. Run database migrations
+cd apps/server && npx prisma migrate deploy && cd ../..
+
+# 4. Start both apps concurrently
+pnpm dev
+# → Client: http://localhost:3000
+# → Server: http://localhost:4000
+```
+
+`pnpm dev` runs `pnpm build:packages` first (compiles shared packages), then starts both apps concurrently with `concurrently`.
+
+### Option B — Docker Compose (all-in-one)
+
+Runs Redis, the NestJS server, and the Next.js client in containers. Requires Docker Desktop.
+
+```bash
+# Fill in .env files first (see above)
+
+docker compose up --build
+```
+
+Services started:
+- `cra-redis` → `localhost:6379`
+- `cra-server` → `http://localhost:4000`
+- `cra-client` → `http://localhost:3000`
+
+The server waits for Redis to pass its health check before starting. The client waits for the server to start.
+
+**Note:** `docker-compose.yml` reads `apps/server/.env` and `apps/client/.env` via `env_file`. The `REDIS_URL` inside the server container is overridden to `redis://redis:6379` (the Docker network hostname).
+
+---
+
+## Database — Neon PostgreSQL
+
+The system requires PostgreSQL 15+ with the `pgvector` extension enabled. [Neon](https://neon.tech) is the recommended provider (free tier available) because it supports pgvector natively.
+
+**Two connection strings are required:**
+- `DATABASE_URL` — the pooled (PgBouncer) connection, used for all queries
+- `DIRECT_URL` — the direct connection, used only by Prisma for migrations
+
+### Running Migrations
+
+```bash
+# From apps/server/
+npx prisma migrate deploy      # production (apply only)
+npx prisma migrate dev         # development (create + apply)
+npx prisma studio              # visual DB browser
+```
+
+---
+
+## Dockerfiles
+
+Both apps have multi-stage Dockerfiles for minimal production images.
+
+### `apps/server/Dockerfile`
+
+- Stage 1 (`builder`): installs all dependencies, builds packages, builds the NestJS app
+- Stage 2 (`runner`): production-only image, copies `dist/` and `node_modules/`, runs `start:prod`
+
+### `apps/client/Dockerfile`
+
+- Stage 1 (`builder`): installs, builds packages, runs `next build`
+- Stage 2 (`runner`): production-only image, copies `.next/`, runs `next start`
+- `NEXT_PUBLIC_API_URL` is a build ARG so it can be baked in at image build time
+
+---
+
+## Deployment Checklist
+
+### Initial Deploy
+
+- [ ] Create GitHub OAuth App (production callback URL)
+- [ ] Provision Neon database; enable `pgvector` extension
+- [ ] Deploy Redis + API to Render.com; set all env vars
+- [ ] Run `prisma migrate deploy` (can be done via Render's one-off job or manually)
+- [ ] Deploy client to Vercel; set all env vars
+- [ ] Set `FRONTEND_URL` on Render to the Vercel deployment URL
+- [ ] Set `NEXTAUTH_URL` on Vercel to the Vercel deployment URL
+- [ ] Set `NEXT_PUBLIC_API_URL` on Vercel to the Render API URL
+- [ ] Test sign-in flow end-to-end
+- [ ] Submit a code review to verify the full pipeline
+
+### Subsequent Deploys
+
+- API: push to `main` branch → Render auto-deploys (only if server/packages changed)
+- Client: push to `main` branch → Vercel auto-deploys
+- Database schema changes: run `prisma migrate deploy` before/during API deploy
+
+---
+
+## Environment Variable Reference
+
+### Server (`apps/server/.env`)
+
+| Variable | Required | Description |
+|---|---|---|
+| `PORT` | No | API port (default `4000`) |
+| `DATABASE_URL` | Yes | Neon pooled PostgreSQL URL |
+| `DIRECT_URL` | Yes | Neon direct PostgreSQL URL |
+| `OPENAI_API_KEY` | Yes | OpenAI API key |
+| `REDIS_URL` | Yes | Redis connection string |
+| `GITHUB_CLIENT_ID` | Yes | GitHub OAuth App client ID |
+| `GITHUB_CLIENT_SECRET` | Yes | GitHub OAuth App client secret |
+| `FRONTEND_URL` | Yes | Client origin (for CORS) |
+| `GITHUB_TOKEN` | No | PAT for private repo PR access |
+| `HELICONE_API_KEY` | No | AI observability proxy key |
+| `GROQ_API_KEY` | No | Alternative AI provider |
+| `STRIPE_SECRET_KEY` | No | Stripe billing integration |
+| `STRIPE_WEBHOOK_SECRET` | No | Stripe webhook verification |
+| `STRIPE_PRO_PRICE_ID` | No | Stripe Pro plan price ID |
+
+### Client (`apps/client/.env`)
+
+| Variable | Required | Description |
+|---|---|---|
+| `NEXTAUTH_URL` | Yes | Client public URL |
+| `NEXTAUTH_SECRET` | Yes | NextAuth session encryption secret |
+| `GITHUB_CLIENT_ID` | Yes | GitHub OAuth App client ID |
+| `GITHUB_CLIENT_SECRET` | Yes | GitHub OAuth App client secret |
+| `NEXT_PUBLIC_API_URL` | Yes | Backend URL |
+| `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` | No | Stripe publishable key (client-safe) |
+
+---
+
+## Related Files
+
+| File | Role |
+|---|---|
+| [`render.yaml`](../render.yaml) | Render.com deployment manifest (API + Redis) |
+| [`apps/client/vercel.json`](../apps/client/vercel.json) | Vercel routing configuration |
+| [`docker-compose.yml`](../docker-compose.yml) | Local all-in-one dev environment |
+| [`apps/server/Dockerfile`](../apps/server/Dockerfile) | NestJS production image |
+| [`apps/client/Dockerfile`](../apps/client/Dockerfile) | Next.js production image |
+| [`apps/server/.env.example`](../apps/server/.env.example) | Server env var template |
+| [`apps/client/.env.example`](../apps/client/.env.example) | Client env var template |
+| [`apps/server/prisma/schema.prisma`](../apps/server/prisma/schema.prisma) | Database schema |

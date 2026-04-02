@@ -2,6 +2,18 @@
 
 > AI-powered code review for pasted snippets and GitHub Pull Requests — streamed in real time, scored, stored, and interactive.
 
+[![Deploy – API](https://img.shields.io/badge/API-Render-46E3B7?logo=render&logoColor=white)](https://render.com)
+[![Deploy – Client](https://img.shields.io/badge/Client-Vercel-000000?logo=vercel&logoColor=white)](https://vercel.com)
+[![Node.js](https://img.shields.io/badge/Node.js-%3E%3D20-339933?logo=node.js&logoColor=white)](https://nodejs.org)
+[![pnpm](https://img.shields.io/badge/pnpm-10-F69220?logo=pnpm&logoColor=white)](https://pnpm.io)
+
+![Code Review Agent — live AI review in progress alongside completed results with score and issues](./docs/assets/preview.png)
+
+| | |
+|:---:|:---:|
+| ![The AI analyses your code live — you watch its reasoning in real time as the review runs](./docs/assets/preview-running.png) | ![Completed review — quality score, categorised issues with fixes, and a follow-up chat interface](./docs/assets/preview-stats.png) |
+| **Live review in progress** | **Completed review with results** |
+
 ---
 
 ## What It Does
@@ -246,8 +258,3 @@ Detailed design documents for each subsystem live in the [`docs/`](./docs/) dire
 | [docs/packages.md](./docs/packages.md) | `@cra/ai` and `@cra/types` shared packages |
 | [docs/deployment.md](./docs/deployment.md) | Render, Vercel, Docker Compose, env var reference |
 
----
-
-## License
-
-MIT
