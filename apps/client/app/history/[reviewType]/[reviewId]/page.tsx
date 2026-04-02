@@ -28,7 +28,8 @@ interface FullReview extends ReviewData {
 }
 
 export default function ReviewDetailPage() {
-    const { reviewType, reviewId } = useParams<{ reviewType: string, reviewId: string }>()
+    const params = useParams<{ reviewType: string, reviewId: string }>()
+    const reviewId = params?.reviewId || ''
     const [review, setReview] = useState<FullReview | null>(null)
     const [isLoading, setIsLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
@@ -46,7 +47,7 @@ export default function ReviewDetailPage() {
     const { scrollRef, contentRef, scrollToBottom, isAtBottom } = useStickToBottom({ initial: false })
 
     useEffect(() => {
-        if (!githubToken) return
+        if (!githubToken || !reviewId) return
         apiFetch<FullReview>(`/history/${reviewId}`, undefined, githubToken)
             .then(setReview)
             .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load review.'))
@@ -57,6 +58,12 @@ export default function ReviewDetailPage() {
         scrollToBottom()
         await submit()
     }, [submit, scrollToBottom])
+
+    // ── HOTFIX: Hooks must execute before early returns (React Error 310) ──
+    const { traceEntries, clusterMap, taskItems, totalDurationMs, mode } =
+        useTraceReplay(review?.traceLog ?? null)
+
+    const hasTrace = traceEntries.length > 0 || clusterMap.size > 0 || taskItems.length > 0
 
     if (status === 'loading') {
         return (
@@ -70,11 +77,6 @@ export default function ReviewDetailPage() {
         )
     }
 
-    // Returns empty structures for pre-migration reviews (traceLog === null)
-    const { traceEntries, clusterMap, taskItems, totalDurationMs, mode } =
-        useTraceReplay(review?.traceLog ?? null)
-
-    const hasTrace = traceEntries.length > 0 || clusterMap.size > 0 || taskItems.length > 0
 
     return (
         <div className="h-screen flex flex-col bg-app-bg text-gray-100">
