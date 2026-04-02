@@ -1,5 +1,6 @@
-import { Body, Controller, Get, Param, Post, Res, Req, UseGuards } from '@nestjs/common'
-import type { Response, Request } from 'express'
+import { Body, Controller, Get, Param, Post, Req, UseGuards, Logger, Sse, MessageEvent } from '@nestjs/common'
+import type { Request } from 'express'
+import { Observable } from 'rxjs'
 import { HistoryService } from './history.service'
 import { ChatMessageDto } from './dto/chat-message.dto'
 import { AuthGuard } from '../auth/auth.guard'
@@ -7,29 +8,44 @@ import { AuthGuard } from '../auth/auth.guard'
 @UseGuards(AuthGuard)
 @Controller('history')
 export class HistoryController {
+    private readonly logger = new Logger(HistoryController.name)
+
     constructor(private readonly historyService: HistoryService) { }
 
-    // GET /history
     @Get()
     listReviews(@Req() req: Request) {
         return this.historyService.listReviews(req.user!.userId)
     }
 
-    // GET /history/stats — Must be declared before :id — NestJS matches literal segments first
     @Get('stats')
     getStats(@Req() req: Request) {
         return this.historyService.getStats(req.user!.userId)
     }
 
-    // GET /history/:id
     @Get(':id')
     getReview(@Param('id') id: string, @Req() req: Request) {
         return this.historyService.getReview(id, req.user!.userId)
     }
 
-    // POST /history/:id/chat  — streams SSE token-by-token
     @Post(':id/chat')
-    async chat(@Param('id') id: string, @Body() dto: ChatMessageDto, @Res() res: Response, @Req() req: Request) {
-        await this.historyService.chat(id, req.user!.userId, dto.message, res)
+    @Sse()
+    chat(@Param('id') id: string, @Body() dto: ChatMessageDto, @Req() req: Request): Observable<MessageEvent> {
+        return new Observable((subscriber) => {
+            const stream = this.historyService.chatGenerator(id, req.user!.userId, dto.message)
+
+            ;(async () => {
+                try {
+                    for await (const chunk of stream) {
+                        subscriber.next({ data: { type: 'delta', text: chunk } })
+                    }
+                    subscriber.next({ data: { type: 'done' } })
+                } catch (err) {
+                    this.logger.error(`Failed to stream chat answer: ${err instanceof Error ? err.message : err}`)
+                    subscriber.next({ data: { type: 'error', message: 'Stream interrupted' } })
+                } finally {
+                    subscriber.complete()
+                }
+            })()
+        })
     }
 }

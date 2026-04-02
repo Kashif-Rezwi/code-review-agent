@@ -1,8 +1,18 @@
-import { Injectable, BadRequestException } from '@nestjs/common'
+import { Injectable, BadRequestException, UnauthorizedException } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { z } from 'zod'
 import { PRFileSchema } from '@cra/ai'
 import type { PRFile } from '@cra/ai'
+
+export interface GithubUserResponse {
+    id: number
+    login: string
+    name: string | null
+    email: string | null
+    avatar_url: string
+}
+import { parsePRUrl, decodeGitHubFileBase64 } from './github.utils'
+import { GithubCacheService } from './github-cache.service'
 
 const MAX_DIFF_CHARS = 24_000
 
@@ -10,17 +20,39 @@ const MAX_DIFF_CHARS = 24_000
 export class GithubService {
     private readonly token?: string
 
-    constructor(config: ConfigService) {
+    constructor(
+        config: ConfigService,
+        private readonly cache: GithubCacheService
+    ) {
         this.token = config.get<string>('GITHUB_TOKEN')
     }
 
     /** Called by ReviewService before the agent loop to short-circuit on bad URLs. Throws BadRequestException on invalid input. */
     assertValidPRUrl(url: string): void {
-        this.parsePRUrl(url)
+        parsePRUrl(url)
+    }
+
+    async fetchUserProfile(token: string): Promise<GithubUserResponse> {
+        const res = await fetch('https://api.github.com/user', {
+            headers: {
+                Authorization: `Bearer ${token}`,
+                Accept: 'application/vnd.github+json',
+                'X-GitHub-Api-Version': '2022-11-28',
+            },
+        })
+
+        if (!res.ok) {
+            if (res.status === 401) {
+                throw new UnauthorizedException('GitHub token is invalid or expired.')
+            }
+            throw new UnauthorizedException(`GitHub API returned ${res.status}.`)
+        }
+
+        return (await res.json()) as GithubUserResponse
     }
 
     async fetchPRDiff(prUrl: string): Promise<string> {
-        const { owner, repo, number } = this.parsePRUrl(prUrl)
+        const { owner, repo, number } = parsePRUrl(prUrl)
 
         const res = await (this.token
             ? this.fetchViaApi(owner, repo, number)
@@ -45,7 +77,7 @@ export class GithubService {
     }
 
     async fetchPRFiles(prUrl: string): Promise<PRFile[]> {
-        const { owner, repo, number } = this.parsePRUrl(prUrl)
+        const { owner, repo, number } = parsePRUrl(prUrl)
         const headers = this.buildHeaders('application/vnd.github.v3+json')
         const allFiles: PRFile[] = []
 
@@ -82,7 +114,7 @@ export class GithubService {
      * Response content from GitHub Contents API is base64-encoded.
      */
     async fetchFileContent(prUrl: string, filePath: string): Promise<string> {
-        const { owner, repo, number } = this.parsePRUrl(prUrl)
+        const { owner, repo, number } = parsePRUrl(prUrl)
 
         // Fetch from the PR's head branch (not the default branch) so we get
         // the actual version of the file as it exists in the PR.
@@ -110,10 +142,7 @@ export class GithubService {
         }
 
         // GitHub embeds newlines in the base64 string — strip before decoding
-        const content = Buffer.from(
-            data.content.replace(/\n/g, ''),
-            'base64',
-        ).toString('utf-8')
+        const content = decodeGitHubFileBase64(data.content)
 
         const MAX_FILE_CHARS = 8_000
         if (content.length > MAX_FILE_CHARS) {
@@ -128,16 +157,11 @@ export class GithubService {
 
     // ── Private helpers ────────────────────────────────────────────────────────
 
-    /** Maximum entries kept in the head-ref cache before the oldest is evicted. */
-    private static readonly HEAD_REF_CACHE_MAX = 100
-
-    /** Simple per-request cache for PR head refs (owner/repo/number → sha). */
-    private headRefCache = new Map<string, string>()
-
     /** Get the head commit SHA of a PR so fetchFileContent reads the PR's version. */
     private async fetchPRHeadRef(owner: string, repo: string, number: number): Promise<string | null> {
         const key = `${owner}/${repo}/${number}`
-        if (this.headRefCache.has(key)) return this.headRefCache.get(key)!
+        const cached = this.cache.getHeadRef(key)
+        if (cached) return cached
         try {
             const res = await fetch(
                 `https://api.github.com/repos/${owner}/${repo}/pulls/${number}`,
@@ -147,27 +171,12 @@ export class GithubService {
             const data = await res.json()
             const sha = data?.head?.sha as string | undefined
             if (sha) {
-                // Evict the oldest entry when the cap is reached (Map preserves insertion order).
-                if (this.headRefCache.size >= GithubService.HEAD_REF_CACHE_MAX) {
-                    const oldest = this.headRefCache.keys().next().value
-                    if (oldest) this.headRefCache.delete(oldest)
-                }
-                this.headRefCache.set(key, sha)
+                this.cache.setHeadRef(key, sha)
             }
             return sha ?? null
         } catch {
             return null
         }
-    }
-
-    private parsePRUrl(url: string): { owner: string; repo: string; number: number } {
-        const match = url.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/)
-        if (!match) {
-            throw new BadRequestException(
-                'Invalid GitHub PR URL. Expected: https://github.com/owner/repo/pull/123',
-            )
-        }
-        return { owner: match[1], repo: match[2], number: parseInt(match[3], 10) }
     }
 
     /** Build GitHub API request headers. `accept` varies per endpoint. */

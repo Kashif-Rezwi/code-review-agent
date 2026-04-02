@@ -6,7 +6,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import { apiFetch } from '@/lib/api'
+import { ragService } from '@/lib/api'
 
 export interface StandardsDocument {
     id: string
@@ -41,7 +41,7 @@ export function useStandardsDocuments(githubToken?: string): UseStandardsDocumen
 
     const fetchDocuments = useCallback(async () => {
         try {
-            const docs = await apiFetch<StandardsDocument[]>('/rag/documents', undefined, githubToken)
+            const docs = await ragService.getDocuments<StandardsDocument[]>(githubToken)
             setDocuments(docs)
         } catch {
             // silently ignore — list can be refetched on next interaction
@@ -70,7 +70,7 @@ export function useStandardsDocuments(githubToken?: string): UseStandardsDocumen
         formData.append('file', file)
 
         try {
-            await apiFetch<unknown>('/rag/upload', { method: 'POST', body: formData }, githubToken)
+            await ragService.uploadDocument<unknown>(formData, githubToken)
             setUploadSuccess(`"${file.name}" uploaded successfully.`)
             await fetchDocuments()
         } catch (err) {
@@ -83,7 +83,7 @@ export function useStandardsDocuments(githubToken?: string): UseStandardsDocumen
     const deleteDocument = useCallback(async (id: string, name: string) => {
         setDeletingId(id)
         try {
-            await apiFetch<void>(`/rag/documents/${id}`, { method: 'DELETE' }, githubToken)
+            await ragService.deleteDocument(id, githubToken)
             setDocuments(prev => prev.filter(d => d.id !== id))
             setUploadSuccess(prev => (prev?.includes(name) ? null : prev))
         } catch {

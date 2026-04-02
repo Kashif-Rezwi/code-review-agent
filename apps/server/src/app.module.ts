@@ -7,11 +7,13 @@ import { HistoryModule } from './history/history.module'
 import { AuthModule } from './auth/auth.module'
 import { HealthController } from './health.controller'
 import { QueueModule } from './queue/queue.module'
+import { AiModule } from './ai/ai.module'
 
 @Module({
     imports: [
         ConfigModule.forRoot({ isGlobal: true }),
         PrismaModule,
+        AiModule,
         AuthModule,
         RagModule,
         ReviewModule,
