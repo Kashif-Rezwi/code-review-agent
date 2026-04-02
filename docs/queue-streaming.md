@@ -18,12 +18,12 @@ POST /review/session       BullMQ Worker                SSE Consumer
                              │── run AI pipeline          │
                              │      │                     │
                              │  emit event ──►Redis──────►│
-                             │      │         pub/sub      │
-                             │      │         + replay     │
+                             │      │         pub/sub     │
+                             │      │         + replay    │
                              │◄─────┘                     │
                              │ pipeline done              │
                                                           │
-GET /review/:id/stream ─────────────────────────────────►│
+GET /review/:id/stream ──────────────────────────────────►│
                                   replay history          │
                                   + subscribe live        │
 ```

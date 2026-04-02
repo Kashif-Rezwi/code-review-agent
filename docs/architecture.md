@@ -16,19 +16,19 @@ Code Review Agent is a monorepo containing two applications (`client` and `serve
 │  │   apps/client            │    │   apps/server                         │  │
 │  │   (Next.js 14)           │    │   (NestJS)                            │  │
 │  │                          │    │                                       │  │
-│  │  ┌─────────────────────┐ │    │  ┌─────────┐  ┌──────────────────┐  │  │
-│  │  │  Pages (App Router) │ │    │  │  auth/  │  │  review/         │  │  │
-│  │  │  /review            │ │    │  │         │  │  ├ controller     │  │  │
-│  │  │  /history           │◄├────┤  │  github/│  │  ├ service       │  │  │
-│  │  │  /standards         │ │    │  │         │  │  ├ processor     │  │  │
-│  │  │  /login             │ │    │  │  rag/   │  │  ├ streamer      │  │  │
-│  │  └─────────────────────┘ │    │  │         │  │  └ repository    │  │  │
-│  │                          │    │  │ history/ │  └──────────────────┘  │  │
-│  │  ┌─────────────────────┐ │    │  │         │                         │  │
-│  │  │  lib/               │ │    │  │ queue/  │  ┌──────────────────┐  │  │
-│  │  │  useReviewStream    │ │    │  │  ├ BullMQ│  │  linter/         │  │  │
-│  │  │  reviewStreamReducer│ │    │  │  └ Redis │  │  (in-proc ESLint)│  │  │
-│  │  │  useChatMessages    │ │    │  └─────────┘  └──────────────────┘  │  │
+│  │  ┌─────────────────────┐ │    │  ┌───────────┐  ┌──────────────────┐  │  │
+│  │  │  Pages (App Router) │ │    │  │  auth/    │  │  review/         │  │  │
+│  │  │  /review            │ │    │  │           │  │  ├ controller    │  │  │
+│  │  │  /history           │◄├────┤  │  github/  │  │  ├ service       │  │  │
+│  │  │  /standards         │ │    │  │           │  │  ├ processor     │  │  │
+│  │  │  /login             │ │    │  │  rag/     │  │  ├ streamer      │  │  │
+│  │  └─────────────────────┘ │    │  │           │  │  └ repository    │  │  │
+│  │                          │    │  │ history/  │  └──────────────────┘  │  │
+│  │  ┌─────────────────────┐ │    │  │           │                        │  │
+│  │  │  lib/               │ │    │  │ queue/    │  ┌──────────────────┐  │  │
+│  │  │  useReviewStream    │ │    │  │  ├ BullMQ │  │  linter/         │  │  │
+│  │  │  reviewStreamReducer│ │    │  │  └ Redis  │  │  (in-proc ESLint)│  │  │
+│  │  │  useChatMessages    │ │    │  └───────────┘  └──────────────────┘  │  │
 │  │  └─────────────────────┘ │    │                                       │  │
 │  └──────────────────────────┘    └───────────────────────────────────────┘  │
 │                                                                             │
@@ -166,7 +166,7 @@ Vercel (CDN + serverless)         Render.com
                                   └──────────────────────────┘
                                               │
                                   ┌───────────▼──────────────┐
-                                  │  Neon PostgreSQL          │
+                                  │  Neon PostgreSQL         │
                                   │  (+ pgvector extension)  │
                                   └──────────────────────────┘
 ```
