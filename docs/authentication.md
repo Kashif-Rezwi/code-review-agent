@@ -52,14 +52,22 @@ The guard is applied at the controller level with `@UseGuards(AuthGuard)` — no
 
 ### `AuthService`
 
-`apps/server/src/auth/auth.service.ts` orchestrates token resolution with two layers of deduplication:
+`apps/server/src/auth/auth.service.ts` orchestrates token resolution by delegating to `TokenCacheService`:
 
-1. **In-memory cache** (`TokenCacheService`) — if the token was resolved within the last 5 minutes, returns immediately without hitting GitHub.
-2. **In-flight map** — if multiple concurrent requests arrive with the same token while the first GitHub API call is still in flight, they all await the same promise rather than spawning parallel calls.
+1. Calls `TokenCacheService.getCached(token)` — if a valid cached entry exists, returns immediately.
+2. Calls `TokenCacheService.getInFlight(token)` — if another request is already fetching this token, awaits that same promise (deduplication).
+3. Otherwise, creates a new `fetchAndUpsert` promise, stores it via `TokenCacheService.setInFlight`, resolves it, then stores via `TokenCacheService.cacheEntry`.
 
 ### `TokenCacheService`
 
-`apps/server/src/auth/token-cache.service.ts` is a simple in-memory LRU-style store. Cache entries have a configurable TTL (default 5 minutes). Entries are keyed by the raw token string.
+`apps/server/src/auth/token-cache.service.ts` owns both the token cache and the in-flight deduplication map:
+
+- **Cache** (`Map<token, CacheEntry>`) — tokens valid within their TTL are served from here without hitting GitHub.
+- **In-flight map** (`Map<token, Promise<CacheEntry>>`) — if two requests arrive with the same token simultaneously, the second awaits the first's promise rather than making a duplicate GitHub API call. `AuthService` calls `setInFlight`/`getInFlight`/`removeInFlight` on this service directly.
+
+The TTL defaults to **5 minutes (300,000ms)** and is configurable via the `GITHUB_TOKEN_CACHE_TTL_MS` env var.
+
+The cache is bounded at **500 entries**. When this limit is reached, expired entries are evicted before adding new ones (LRU-style lazy eviction).
 
 A resolved `CacheEntry` contains:
 

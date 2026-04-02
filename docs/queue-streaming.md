@@ -91,7 +91,10 @@ This abstraction means `ReviewService` is completely agnostic to whether it is s
 2. Fetches all events from the Redis replay list (`RedisService.getLog`).
 3. Replays them synchronously to the SSE subscriber.
 4. Checks the DB `status` field:
-   - If `COMPLETE` or `FAILED`: send one final event (if replay list was empty — late replay fallback) → close.
+   - If `COMPLETE` or `FAILED` and the **replay list was empty** (TTL expired): synthesises one terminal event and closes.
+     - `COMPLETE` → `{ type: 'complete', review: { id: review.id } }`
+     - `FAILED` → `{ type: 'error', message: review.summary || 'Review failed' }`
+   - If `COMPLETE` or `FAILED` and the **replay list was non-empty**: replay is sufficient; stream closes without a synthesised event.
    - If `PENDING`: create a fresh Redis subscriber and subscribe to `re:<reviewId>`.
 5. Forwards each incoming pub/sub message to the SSE subscriber.
 6. On `complete` or `error` event, tears down the Redis subscriber and completes the Observable.
@@ -178,7 +181,8 @@ ReviewStreamerService (SSE endpoint)
 | Node process restarts mid-job | `@OnWorkerEvent("failed")` fires; Postgres marked FAILED; error event emitted to Redis |
 | Two clients for the same review | Both subscribe to `re:<reviewId>`; both receive every event independently |
 | SSE client disconnects | Observable teardown quits the Redis subscriber; no memory leak |
-| Late replay with empty list but COMPLETE DB status | `ReviewStreamerService` synthesises a minimal `{ type: "complete" }` event so the client doesn't hang |
+| Late replay with empty list but COMPLETE DB status | `ReviewStreamerService` synthesises `{ type: 'complete', review: { id } }` so the client transitions to the completed state without hanging |
+| Late replay with empty list but FAILED DB status | `ReviewStreamerService` synthesises `{ type: 'error', message: review.summary }` so the client shows an error instead of hanging |
 
 ---
 

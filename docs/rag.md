@@ -65,7 +65,7 @@ All endpoints require authentication via `AuthGuard`.
 Orchestrates ingestion and retrieval. Two primary methods:
 
 **`ingest(buffer, mimeType, fileName, userId)`**
-1. Calls `extractText()` to convert buffer to a string (`pdf-parse` for PDF, direct decode for text).
+1. Calls `extractText()` to convert buffer to a string. For PDFs, this uses `pdf-parse` via a **dynamic `import()`** (not a static import) — `pdf-parse` has module-level side-effects that break Jest at initialisation time; dynamic import isolates them. Plain text files are decoded directly from the buffer.
 2. Calls `chunkText()` from `@cra/ai` to split into paragraph-level segments (approximately 500 characters each, split on double newlines).
 3. Calls `embedMany()` with all chunks in a single API call — far fewer round-trips than a per-chunk loop.
 4. Delegates persistence to `RagRepository`.

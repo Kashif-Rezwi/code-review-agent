@@ -6,7 +6,6 @@
 
 ---
 
-
 ## What It Does
 
 Code Review Agent is a full-stack SaaS tool that performs automated, AI-driven code reviews. You sign in with GitHub, submit either a block of pasted code or a public GitHub PR URL, and receive a structured, real-time review covering:

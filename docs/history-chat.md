@@ -9,14 +9,14 @@ The History system persists all completed reviews and exposes them for replay an
 ## High-Level Design
 
 ```
-History
-  GET /history               → list all reviews for the user (summary view)
-  GET /history/stats         → aggregate stats (total reviews, avg score, issue counts)
-  GET /review/:id            → full review detail (used when re-opening a past review)
+HistoryController (src/history/history.controller.ts)
+  GET  /history              → list all reviews for the user (summary view)
+  GET  /history/stats        → aggregate stats (total reviews, avg score, issue counts)
+  GET  /history/:id          → full review detail
+  POST /history/:id/chat     → send a message; returns SSE stream of { type:"delta"|"done"|"error" }
 
-Chat
-  POST /history/:id/chat     → send a message, receive streamed AI response
-  (client streams response via text/event-stream or chunked transfer)
+ReviewController (src/review/review.controller.ts)
+  GET  /review/:reviewId     → full review detail (proxy to HistoryService.getReview)
 ```
 
 ---
@@ -32,9 +32,9 @@ Chat
 | `GET` | `/history` | List all reviews for the authenticated user |
 | `GET` | `/history/stats` | Aggregate stats for the dashboard |
 | `GET` | `/history/:id` | Full review detail |
-| `POST` | `/history/:id/chat` | Send a chat message; returns streamed response |
+| `POST` | `/history/:id/chat` | Send a chat message; returns SSE stream of events |
 
-The chat endpoint uses NestJS's `@Sse()` or a streaming response via `StreamableFile`/generator. The controller calls `historyService.chatGenerator(id, userId, message)` and pipes the async generator to the HTTP response as chunked text.
+The chat endpoint is decorated with `@Sse()` and returns an `Observable<MessageEvent>`. Each token is emitted as `{ data: { type: 'delta', text: chunk } }`. A `{ data: { type: 'done' } }` event is sent when the stream completes, or `{ data: { type: 'error', message } }` on failure.
 
 ### `HistoryService`
 
@@ -54,12 +54,24 @@ The chat endpoint uses NestJS's `@Sse()` or a streaming response via `Streamable
 5. Yields each text delta from `result.textStream` via `for await`.
 6. After the stream completes naturally, calls `historyRepository.saveChatQuery(id, userMessage, fullText)` to persist both turns.
 
-**`buildChatSystem(review)`** — constructs the system prompt with:
-- Original code/PR URL (truncated to 2,000 chars)
-- Review summary and score
-- Flat issue list (severity, title, location, description)
+**`buildChatSystem(review)`** — constructs the system prompt with the following sections:
 
-Instruction: "Be concise and specific. Do not re-state the full review unless asked."
+```
+You are a helpful code review assistant...
+
+ORIGINAL CODE / PR URL: {input} [truncated to 2,000 chars]
+
+REVIEW SUMMARY: {review.summary}
+SCORE: {review.score}/10
+
+ISSUES FOUND:
+- [severity] title at location: description
+  ... one line per issue, or "No issues found."
+
+Answer the user's questions... Be concise and specific. Do not re-state the full review unless asked.
+```
+
+Note: only issues are included in the context (not positives). The `score` shows as `-` if the review is not yet complete.
 
 ### `HistoryRepository`
 
@@ -102,21 +114,24 @@ User types message → ChatInput component
         │
         ▼
 useChatMessages.submit()
+  ├── optimistic user message added to messages[]
+  ├── setStreamingContent('') — triggers streaming cursor
   └── POST /history/:reviewId/chat { message }
-        │
-        ▼
-HistoryController.chat()
-  └── pipes chatGenerator() as text chunks
-        │
-        ▼
-Client receives chunks → streamingContent state
-        │
-        ▼
-AssistantMessage renders with streaming cursor animation
-        │
-        ▼
-Stream ends → full message appended to messages[]
-              streamingContent reset to null
+            │
+            ▼
+      HistoryController.chat()   (@Sse() Observable<MessageEvent>)
+        └── chatGenerator() async generator
+              ├── { type: 'delta', text: chunk }  ← one per LLM token
+              └── { type: 'done' }                ← stream complete
+            │
+            ▼
+      consumeSSEStream<ChatStreamEvent>(reader, handler)
+        ├── 'delta' → accumulated += text; setStreamingContent(accumulated)
+        └── 'done'  → fall through; stream reader closes
+            │
+            ▼
+      setMessages([...prev, { role: 'assistant', content: accumulated }])
+      setStreamingContent(null)
 ```
 
 **Token management:** The system prompt caps the original code at 2,000 characters. The issue list is formatted as a flat text list. The full conversation history (all prior turns) is passed on every request — no windowing or truncation.

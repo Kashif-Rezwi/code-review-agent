@@ -121,10 +121,16 @@ Worker-agent events tagged with `clusterId` are routed into the matching `Cluste
 
 `lib/use-chat-messages.ts` — manages the follow-up chat. State: `messages[]`, `input`, `isSending`, `streamingContent`.
 
-Chat messages are fetched from `POST /history/:reviewId/chat` as a streamed response. The hook handles:
-- Streaming token accumulation into `streamingContent`
-- Appending the completed message to `messages[]` on stream end
-- Resetting `streamingContent` to `null`
+The hook posts to `POST /history/:reviewId/chat` and consumes the response as an SSE stream via `consumeSSEStream<ChatStreamEvent>`. Event types:
+- `{ type: 'delta', text }` — append token to `streamingContent`
+- `{ type: 'done' }` — stream closed cleanly
+- `{ type: 'error', message }` — stream interrupted
+
+Key behaviours:
+- **Optimistic update** — user message is appended to `messages[]` immediately before the fetch starts
+- `streamingContent` is set to `''` (empty string, not null) the moment the request is sent, to display the streaming cursor while waiting for the first token
+- On stream completion, the fully accumulated text is appended to `messages[]` and `streamingContent` resets to `null`
+- State is fully reset when `reviewId` changes, preventing cross-session message bleed
 
 ### `useReviewScroll`
 
@@ -198,8 +204,10 @@ Three error boundary levels:
 | [`apps/client/lib/use-review-stream.ts`](../apps/client/lib/use-review-stream.ts) | Primary stream hook |
 | [`apps/client/lib/review-stream.reducer.ts`](../apps/client/lib/review-stream.reducer.ts) | Pure stream state reducer |
 | [`apps/client/lib/use-chat-messages.ts`](../apps/client/lib/use-chat-messages.ts) | Chat hook |
-| [`apps/client/lib/sse.ts`](../apps/client/lib/sse.ts) | Raw SSE byte stream parser |
+| [`apps/client/lib/use-trace-replay.ts`](../apps/client/lib/use-trace-replay.ts) | Replays historical trace events for the history view |
+| [`apps/client/lib/sse.ts`](../apps/client/lib/sse.ts) | Raw SSE byte stream parser — used for both review and chat streams |
 | [`apps/client/lib/api.ts`](../apps/client/lib/api.ts) | Typed API client |
+| [`apps/client/lib/detect-language.ts`](../apps/client/lib/detect-language.ts) | Language detection + `CODE_TOKEN_LIMIT` constant |
 | [`apps/client/lib/hooks/use-review-scroll.ts`](../apps/client/lib/hooks/use-review-scroll.ts) | Auto-scroll hook |
 | [`apps/client/components/review/review-page-client.tsx`](../apps/client/components/review/review-page-client.tsx) | Root orchestrator component |
 | [`apps/client/components/review/review-progress.tsx`](../apps/client/components/review/review-progress.tsx) | Streaming progress UI |
