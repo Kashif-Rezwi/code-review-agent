@@ -22,6 +22,7 @@ export function PrUrlInput({ value, onChange, onSubmit, disabled, isLoading }: P
                 <input
                     type="url"
                     value={value}
+                    autoFocus
                     disabled={disabled}
                     onChange={e => onChange(e.target.value)}
                     onKeyDown={e => e.key === 'Enter' && onSubmit()}
