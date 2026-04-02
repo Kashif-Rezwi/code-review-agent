@@ -17,6 +17,8 @@ services:
         - package.json
         - pnpm-lock.yaml
         - pnpm-workspace.yaml
+        - "!docs/**"
+        - "!README.md"
     buildCommand: pnpm install && pnpm build:packages && pnpm --filter server build
     startCommand: pnpm --filter server start:prod
     envVars:

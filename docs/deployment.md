@@ -54,7 +54,7 @@ A managed Redis instance. The `REDIS_URL` environment variable is automatically 
   startCommand: pnpm --filter server start:prod
 ```
 
-**Build filter:** Only triggers a redeploy when files under `apps/server/**`, `packages/**`, `package.json`, `pnpm-lock.yaml`, or `pnpm-workspace.yaml` change. Client-only changes do not trigger API rebuilds.
+**Build filter:** Matches changes to `apps/server/**`, `packages/**`, or root config files. Explicitly excludes `docs/**` and `README.md` to prevent unnecessary API builds.
 
 **Build steps:**
 1. `pnpm install` — installs all workspace dependencies
