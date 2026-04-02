@@ -132,6 +132,9 @@ export function CodeEditor({
                     value={value}
                     theme="cra-dark"
                     beforeMount={registerEditorTheme}
+                    onMount={(editor) => {
+                        if (!readOnly) editor.focus()
+                    }}
                     loading={<EditorSkeleton />}
                     onChange={readOnly ? undefined : handleChange}
                     options={{
