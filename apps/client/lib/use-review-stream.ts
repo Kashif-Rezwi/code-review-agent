@@ -1,7 +1,8 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useReducer } from 'react'
-import { API_URL, apiFetch } from './api'
+import { API_URL, reviewService } from './api'
+import { consumeSSEStream } from './sse'
 import type { ReviewData, ReviewStreamEvent } from '@/types/review.types'
 import {
     reviewStreamReducer,
@@ -32,11 +33,11 @@ export function useReviewStream(initialReviewId?: string | null, githubToken?: s
     const [state, dispatch] = useReducer(reviewStreamReducer, initialReviewStreamState)
     
     const thinkingSeqRef = useRef(0)
-    const eventSourceRef = useRef<EventSource | null>(null)
+    const eventSourceRef = useRef<AbortController | null>(null)
 
     const reset = useCallback(() => {
         if (eventSourceRef.current) {
-            eventSourceRef.current.close()
+            eventSourceRef.current.abort()
             eventSourceRef.current = null
         }
         dispatch({ type: 'RESET' })
@@ -51,11 +52,7 @@ export function useReviewStream(initialReviewId?: string | null, githubToken?: s
             const type = 'code' in payload ? 'CODE' : 'PR'
             const input = 'code' in payload ? payload.code : payload.prUrl
 
-            const { reviewId } = await apiFetch<{ reviewId: string }>('/review/session', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ type, input }),
-            }, githubToken)
+            const { reviewId } = await reviewService.createSession({ type, input }, githubToken)
 
             return reviewId
         } catch (err) {
@@ -73,7 +70,7 @@ export function useReviewStream(initialReviewId?: string | null, githubToken?: s
         dispatch({ type: 'RESET' })
         dispatch({ type: 'SET_CONNECTING' })
 
-        apiFetch<{ type: 'CODE' | 'PR'; input: string }>(`/review/${initialReviewId}`, undefined, githubToken)
+        reviewService.getSession(initialReviewId, githubToken)
             .then(data => {
                 if (data && data.input) {
                     dispatch({ type: 'SET_SESSION_DATA', payload: { type: data.type, input: data.input } })
@@ -81,37 +78,49 @@ export function useReviewStream(initialReviewId?: string | null, githubToken?: s
             })
             .catch(() => null)
 
-        const url = `${API_URL}/review/${initialReviewId}/stream${githubToken ? `?token=${encodeURIComponent(githubToken)}` : ''}`
-        const es = new EventSource(url)
-        eventSourceRef.current = es
+        const abortController = new AbortController()
+        eventSourceRef.current = abortController // Store it so `reset` can abort it
 
-        es.onmessage = (e: MessageEvent) => {
+        const headers: Record<string, string> = {
+            'Accept': 'text/event-stream',
+        }
+        if (githubToken) {
+            headers['Authorization'] = `Bearer ${githubToken}`
+        }
+
+        const startStream = async () => {
             try {
-                const event = JSON.parse(e.data) as ReviewStreamEvent
-                
-                let thinkingSeqId: number | undefined
-                if (event.type === 'thinking') {
-                    thinkingSeqId = ++thinkingSeqRef.current
-                }
-                
-                dispatch({ type: 'EVENT', event, thinkingSeqId })
+                const res = await fetch(`${API_URL}/review/${initialReviewId}/stream`, {
+                    headers,
+                    signal: abortController.signal
+                })
 
-                if (event.type === 'complete' || event.type === 'error') {
-                    es.close()
+                if (!res.ok || !res.body) {
+                    throw new Error(`Connection failed with status ${res.status}`)
                 }
-            } catch {
-                // Ignore malformed events
+
+                const reader = res.body.getReader()
+                await consumeSSEStream<ReviewStreamEvent>(reader, (event) => {
+                    let thinkingSeqId: number | undefined
+                    if (event.type === 'thinking') {
+                        thinkingSeqId = ++thinkingSeqRef.current
+                    }
+
+                    dispatch({ type: 'EVENT', event, thinkingSeqId })
+
+                    // Notice: server will just close the connection on 'complete' / 'error'
+                    // consumeSSEStream will return cleanly.
+                })
+            } catch (err: unknown) {
+                if (err instanceof Error && err.name === 'AbortError') return
+                // Ignore other errors, they could be network drops handled elsewhere or standard fetch errors
             }
         }
 
-        es.onerror = () => {
-            if (es.readyState === EventSource.CLOSED) {
-                // Error handled
-            }
-        }
+        startStream()
 
         return () => {
-            es.close()
+            abortController.abort()
             eventSourceRef.current = null
         }
     }, [initialReviewId, githubToken])

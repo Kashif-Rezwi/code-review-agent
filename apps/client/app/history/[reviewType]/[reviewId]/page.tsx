@@ -1,7 +1,6 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useStickToBottom } from 'use-stick-to-bottom'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, Activity } from 'lucide-react'
@@ -11,10 +10,12 @@ import { ReviewPanel } from '@/components/review/review-panel'
 import { ReviewSkeleton } from '@/components/review/review-skeleton'
 import { ReviewInputDisplay } from '@/components/review/review-input-display'
 import { ReviewProgress } from '@/components/review/review-progress'
+import { ReviewErrorBoundary } from '@/components/ui/error-boundary'
 import { ChatThread } from '@/components/review/chat-thread'
 import { ChatInput } from '@/components/review/chat-input'
 import { useChatMessages } from '@/lib/use-chat-messages'
 import { useTraceReplay } from '@/lib/use-trace-replay'
+import { useReviewScroll } from '@/lib/hooks/use-review-scroll'
 import { apiFetch } from '@/lib/api'
 import { useSession } from 'next-auth/react'
 import type { ReviewData, ChatMessage, ReviewStreamEvent } from '@/types/review.types'
@@ -42,22 +43,27 @@ export default function ReviewDetailPage() {
     const reviewPanelRef = useRef<HTMLDivElement>(null)
     const chatSectionRef = useRef<HTMLDivElement>(null)
 
-    // use-stick-to-bottom: classifies wheel/pointer input to distinguish user scroll
-    // from programmatic scroll — eliminates the race condition that causes jitter.
-    const { scrollRef, contentRef, scrollToBottom, isAtBottom } = useStickToBottom({ initial: false })
+    const { bottomRef, contentRef, scrollToBottom, isAtBottom, isAtBottomRef } = useReviewScroll({ isStreaming: false })
 
     useEffect(() => {
         if (!githubToken || !reviewId) return
         apiFetch<FullReview>(`/history/${reviewId}`, undefined, githubToken)
-            .then(setReview)
+            .then(res => {
+                setReview(res)
+                // Smooth glide on initial data load
+                setTimeout(() => {
+                    reviewPanelRef.current?.scrollIntoView({ behavior: 'smooth' })
+                }, 300)
+            })
             .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load review.'))
             .finally(() => setIsLoading(false))
     }, [reviewId, githubToken])
 
     const handleSubmit = useCallback(async () => {
-        scrollToBottom()
+        isAtBottomRef.current = true
+        scrollToBottom('smooth')
         await submit()
-    }, [submit, scrollToBottom])
+    }, [submit, scrollToBottom, isAtBottomRef])
 
     // ── HOTFIX: Hooks must execute before early returns (React Error 310) ──
     const { traceEntries, clusterMap, taskItems, totalDurationMs, mode } =
@@ -67,7 +73,7 @@ export default function ReviewDetailPage() {
 
     if (status === 'loading') {
         return (
-            <div className="h-screen flex flex-col bg-app-bg text-gray-100">
+            <div className="min-h-screen flex flex-col bg-app-bg text-gray-100">
                 <AppHeader />
                 <main className="max-w-4xl mx-auto w-full px-6 pt-8 space-y-6">
                     <div className="h-4 w-24 bg-gray-800 rounded animate-pulse" />
@@ -77,56 +83,54 @@ export default function ReviewDetailPage() {
         )
     }
 
-
     return (
-        <div className="h-screen flex flex-col bg-app-bg text-gray-100">
+        <div className="min-h-screen bg-app-bg text-gray-100">
             <AppHeader />
 
-            <div ref={scrollRef} className="flex-1 overflow-y-auto scroll-hide">
-                <main ref={contentRef} className="max-w-4xl mx-auto w-full px-6 space-y-6 pt-8 pb-24">
-                    <Link
-                        href="/history"
-                        className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-300 transition-colors"
-                    >
-                        <ArrowLeft className="w-4 h-4" />
-                        Back to History
-                    </Link>
+            <main ref={contentRef} className="max-w-4xl mx-auto w-full px-6 space-y-6 pt-8 pb-24">
+                <Link
+                    href="/history"
+                    className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-300 transition-colors"
+                >
+                    <ArrowLeft className="w-4 h-4" />
+                    Back to History
+                </Link>
 
-                    {error && <ErrorBanner message={error} />}
-                    {isLoading && <ReviewSkeleton />}
+                {error && <ErrorBanner message={error} />}
+                {isLoading && <ReviewSkeleton />}
 
-                    {review && (
-                        <>
-                            <ReviewInputDisplay type={review.type} input={review.input} />
+                {review && (
+                    <>
+                        <ReviewInputDisplay type={review.type} input={review.input} />
 
-                            {/* ── Agent Trace Replay ─────────────────────────────────────── */}
-                            {hasTrace && (
-                                <div className="rounded-lg border border-gray-800 bg-gray-900/20 overflow-hidden">
-                                    <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-800/60">
-                                        <Activity className="w-3.5 h-3.5 text-gray-600" />
-                                        <span className="text-xs font-semibold uppercase tracking-widest text-gray-600">
-                                            Agent Trace
+                        {hasTrace && (
+                            <div className="rounded-lg border border-gray-800 bg-gray-900/20 overflow-hidden">
+                                <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-800/60">
+                                    <Activity className="w-3.5 h-3.5 text-gray-600" />
+                                    <span className="text-xs font-semibold uppercase tracking-widest text-gray-600">
+                                        Agent Trace
+                                    </span>
+                                    {totalDurationMs != null && (
+                                        <span className="ml-auto text-xs text-gray-700">
+                                            {(totalDurationMs / 1000).toFixed(1)}s
                                         </span>
-                                        {totalDurationMs != null && (
-                                            <span className="ml-auto text-xs text-gray-700">
-                                                {(totalDurationMs / 1000).toFixed(1)}s
-                                            </span>
-                                        )}
-                                    </div>
-                                    <div className="p-4">
-                                        <ReviewProgress
-                                            entries={traceEntries}
-                                            taskItems={taskItems}
-                                            phase="complete"
-                                            clusterMap={clusterMap}
-                                            totalDurationMs={totalDurationMs}
-                                            mode={mode}
-                                        />
-                                    </div>
+                                    )}
                                 </div>
-                            )}
+                                <div className="p-4">
+                                    <ReviewProgress
+                                        entries={traceEntries}
+                                        taskItems={taskItems}
+                                        phase="complete"
+                                        clusterMap={clusterMap}
+                                        totalDurationMs={totalDurationMs}
+                                        mode={mode}
+                                    />
+                                </div>
+                            </div>
+                        )}
 
-                            <div ref={reviewPanelRef} className="scroll-mt-12">
+                        <ReviewErrorBoundary onReset={() => {}}>
+                            <div ref={reviewPanelRef} className="scroll-mt-20">
                                 <ReviewPanel review={review} />
                             </div>
 
@@ -137,12 +141,12 @@ export default function ReviewDetailPage() {
                                     isSending={isSending}
                                 />
                             </div>
-                        </>
-                    )}
-                </main>
-            </div>
+                        </ReviewErrorBoundary>
+                    </>
+                )}
+                <div ref={bottomRef} />
+            </main>
 
-            {/* Fixed input overlay — rendered at page root, outside the scroll container */}
             {review && (
                 <ChatInput
                     value={input}
@@ -152,7 +156,7 @@ export default function ReviewDetailPage() {
                     chatSectionRef={chatSectionRef}
                     isAtBottom={isAtBottom}
                     onScrollToReview={() => reviewPanelRef.current?.scrollIntoView({ behavior: 'smooth' })}
-                    onScrollToLatest={() => scrollToBottom()}
+                    onScrollToLatest={() => scrollToBottom('smooth')}
                 />
             )}
         </div>
