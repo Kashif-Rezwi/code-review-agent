@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { History } from 'lucide-react'
 import { AppHeader } from '@/components/layout/app-header'
 import { PageHeader } from '@/components/layout/page-header'
@@ -18,6 +18,10 @@ export default function HistoryPage() {
 
     const { data: session, status } = useSession()
     const githubToken = session?.githubToken
+
+    // Ref holds the pre-delete snapshot so the rollback in handleDelete
+    // never captures a stale closure value of `reviews`.
+    const rollbackRef = useRef<ReviewSummary[]>([])
 
     useEffect(() => {
         if (!githubToken) return
@@ -39,20 +43,16 @@ export default function HistoryPage() {
     }, [githubToken])
 
     const handleDelete = useCallback(async (id: string) => {
-        // Optimistically remove from list
-        const previous = reviews
+        rollbackRef.current = reviews              // capture snapshot before mutation
         setReviews(prev => prev.filter(r => r.id !== id))
 
         try {
             await historyService.deleteReview(id, githubToken)
-            // Update stats count
-            setStats(prev => prev
-                ? { ...prev, totalReviews: Math.max(0, prev.totalReviews - 1) }
-                : prev
+            setStats(prev =>
+                prev ? { ...prev, totalReviews: Math.max(0, prev.totalReviews - 1) } : prev
             )
         } catch (err) {
-            // Restore on failure
-            setReviews(previous)
+            setReviews(rollbackRef.current)
             setError(err instanceof Error ? err.message : 'Failed to delete review.')
         }
     }, [reviews, githubToken])
@@ -88,5 +88,3 @@ export default function HistoryPage() {
         </div>
     )
 }
-
-

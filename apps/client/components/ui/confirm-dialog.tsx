@@ -20,7 +20,7 @@ interface ConfirmDialogProps {
 export function ConfirmDialog({
     title,
     description,
-    confirmLabel = 'Delete',
+    confirmLabel = 'Confirm',
     cancelLabel = 'Cancel',
     isLoading = false,
     onConfirm,

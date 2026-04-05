@@ -26,7 +26,6 @@ export async function apiFetch<T>(path: string, init?: RequestInit, token?: stri
         return undefined as T
     }
     return res.json() as Promise<T>
-
 }
 
 // ── Structured API Endpoints ──────────────────────────────────────────────────

@@ -26,26 +26,17 @@ export function HistoryReviewList({ reviews, isLoading, onDelete }: HistoryRevie
     const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
     const [deletingId, setDeletingId] = useState<string | null>(null)
 
-    const handleDeleteClick = useCallback((e: React.MouseEvent, id: string) => {
-        e.preventDefault()
-        e.stopPropagation()
-        setPendingDeleteId(id)
-    }, [])
-
     const handleConfirm = useCallback(async () => {
         if (!pendingDeleteId || !onDelete) return
         setDeletingId(pendingDeleteId)
-        setPendingDeleteId(null)
         try {
             await onDelete(pendingDeleteId)
         } finally {
+            // Close dialog only after operation settles so the spinner is visible
             setDeletingId(null)
+            setPendingDeleteId(null)
         }
     }, [pendingDeleteId, onDelete])
-
-    const handleCancel = useCallback(() => {
-        setPendingDeleteId(null)
-    }, [])
 
     if (isLoading) {
         return (
@@ -81,8 +72,6 @@ export function HistoryReviewList({ reviews, isLoading, onDelete }: HistoryRevie
             </div>
         )
     }
-
-    const pendingReview = reviews.find(r => r.id === pendingDeleteId)
 
     return (
         <>
@@ -130,7 +119,7 @@ export function HistoryReviewList({ reviews, isLoading, onDelete }: HistoryRevie
                             {onDelete && (
                                 <button
                                     type="button"
-                                    onClick={(e) => handleDeleteClick(e, review.id)}
+                                    onClick={() => setPendingDeleteId(review.id)}
                                     disabled={isDeleting}
                                     title="Delete review"
                                     className="shrink-0 flex items-center justify-center h-7 w-7 rounded-md
@@ -150,13 +139,14 @@ export function HistoryReviewList({ reviews, isLoading, onDelete }: HistoryRevie
                 })}
             </div>
 
-            {pendingDeleteId && pendingReview && (
+            {pendingDeleteId && (
                 <ConfirmDialog
                     title="Delete Review"
                     description="This will permanently delete this review and all its associated data. This action cannot be undone."
                     confirmLabel="Delete"
+                    isLoading={!!deletingId}
                     onConfirm={handleConfirm}
-                    onCancel={handleCancel}
+                    onCancel={() => setPendingDeleteId(null)}
                 />
             )}
         </>
