@@ -64,6 +64,11 @@ export class HistoryRepository {
         }
     }
 
+    async deleteReview(id: string, userId: string): Promise<boolean> {
+        const { count } = await this.prisma.review.deleteMany({ where: { id, userId } })
+        return count > 0
+    }
+
     async saveChatQuery(id: string, message: string, fullText: string): Promise<void> {
         try {
             await this.prisma.$transaction([

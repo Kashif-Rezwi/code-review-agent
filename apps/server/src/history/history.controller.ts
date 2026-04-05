@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Req, UseGuards, Logger, Sse, MessageEvent } from '@nestjs/common'
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Post, Req, UseGuards, Logger, Sse, MessageEvent } from '@nestjs/common'
 import type { Request } from 'express'
 import { Observable } from 'rxjs'
 import { HistoryService } from './history.service'
@@ -25,6 +25,12 @@ export class HistoryController {
     @Get(':id')
     getReview(@Param('id') id: string, @Req() req: Request) {
         return this.historyService.getReview(id, req.user!.userId)
+    }
+
+    @Delete(':id')
+    @HttpCode(HttpStatus.NO_CONTENT)
+    async deleteReview(@Param('id') id: string, @Req() req: Request) {
+        await this.historyService.deleteReview(id, req.user!.userId)
     }
 
     @Post(':id/chat')

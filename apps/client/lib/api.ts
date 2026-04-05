@@ -21,6 +21,10 @@ export async function apiFetch<T>(path: string, init?: RequestInit, token?: stri
         const msg = await res.text().catch(() => `HTTP ${res.status}`)
         throw new Error(msg || `Request failed with status ${res.status}`)
     }
+    // 204 No Content (and any other bodyless response) must not be parsed as JSON
+    if (res.status === 204 || res.headers.get('content-length') === '0') {
+        return undefined as T
+    }
     return res.json() as Promise<T>
 }
 
@@ -33,6 +37,8 @@ export const historyService = {
         apiFetch<T>('/history/stats', undefined, token),
     getReview: <T = any>(id: string, token?: string) => 
         apiFetch<T>(`/history/${id}`, undefined, token),
+    deleteReview: (id: string, token?: string) =>
+        apiFetch<void>(`/history/${id}`, { method: 'DELETE' }, token),
 }
 
 export const reviewService = {
