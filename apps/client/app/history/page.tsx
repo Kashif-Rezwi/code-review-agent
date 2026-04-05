@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { History } from 'lucide-react'
 import { AppHeader } from '@/components/layout/app-header'
 import { PageHeader } from '@/components/layout/page-header'
@@ -38,6 +38,25 @@ export default function HistoryPage() {
         load()
     }, [githubToken])
 
+    const handleDelete = useCallback(async (id: string) => {
+        // Optimistically remove from list
+        const previous = reviews
+        setReviews(prev => prev.filter(r => r.id !== id))
+
+        try {
+            await historyService.deleteReview(id, githubToken)
+            // Update stats count
+            setStats(prev => prev
+                ? { ...prev, totalReviews: Math.max(0, prev.totalReviews - 1) }
+                : prev
+            )
+        } catch (err) {
+            // Restore on failure
+            setReviews(previous)
+            setError(err instanceof Error ? err.message : 'Failed to delete review.')
+        }
+    }, [reviews, githubToken])
+
     if (status === 'loading') {
         return (
             <div className="min-h-screen bg-app-bg text-gray-100">
@@ -64,9 +83,10 @@ export default function HistoryPage() {
                 {error && <ErrorBanner message={error} />}
 
                 <HistoryStatsPanel stats={stats} isLoading={isLoading} />
-                <HistoryReviewList reviews={reviews} isLoading={isLoading} />
+                <HistoryReviewList reviews={reviews} isLoading={isLoading} onDelete={handleDelete} />
             </main>
         </div>
     )
 }
+
 

@@ -64,6 +64,13 @@ export class HistoryRepository {
         }
     }
 
+    async deleteReview(id: string, userId: string): Promise<boolean> {
+        const existing = await this.prisma.review.findFirst({ where: { id, userId } })
+        if (!existing) return false
+        await this.prisma.review.delete({ where: { id } })
+        return true
+    }
+
     async saveChatQuery(id: string, message: string, fullText: string): Promise<void> {
         try {
             await this.prisma.$transaction([

@@ -26,6 +26,11 @@ export class HistoryService {
         return this.historyRepository.getStats(userId)
     }
 
+    async deleteReview(id: string, userId: string): Promise<void> {
+        const deleted = await this.historyRepository.deleteReview(id, userId)
+        if (!deleted) throw new NotFoundException(`Review ${id} not found.`)
+    }
+
     /**
      * Streams the chat completion from the LLM, yielding text chunks.
      * Persists the conversation securely to the database when the stream naturally completes.
