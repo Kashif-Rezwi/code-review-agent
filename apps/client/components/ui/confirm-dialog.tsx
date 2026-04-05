@@ -51,8 +51,6 @@ export function ConfirmDialog({
 
             {/* Card */}
             <div className="relative z-10 w-full max-w-sm rounded-xl border border-gray-700/60 bg-gray-900/95 shadow-2xl shadow-black/50 animate-in slide-in-from-bottom-4 fade-in duration-200">
-                {/* Top accent line */}
-                <div className="absolute inset-x-0 top-0 h-px rounded-t-xl bg-gradient-to-r from-transparent via-red-500/40 to-transparent" />
 
                 <div className="p-6 space-y-4">
                     {/* Icon + Title */}
