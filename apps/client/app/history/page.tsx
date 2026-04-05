@@ -48,9 +48,10 @@ export default function HistoryPage() {
 
         try {
             await historyService.deleteReview(id, githubToken)
-            setStats(prev =>
-                prev ? { ...prev, totalReviews: Math.max(0, prev.totalReviews - 1) } : prev
-            )
+            // Re-fetch stats so issuesByType and issuesBySeverity stay accurate.
+            // Optimistic patching only totalReviews leaves the issue-type counts stale.
+            const updatedStats = await historyService.getStats<Stats>(githubToken)
+            setStats(updatedStats)
         } catch (err) {
             setReviews(rollbackRef.current)
             setError(err instanceof Error ? err.message : 'Failed to delete review.')
