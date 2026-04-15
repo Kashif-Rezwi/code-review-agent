@@ -1,3 +1,8 @@
+'use client'
+
+import { Copy, Check } from 'lucide-react'
+import { useCopyToClipboard } from '@/lib/hooks'
+
 interface PrUrlInputProps {
     value: string
     onChange: (value: string) => void
@@ -8,6 +13,9 @@ interface PrUrlInputProps {
 
 /** Reusable GitHub PR URL input with label, validation hint, and Enter-key submission. */
 export function PrUrlInput({ value, onChange, onSubmit, disabled, isLoading }: PrUrlInputProps) {
+    const { copied, copy } = useCopyToClipboard()
+    const showCopy = !!value
+
     return (
         <div className="space-y-2">
             <label className="text-xs font-medium text-gray-400 uppercase tracking-wide">
@@ -19,20 +27,34 @@ export function PrUrlInput({ value, onChange, onSubmit, disabled, isLoading }: P
                     <div className="h-4 w-2/5 bg-[#569cd6] rounded animate-pulse opacity-45" />
                 </div>
             ) : (
-                <input
-                    type="url"
-                    value={value}
-                    autoFocus
-                    disabled={disabled}
-                    onChange={e => onChange(e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && onSubmit()}
-                    placeholder="https://github.com/owner/repo/pull/123"
-                    className="w-full bg-gray-900/60 border border-gray-800 rounded-lg px-4 py-3
-                               text-sm text-gray-100 placeholder-gray-600
-                               focus:outline-none focus:border-blue-500/50 focus:shadow-[0_0_0_1px_rgba(59,130,246,0.15),0_0_15px_rgba(59,130,246,0.08)]
-                               transition-all duration-200
-                               disabled:opacity-50 disabled:cursor-not-allowed"
-                />
+                <div className="relative">
+                    <input
+                        type="url"
+                        value={value}
+                        autoFocus
+                        disabled={disabled}
+                        onChange={e => onChange(e.target.value)}
+                        onKeyDown={e => e.key === 'Enter' && onSubmit()}
+                        placeholder="https://github.com/owner/repo/pull/123"
+                        className={`w-full bg-gray-900/60 border border-gray-800 rounded-lg px-4 py-3
+                                   text-sm text-gray-100 placeholder-gray-600
+                                   focus:outline-none focus:border-blue-500/50 focus:shadow-[0_0_0_1px_rgba(59,130,246,0.15),0_0_15px_rgba(59,130,246,0.08)]
+                                   transition-all duration-200
+                                   disabled:opacity-50 disabled:cursor-not-allowed
+                                   ${showCopy ? 'pr-10' : ''}`}
+                    />
+                    {showCopy && (
+                        <button
+                            onClick={() => copy(value)}
+                            title={copied ? 'Copied!' : 'Copy URL'}
+                            className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1.5 rounded-md text-gray-500 hover:text-gray-300 hover:bg-gray-800 transition-colors"
+                        >
+                            {copied
+                                ? <Check className="w-3.5 h-3.5 text-green-400" />
+                                : <Copy className="w-3.5 h-3.5" />}
+                        </button>
+                    )}
+                </div>
             )}
 
             <p className="text-xs text-gray-600">
