@@ -14,7 +14,7 @@ interface PrUrlInputProps {
 /** Reusable GitHub PR URL input with label, validation hint, and Enter-key submission. */
 export function PrUrlInput({ value, onChange, onSubmit, disabled, isLoading }: PrUrlInputProps) {
     const { copied, copy } = useCopyToClipboard()
-    const showCopy = !!value
+    const showCopy = !!disabled && !!value
 
     return (
         <div className="space-y-2">
