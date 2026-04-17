@@ -61,6 +61,12 @@ export class ReviewService {
     async createSession(type: 'CODE' | 'PR', input: string, userId: string) {
         const session = await this.reviewRepository.createSession(type, input, userId)
         if (!session) throw new InternalServerErrorException('Database not configured or failed to create session')
+        await this.queueService.enqueue({
+            reviewId: session.id,
+            type: session.type as 'CODE' | 'PR',
+            input: session.input,
+            userId,
+        })
         return session
     }
 
@@ -76,11 +82,16 @@ export class ReviewService {
      */
     async cancelReview(reviewId: string): Promise<void> {
         await this.queueService.removeJob(reviewId)
-        await this.reviewRepository.markCancelled(reviewId)
-        await this.redisService.emitEvent(
-            reviewId,
-            JSON.stringify({ type: 'error', message: 'Review cancelled' }),
-        )
+        const wasCancelled = await this.reviewRepository.markCancelled(reviewId)
+        // Only push the terminal event when we actually flipped the status.
+        // If the review already reached COMPLETE/FAILED, emitting an error event
+        // here would corrupt the Redis replay list seen by future SSE connections.
+        if (wasCancelled) {
+            await this.redisService.emitEvent(
+                reviewId,
+                JSON.stringify({ type: 'error', message: 'Review cancelled' }),
+            )
+        }
     }
 
     async runForQueue(reviewId: string, type: 'CODE' | 'PR', input: string, userId: string, conn: SseConnection): Promise<void> {

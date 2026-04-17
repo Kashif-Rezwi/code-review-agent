@@ -89,7 +89,9 @@ export function ReviewPageClient({ initialReviewType, initialReviewId }: { initi
             // Fire-and-forget the cancel request — the server marks the DB as CANCELLED
             // and emits a terminal Redis event. We reset the local stream immediately
             // so the UI is responsive; the server handles the rest asynchronously.
-            reviewService.cancelSession(initialReviewId, githubToken).catch(() => null)
+            reviewService.cancelSession(initialReviewId, githubToken).catch((err) => {
+                console.warn('[review] cancel request failed — job may still run to completion', err)
+            })
             reset()
             router.push(`/review/${mode === 'code' ? 'paste_code' : 'github_pr'}`)
             return
