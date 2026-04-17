@@ -25,6 +25,8 @@ import { GithubService } from '../github/github.service'
 import { LinterService } from '../linter/linter.service'
 import { RagService } from '../rag/rag.service'
 import { ReviewRepository } from './review.repository'
+import { QueueService } from '../queue/queue.service'
+import { RedisService } from '../queue/redis.service'
 import type { SseConnection } from './review.sse'
 import { parseReviewText } from './review-parser.util'
 import {
@@ -51,6 +53,8 @@ export class ReviewService {
         private linterService: LinterService,
         private ragService: RagService,
         private aiService: AiService,
+        private queueService: QueueService,
+        private redisService: RedisService,
     ) {
     }
 
@@ -62,6 +66,21 @@ export class ReviewService {
 
     async markFailed(reviewId: string, message: string) {
         await this.reviewRepository.markFailed(reviewId, message)
+    }
+
+    /**
+     * Cancels an in-progress review:
+     * 1. Removes the BullMQ job if it hasn't started yet.
+     * 2. Marks the DB record as CANCELLED (no-op if already terminal).
+     * 3. Emits a terminal error event to Redis so any live SSE client closes immediately.
+     */
+    async cancelReview(reviewId: string): Promise<void> {
+        await this.queueService.removeJob(reviewId)
+        await this.reviewRepository.markCancelled(reviewId)
+        await this.redisService.emitEvent(
+            reviewId,
+            JSON.stringify({ type: 'error', message: 'Review cancelled' }),
+        )
     }
 
     async runForQueue(reviewId: string, type: 'CODE' | 'PR', input: string, userId: string, conn: SseConnection): Promise<void> {

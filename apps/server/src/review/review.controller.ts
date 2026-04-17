@@ -1,4 +1,4 @@
-import { Body, Controller, Post, Get, Param, HttpCode, Req, UseGuards, Sse, MessageEvent } from '@nestjs/common'
+import { Body, Controller, Post, Get, Delete, Param, HttpCode, Req, UseGuards, Sse, MessageEvent } from '@nestjs/common'
 import { Request } from 'express'
 import { Observable } from 'rxjs'
 import { ReviewService } from './review.service'
@@ -42,5 +42,13 @@ export class ReviewController {
     @Get(':reviewId')
     async getReview(@Param('reviewId') reviewId: string, @Req() req: Request) {
         return this.historyService.getReview(reviewId, req.user!.userId)
+    }
+
+    @Delete(':reviewId')
+    @HttpCode(204)
+    async cancelReview(@Param('reviewId') reviewId: string, @Req() req: Request) {
+        // Ownership check — throws NotFoundException if review doesn't belong to this user
+        await this.historyService.getReview(reviewId, req.user!.userId)
+        await this.reviewService.cancelReview(reviewId)
     }
 }

@@ -42,7 +42,7 @@ export const historyService = {
 }
 
 export const reviewService = {
-    getSession: <T = { type: 'CODE' | 'PR'; input: string }>(id: string, token?: string) => 
+    getSession: <T = { type: 'CODE' | 'PR'; input: string }>(id: string, token?: string) =>
         apiFetch<T>(`/review/${id}`, undefined, token),
     createSession: (payload: { type: string, input: string }, token?: string) =>
         apiFetch<{ reviewId: string }>('/review/session', {
@@ -50,6 +50,8 @@ export const reviewService = {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
         }, token),
+    cancelSession: (reviewId: string, token?: string) =>
+        apiFetch<void>(`/review/${reviewId}`, { method: 'DELETE' }, token),
 }
 
 export const ragService = {

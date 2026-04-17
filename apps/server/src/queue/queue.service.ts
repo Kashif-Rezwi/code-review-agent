@@ -26,4 +26,17 @@ export class QueueService {
             removeOnFail: { age: 86400 * 3 }, // Keep failed jobs in Redis for 3 days for debugging
         })
     }
+
+    /**
+     * Removes a queued job by its reviewId (= BullMQ jobId).
+     * No-ops silently if the job has already started or been removed.
+     */
+    async removeJob(reviewId: string): Promise<void> {
+        try {
+            const job = await this.reviewQueue.getJob(reviewId)
+            if (job) await job.remove()
+        } catch {
+            // Job may have already started running or been cleaned up — safe to ignore
+        }
+    }
 }

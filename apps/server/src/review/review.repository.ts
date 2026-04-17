@@ -31,9 +31,18 @@ export class ReviewRepository {
 
     async markFailed(reviewId: string, message: string) {
         if (!this.hasDb) return
-        await this.prisma.review.update({
-            where: { id: reviewId },
-            data: { status: 'FAILED', summary: message }
+        // updateMany lets us add a status filter without throwing on no-match
+        await this.prisma.review.updateMany({
+            where: { id: reviewId, status: { not: 'CANCELLED' } },
+            data: { status: 'FAILED', summary: message },
+        }).catch(() => null)
+    }
+
+    async markCancelled(reviewId: string): Promise<void> {
+        if (!this.hasDb) return
+        await this.prisma.review.updateMany({
+            where: { id: reviewId, status: 'PENDING' },
+            data: { status: 'CANCELLED' },
         }).catch(() => null)
     }
 
@@ -68,6 +77,13 @@ export class ReviewRepository {
             }
 
             if (reviewId) {
+                // Skip the write if the review was cancelled while the job was running
+                const current = await this.prisma.review.findUnique({
+                    where: { id: reviewId },
+                    select: { status: true },
+                })
+                if (!current || current.status === 'CANCELLED') return undefined
+
                 const saved = await this.prisma.review.update({
                     where: { id: reviewId },
                     data: { ...reviewData, status: 'COMPLETE' },
