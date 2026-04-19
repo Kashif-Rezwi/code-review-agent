@@ -13,6 +13,7 @@ import { ChatThread } from '@/components/review/chat-thread'
 import { ChatInput } from '@/components/review/chat-input'
 import { useChatMessages } from '@/lib/use-chat-messages'
 import { useReviewStream } from '@/lib/use-review-stream'
+import { reviewService } from '@/lib/api'
 import { detectLanguage, estimateTokens, CODE_TOKEN_LIMIT } from '@/lib/detect-language'
 import { isValidPrUrl } from '@/lib/validate'
 import { PrUrlInput } from '@/components/ui/pr-url-input'
@@ -83,15 +84,28 @@ export function ReviewPageClient({ initialReviewType, initialReviewId }: { initi
         }
     }
 
-    const handleClear = () => {
+    const handleClear = useCallback(async () => {
+        if (isStreaming && initialReviewId) {
+            // Fire-and-forget the cancel request — the server marks the DB as CANCELLED
+            // and emits a terminal Redis event. We reset the local stream immediately
+            // so the UI is responsive; the server handles the rest asynchronously.
+            reviewService.cancelSession(initialReviewId, githubToken).catch((err) => {
+                console.warn('[review] cancel request failed — job may still run to completion', err)
+            })
+            reset()
+            router.push(`/review/${mode === 'code' ? 'paste_code' : 'github_pr'}`)
+            return
+        }
+
         if (initialReviewId) {
             router.push(`/review/${mode === 'code' ? 'paste_code' : 'github_pr'}`)
             return
         }
+
         setCode('')
         setPrUrl('')
         reset()
-    }
+    }, [isStreaming, initialReviewId, githubToken, reset, router, mode])
 
     const handleModeSwitch = (m: Mode) => {
         if (isLocked) return

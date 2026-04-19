@@ -49,6 +49,7 @@ enum ReviewStatus {
   PENDING
   COMPLETE
   FAILED
+  CANCELLED
 }
 
 enum ReviewType {

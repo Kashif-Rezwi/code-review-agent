@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { PrismaService } from '../prisma/prisma.service'
-import type { Prisma } from '@prisma/client'
+import { Prisma } from '@prisma/client'
 import type { ReviewData } from '@cra/ai'
 import type { ReviewStreamEvent } from '@cra/types'
 
@@ -31,10 +31,21 @@ export class ReviewRepository {
 
     async markFailed(reviewId: string, message: string) {
         if (!this.hasDb) return
-        await this.prisma.review.update({
-            where: { id: reviewId },
-            data: { status: 'FAILED', summary: message }
+        // updateMany lets us add a status filter without throwing on no-match
+        await this.prisma.review.updateMany({
+            where: { id: reviewId, status: { not: 'CANCELLED' } },
+            data: { status: 'FAILED', summary: message },
         }).catch(() => null)
+    }
+
+    /** Returns true if the review was actually cancelled (was PENDING), false otherwise. */
+    async markCancelled(reviewId: string): Promise<boolean> {
+        if (!this.hasDb) return false
+        const result = await this.prisma.review.updateMany({
+            where: { id: reviewId, status: 'PENDING' },
+            data: { status: 'CANCELLED' },
+        }).catch(() => null)
+        return (result?.count ?? 0) > 0
     }
 
     async saveReview(
@@ -68,11 +79,22 @@ export class ReviewRepository {
             }
 
             if (reviewId) {
-                const saved = await this.prisma.review.update({
-                    where: { id: reviewId },
-                    data: { ...reviewData, status: 'COMPLETE' },
-                })
-                return saved.id
+                // Compound where: skip the write if the review was cancelled while the
+                // job was running. Prisma throws P2025 when no row matches — we treat
+                // that as a no-op rather than an error, keeping the normal path fast
+                // (no extra findUnique round-trip).
+                try {
+                    const saved = await this.prisma.review.update({
+                        where: { id: reviewId, status: { not: 'CANCELLED' } },
+                        data: { ...reviewData, status: 'COMPLETE' },
+                    })
+                    return saved.id
+                } catch (err: unknown) {
+                    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') {
+                        return undefined  // record not found / filtered out — was cancelled
+                    }
+                    throw err             // unexpected — let outer catch handle it
+                }
             }
 
             const saved = await this.prisma.review.create({

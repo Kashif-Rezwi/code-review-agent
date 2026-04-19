@@ -92,9 +92,14 @@ export function ReviewActionContainer({
             {hasAnyInput && (
                 <button
                     onClick={handleClear}
-                    className="px-4 py-2.5 text-sm font-medium text-gray-400 hover:text-gray-200 hover:bg-gray-800/60 rounded-lg transition-all duration-200 cursor-pointer"
+                    className={cn(
+                        'px-4 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 cursor-pointer',
+                        isStreaming
+                            ? 'text-red-400 hover:text-red-300 hover:bg-red-500/10'
+                            : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/60'
+                    )}
                 >
-                    Clear
+                    {isStreaming ? 'Cancel' : 'Clear'}
                 </button>
             )}
         </div>

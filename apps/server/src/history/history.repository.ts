@@ -15,7 +15,7 @@ export class HistoryRepository {
 
     listReviews(userId: string) {
         return this.prisma.review.findMany({
-            where: { userId },
+            where: { userId, status: 'COMPLETE' },
             select: {
                 id: true,
                 type: true,
@@ -40,16 +40,16 @@ export class HistoryRepository {
 
     async getStats(userId: string) {
         const [totalReviews, byType, bySeverity] = await Promise.all([
-            this.prisma.review.count({ where: { userId } }),
+            this.prisma.review.count({ where: { userId, status: 'COMPLETE' } }),
             this.prisma.issue.groupBy({
                 by: ['type'],
-                where: { review: { userId } },
+                where: { review: { userId, status: 'COMPLETE' } },
                 _count: { type: true },
                 orderBy: { _count: { type: 'desc' } },
             }),
             this.prisma.issue.groupBy({
                 by: ['severity'],
-                where: { review: { userId } },
+                where: { review: { userId, status: 'COMPLETE' } },
                 _count: { severity: true },
             }),
         ])

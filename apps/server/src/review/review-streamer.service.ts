@@ -46,12 +46,12 @@ export class ReviewStreamerService {
                     }
 
                     // Database definitive status check
-                    if (review.status === 'COMPLETE' || review.status === 'FAILED') {
+                    if (review.status === 'COMPLETE' || review.status === 'FAILED' || review.status === 'CANCELLED') {
                         if (history.length === 0) {
                             if (review.status === 'COMPLETE') {
                                 subscriber.next({ data: { type: 'complete', review: { id: review.id } } });
                             } else {
-                                subscriber.next({ data: { type: 'error', message: review.summary || 'Review failed' } });
+                                subscriber.next({ data: { type: 'error', message: review.summary || (review.status === 'CANCELLED' ? 'Review cancelled' : 'Review failed') } });
                             }
                         }
                         handleComplete();
