@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { PrismaService } from '../prisma/prisma.service'
-import type { Prisma } from '@prisma/client'
+import { Prisma } from '@prisma/client'
 import type { ReviewData } from '@cra/ai'
 import type { ReviewStreamEvent } from '@cra/types'
 
@@ -90,9 +90,10 @@ export class ReviewRepository {
                     })
                     return saved.id
                 } catch (err: unknown) {
-                    const code = (err as { code?: string }).code
-                    if (code === 'P2025') return undefined   // was cancelled — expected
-                    throw err                                 // unexpected — let outer catch handle it
+                    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') {
+                        return undefined  // record not found / filtered out — was cancelled
+                    }
+                    throw err             // unexpected — let outer catch handle it
                 }
             }
 
