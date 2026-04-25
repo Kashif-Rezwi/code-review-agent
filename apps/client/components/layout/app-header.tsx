@@ -7,6 +7,7 @@ import { Code2, BookOpen, History } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useSession, signOut } from 'next-auth/react'
 import { useState, useRef, useEffect } from 'react'
+import { ServerWakeupBanner } from '@/components/ui/server-wakeup-banner'
 
 const NAV = [
     { href: '/review',    label: 'Review',    icon: Code2    },
@@ -126,6 +127,7 @@ export function AppHeader() {
                 )}
             </div>
             </div>
+            <ServerWakeupBanner />
         </header>
     )
 }
