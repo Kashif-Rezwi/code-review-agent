@@ -1,8 +1,7 @@
 'use client'
 
-import { useEffect, useState } from 'react'
 import { CloudOff, CheckCircle, Loader2 } from 'lucide-react'
-import { useServerWakeup } from '@/lib/use-server-wakeup'
+import { useWakeupContext } from '@/lib/server-wakeup-context'
 import { cn } from '@/lib/utils'
 
 function formatElapsed(sec: number): string {
@@ -14,17 +13,12 @@ function formatElapsed(sec: number): string {
  * Inline strip rendered inside AppHeader that appears only when the Render free-tier
  * server is sleeping. Shows nothing on fast connections — the first health ping has a
  * 3 s timeout before the banner is revealed, so awake servers produce zero visual noise.
+ *
+ * State is owned by ServerWakeupProvider in the root layout so the timer and dismissed
+ * flag survive page navigations (AppHeader remounts on each route change).
  */
 export function ServerWakeupBanner() {
-    const { status, elapsedSec } = useServerWakeup()
-    const [dismissed, setDismissed] = useState(false)
-
-    // When the server comes back up, show the "ready" state briefly then auto-dismiss
-    useEffect(() => {
-        if (status !== 'awake' || dismissed) return
-        const t = setTimeout(() => setDismissed(true), 2_500)
-        return () => clearTimeout(t)
-    }, [status, dismissed])
+    const { status, elapsedSec, dismissed } = useWakeupContext()
 
     // Never show if the server was already awake on first ping, or after dismissal
     if (dismissed || status === 'idle') return null
@@ -38,7 +32,7 @@ export function ServerWakeupBanner() {
             className={cn(
                 'w-full flex items-center justify-center gap-2.5',
                 'px-4 py-2 text-xs font-medium',
-                'border-t transition-colors duration-500',
+                'border-b transition-colors duration-500',
                 isWaking
                     ? 'bg-amber-950/60 border-amber-500/20 text-amber-300'
                     : 'bg-green-950/60 border-green-500/20 text-green-300',
