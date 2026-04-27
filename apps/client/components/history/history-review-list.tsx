@@ -6,8 +6,6 @@ import { Code2, GitPullRequest, History, Loader2, Trash2 } from 'lucide-react'
 import { ScoreBadge } from '@/components/review/score-badge'
 import { Badge } from '@/components/ui/badge'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
-import { useVirtualScroll } from '@/lib/use-virtual-scroll'
-import { cn } from '@/lib/utils'
 
 export interface ReviewSummary {
     id: string
@@ -34,11 +32,6 @@ const ROW_HEIGHT = ITEM_HEIGHT + ROW_GAP
 export function HistoryReviewList({ reviews, isLoading, onDelete }: HistoryReviewListProps) {
     const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
     const [deletingId, setDeletingId] = useState<string | null>(null)
-
-    const { containerRef, onScroll, totalHeight, startIndex, endIndex, canScrollUp, canScrollDown } = useVirtualScroll(
-        reviews.length,
-        ROW_HEIGHT,
-    )
 
     const handleConfirm = useCallback(async () => {
         if (!pendingDeleteId || !onDelete) return
@@ -88,39 +81,22 @@ export function HistoryReviewList({ reviews, isLoading, onDelete }: HistoryRevie
 
     return (
         <>
-            {/* Fade wrapper — fades appear only when there is hidden content in that direction */}
-            <div className="relative">
+            <div className="relative h-[calc(100vh-19rem)]" >
                 <div
                     aria-hidden
                     style={{ background: 'linear-gradient(to bottom, var(--color-app-bg), transparent)' }}
-                    className={cn(
-                        'absolute inset-x-0 top-0 h-10 pointer-events-none z-10 transition-opacity duration-300',
-                        canScrollUp ? 'opacity-100' : 'opacity-0',
-                    )}
+                    className={'absolute inset-x-0 top-0 h-2 pointer-events-none z-10 transition-opacity duration-300'}
                 />
                 <div
                     aria-hidden
                     style={{ background: 'linear-gradient(to top, var(--color-app-bg), transparent)' }}
-                    className={cn(
-                        'absolute inset-x-0 bottom-0 h-10 pointer-events-none z-10 transition-opacity duration-300',
-                        canScrollDown ? 'opacity-100' : 'opacity-0',
-                    )}
+                    className={'absolute inset-x-0 bottom-0 h-2 pointer-events-none z-10 transition-opacity duration-300'}
                 />
 
-                {/*
-                  Scrollable viewport. max-h fills the screen space below the stats panel;
-                  min-h prevents it collapsing when there are only a few items.
-                  py-2 keeps items clear of the fade edges.
-                */}
-                <div
-                    ref={containerRef}
-                    onScroll={onScroll}
-                    className="overflow-y-auto scroll-hide max-h-[calc(100vh-20rem)] min-h-[16rem] py-2"
-                >
-                    {/* Full-height spacer: makes the scrollbar accurately reflect total item count */}
-                    <div style={{ height: totalHeight, position: 'relative' }}>
-                        {reviews.slice(startIndex, endIndex + 1).map((review, i) => {
-                            const index = startIndex + i
+                <div className="overflow-y-auto scroll-hide h-full py-2">
+                    <div style={{ position: 'relative' }}>
+                        {reviews.map((review, i) => {
+                            const index = i
                             const isDeleting = deletingId === review.id
                             const href = `/history/${review.type === 'PR' ? 'github_pr' : 'paste_code'}/${review.id}`
 
@@ -194,7 +170,7 @@ export function HistoryReviewList({ reviews, isLoading, onDelete }: HistoryRevie
                         })}
                     </div>
                 </div>
-            </div>{/* end fade wrapper */}
+            </div>
 
             {pendingDeleteId && (
                 <ConfirmDialog
