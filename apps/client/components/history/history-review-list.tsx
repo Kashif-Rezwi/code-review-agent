@@ -7,6 +7,7 @@ import { ScoreBadge } from '@/components/review/score-badge'
 import { Badge } from '@/components/ui/badge'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { useVirtualScroll } from '@/lib/use-virtual-scroll'
+import { cn } from '@/lib/utils'
 
 export interface ReviewSummary {
     id: string
@@ -34,7 +35,7 @@ export function HistoryReviewList({ reviews, isLoading, onDelete }: HistoryRevie
     const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
     const [deletingId, setDeletingId] = useState<string | null>(null)
 
-    const { containerRef, onScroll, totalHeight, startIndex, endIndex } = useVirtualScroll(
+    const { containerRef, onScroll, totalHeight, startIndex, endIndex, canScrollUp, canScrollDown } = useVirtualScroll(
         reviews.length,
         ROW_HEIGHT,
     )
@@ -87,100 +88,113 @@ export function HistoryReviewList({ reviews, isLoading, onDelete }: HistoryRevie
 
     return (
         <>
-            {/*
-              Scrollable viewport. max-h fills the screen space below the stats panel;
-              min-h prevents it collapsing when there are only a few items.
-            */}
-            <div
-                ref={containerRef}
-                onScroll={onScroll}
-                className="overflow-y-auto max-h-[calc(100vh-22rem)] min-h-[12rem]"
-            >
+            {/* Fade wrapper — fades appear only when there is hidden content in that direction */}
+            <div className="relative">
+                <div
+                    aria-hidden
+                    style={{ background: 'linear-gradient(to bottom, var(--color-app-bg), transparent)' }}
+                    className={cn(
+                        'absolute inset-x-0 top-0 h-10 pointer-events-none z-10 transition-opacity duration-300',
+                        canScrollUp ? 'opacity-100' : 'opacity-0',
+                    )}
+                />
+                <div
+                    aria-hidden
+                    style={{ background: 'linear-gradient(to top, var(--color-app-bg), transparent)' }}
+                    className={cn(
+                        'absolute inset-x-0 bottom-0 h-10 pointer-events-none z-10 transition-opacity duration-300',
+                        canScrollDown ? 'opacity-100' : 'opacity-0',
+                    )}
+                />
+
                 {/*
-                  Full-height spacer: sets the scrollbar thumb size to accurately
-                  reflect the total number of items, even unrendered ones.
+                  Scrollable viewport. max-h fills the screen space below the stats panel;
+                  min-h prevents it collapsing when there are only a few items.
+                  py-2 keeps items clear of the fade edges.
                 */}
-                <div style={{ height: totalHeight, position: 'relative' }}>
-                    {reviews.slice(startIndex, endIndex + 1).map((review, i) => {
-                        const index = startIndex + i
-                        const isDeleting = deletingId === review.id
-                        const href = `/history/${review.type === 'PR' ? 'github_pr' : 'paste_code'}/${review.id}`
+                <div
+                    ref={containerRef}
+                    onScroll={onScroll}
+                    className="overflow-y-auto scroll-hide max-h-[calc(100vh-20rem)] min-h-[16rem] py-2"
+                >
+                    {/* Full-height spacer: makes the scrollbar accurately reflect total item count */}
+                    <div style={{ height: totalHeight, position: 'relative' }}>
+                        {reviews.slice(startIndex, endIndex + 1).map((review, i) => {
+                            const index = startIndex + i
+                            const isDeleting = deletingId === review.id
+                            const href = `/history/${review.type === 'PR' ? 'github_pr' : 'paste_code'}/${review.id}`
 
-                        return (
-                            /*
-                              Slot wrapper: exactly ITEM_HEIGHT tall so the 6 px gap
-                              below it (ROW_HEIGHT - ITEM_HEIGHT) is transparent space
-                              between adjacent row borders — no overflow risk.
-                            */
-                            <div
-                                key={review.id}
-                                style={{
-                                    position: 'absolute',
-                                    top: index * ROW_HEIGHT,
-                                    left: 0,
-                                    right: 0,
-                                    height: ITEM_HEIGHT,
-                                }}
-                            >
-                                <div className="group flex items-center gap-3 h-full rounded-lg border border-gray-800/60 bg-gray-900/30 px-4 hover:border-gray-700/80 hover:bg-gray-900/50 transition-all duration-150">
+                            return (
+                                <div
+                                    key={review.id}
+                                    style={{
+                                        position: 'absolute',
+                                        top: index * ROW_HEIGHT,
+                                        left: 0,
+                                        right: 0,
+                                        height: ITEM_HEIGHT,
+                                    }}
+                                >
+                                    <div className="group flex items-center gap-3 h-full rounded-lg border border-gray-800/60 bg-gray-900/30 px-4 hover:border-gray-700/80 hover:bg-gray-900/50 transition-all duration-150">
 
-                                    {/* Score + type badges */}
-                                    <div className="flex items-center gap-2 shrink-0">
-                                        <ScoreBadge score={review.score} />
-                                        <Badge variant={review.type === 'PR' ? 'purple' : 'blue'}>
-                                            {review.type === 'PR'
-                                                ? <GitPullRequest className="w-3 h-3" />
-                                                : <Code2 className="w-3 h-3" />}
-                                            {review.type}
-                                        </Badge>
-                                    </div>
+                                        {/* Score + type badges */}
+                                        <div className="flex items-center gap-2 shrink-0">
+                                            <ScoreBadge score={review.score} />
+                                            <Badge variant={review.type === 'PR' ? 'purple' : 'blue'}>
+                                                {review.type === 'PR'
+                                                    ? <GitPullRequest className="w-3 h-3" />
+                                                    : <Code2 className="w-3 h-3" />}
+                                                {review.type}
+                                            </Badge>
+                                        </div>
 
-                                    {/* Summary — clickable */}
-                                    <Link href={href} className="flex-1 min-w-0">
-                                        <p className="text-sm text-gray-400 truncate leading-snug group-hover:text-gray-200 transition-colors duration-150">
-                                            {review.summary}
-                                        </p>
-                                    </Link>
-
-                                    {/* Date + issue count */}
-                                    <div className="shrink-0 text-right hidden sm:block">
-                                        <p className="text-xs text-gray-600">
-                                            {new Date(review.createdAt).toLocaleDateString('en-US', {
-                                                month: 'short', day: 'numeric', year: 'numeric',
-                                            })}
-                                        </p>
-                                        {review._count.issues > 0 && (
-                                            <p className="text-xs text-gray-700 mt-0.5">
-                                                {review._count.issues} issue{review._count.issues !== 1 ? 's' : ''}
+                                        {/* Summary — clickable */}
+                                        <Link href={href} className="flex-1 min-w-0">
+                                            <p className="text-sm text-gray-400 truncate leading-snug group-hover:text-gray-200 transition-colors duration-150">
+                                                {review.summary}
                                             </p>
-                                        )}
-                                    </div>
+                                        </Link>
 
-                                    {/* Delete button — always visible, subtle by default */}
-                                    {onDelete && (
-                                        <button
-                                            type="button"
-                                            onClick={() => setPendingDeleteId(review.id)}
-                                            disabled={isDeleting}
-                                            title="Delete review"
-                                            className="shrink-0 flex items-center justify-center h-7 w-7 rounded-md
+                                        {/* Date + issue count */}
+                                        <div className="shrink-0 text-right hidden sm:block">
+                                            <p className="text-xs text-gray-600">
+                                                {new Date(review.createdAt).toLocaleDateString('en-US', {
+                                                    month: 'short', day: 'numeric', year: 'numeric',
+                                                })}
+                                            </p>
+                                            {review._count.issues > 0 && (
+                                                <p className="text-xs text-gray-700 mt-0.5">
+                                                    {review._count.issues} issue{review._count.issues !== 1 ? 's' : ''}
+                                                </p>
+                                            )}
+                                        </div>
+
+                                        {/* Delete button — always visible, subtle by default */}
+                                        {onDelete && (
+                                            <button
+                                                type="button"
+                                                onClick={() => setPendingDeleteId(review.id)}
+                                                disabled={isDeleting}
+                                                title="Delete review"
+                                                className="shrink-0 flex items-center justify-center h-7 w-7 rounded-md
                                                        text-gray-700 hover:text-red-400 hover:bg-red-500/10
                                                        border border-transparent hover:border-red-500/20
                                                        transition-all duration-150 active:scale-90
                                                        disabled:cursor-not-allowed cursor-pointer"
-                                        >
-                                            {isDeleting
-                                                ? <Loader2 className="h-3.5 w-3.5 animate-spin text-red-400" />
-                                                : <Trash2 className="h-3.5 w-3.5" />
-                                            }
-                                        </button>
-                                    )}
+                                            >
+                                                {isDeleting
+                                                    ? <Loader2 className="h-3.5 w-3.5 animate-spin text-red-400" />
+                                                    : <Trash2 className="h-3.5 w-3.5" />
+                                                }
+                                            </button>
+                                        )}
+                                    </div>
                                 </div>
-                            </div>
-                        )
-                    })}
+                            )
+                        })}
+                    </div>
                 </div>
-            </div>
+            </div>{/* end fade wrapper */}
 
             {pendingDeleteId && (
                 <ConfirmDialog

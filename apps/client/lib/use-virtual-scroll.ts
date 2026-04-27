@@ -15,7 +15,8 @@ const OVERSCAN = 10
 export function useVirtualScroll(itemCount: number, rowHeight: number) {
     const containerRef = useRef<HTMLDivElement>(null)
     const [scrollTop, setScrollTop] = useState(0)
-    const [containerHeight, setContainerHeight] = useState(500)
+    // Start at 0 so canScrollDown is true for any non-empty list before ResizeObserver fires.
+    const [containerHeight, setContainerHeight] = useState(0)
 
     useEffect(() => {
         const el = containerRef.current
@@ -32,9 +33,14 @@ export function useVirtualScroll(itemCount: number, rowHeight: number) {
 
     const totalHeight = itemCount * rowHeight
     const visibleStart = Math.floor(scrollTop / rowHeight)
-    const visibleEnd = Math.ceil((scrollTop + containerHeight) / rowHeight) - 1
+    // Clamped to 0: when containerHeight is 0 (before ResizeObserver fires) the raw
+    // value would be -1, which is semantically wrong even though overscan corrects it.
+    const visibleEnd = Math.max(0, Math.ceil((scrollTop + containerHeight) / rowHeight) - 1)
     const startIndex = Math.max(0, visibleStart - OVERSCAN)
     const endIndex = Math.min(itemCount - 1, visibleEnd + OVERSCAN)
 
-    return { containerRef, onScroll, totalHeight, startIndex, endIndex }
+    const canScrollUp = scrollTop > 0
+    const canScrollDown = scrollTop + containerHeight < totalHeight - 1
+
+    return { containerRef, onScroll, totalHeight, startIndex, endIndex, canScrollUp, canScrollDown }
 }
