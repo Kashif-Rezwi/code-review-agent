@@ -64,67 +64,70 @@ export default function StandardsPage() {
         })
 
     return (
-        <div className="min-h-screen bg-app-bg text-gray-100">
+        <div className="h-screen flex flex-col bg-app-bg text-gray-100 overflow-hidden">
             <AppHeader />
 
-            <main className="max-w-4xl mx-auto p-6 space-y-6">
-                <PageHeader
-                    icon={BookOpen}
-                    title="Coding Standards"
-                    description="Upload your team's style guides or conventions documents. Reviews will be automatically checked against these standards."
-                />
-
-                {/* Upload zone */}
-                <div
-                    className={`relative border-2 border-dashed rounded-lg p-8 text-center transition-colors cursor-pointer
-                        ${isDragging
-                            ? 'border-blue-500/60 bg-blue-950/10'
-                            : 'border-gray-800 bg-gray-900/30 hover:border-gray-700 hover:bg-gray-900/50'
-                        }`}
-                    onClick={() => !isUploading && fileInputRef.current?.click()}
-                    onDrop={handleDrop}
-                    onDragOver={handleDragOver}
-                    onDragLeave={handleDragLeave}
-                >
-                    <input
-                        ref={fileInputRef}
-                        type="file"
-                        accept=".txt,.pdf,.md"
-                        className="hidden"
-                        onChange={handleFileChange}
-                        disabled={isUploading}
+            <main className="flex-1 overflow-hidden flex flex-col max-w-4xl w-full mx-auto px-6 pt-6 min-h-0">
+                {/* Non-scrolling header content */}
+                <div className="shrink-0 space-y-6 pb-6">
+                    <PageHeader
+                        icon={BookOpen}
+                        title="Coding Standards"
+                        description="Upload your team's style guides or conventions documents. Reviews will be automatically checked against these standards."
                     />
 
-                    {isUploading ? (
-                        <div className="flex flex-col items-center gap-2">
-                            <Loader2 className="w-8 h-8 text-blue-400 animate-spin" />
-                            <p className="text-sm text-gray-400">Chunking and embedding document…</p>
-                        </div>
-                    ) : (
-                        <div className="flex flex-col items-center gap-3">
-                            <div className="w-12 h-12 rounded-lg bg-gray-900 border border-gray-800 flex items-center justify-center">
-                                <Upload className="w-5 h-5 text-gray-500" />
+                    {/* Upload zone */}
+                    <div
+                        className={`relative border-2 border-dashed rounded-lg p-8 text-center transition-colors cursor-pointer
+                            ${isDragging
+                                ? 'border-blue-500/60 bg-blue-950/10'
+                                : 'border-gray-800 bg-gray-900/30 hover:border-gray-700 hover:bg-gray-900/50'
+                            }`}
+                        onClick={() => !isUploading && fileInputRef.current?.click()}
+                        onDrop={handleDrop}
+                        onDragOver={handleDragOver}
+                        onDragLeave={handleDragLeave}
+                    >
+                        <input
+                            ref={fileInputRef}
+                            type="file"
+                            accept=".txt,.pdf,.md"
+                            className="hidden"
+                            onChange={handleFileChange}
+                            disabled={isUploading}
+                        />
+
+                        {isUploading ? (
+                            <div className="flex flex-col items-center gap-2">
+                                <Loader2 className="w-8 h-8 text-blue-400 animate-spin" />
+                                <p className="text-sm text-gray-400">Chunking and embedding document…</p>
                             </div>
-                            <div>
-                                <p className="text-sm text-gray-300 font-medium">
-                                    Drop a file here or{' '}
-                                    <span className="text-blue-400">click to browse</span>
-                                </p>
-                                <p className="text-xs text-gray-600 mt-1">
-                                    .txt or .pdf — max 5 MB
-                                </p>
+                        ) : (
+                            <div className="flex flex-col items-center gap-3">
+                                <div className="w-12 h-12 rounded-lg bg-gray-900 border border-gray-800 flex items-center justify-center">
+                                    <Upload className="w-5 h-5 text-gray-500" />
+                                </div>
+                                <div>
+                                    <p className="text-sm text-gray-300 font-medium">
+                                        Drop a file here or{' '}
+                                        <span className="text-blue-400">click to browse</span>
+                                    </p>
+                                    <p className="text-xs text-gray-600 mt-1">
+                                        .txt or .pdf — max 5 MB
+                                    </p>
+                                </div>
                             </div>
-                        </div>
-                    )}
+                        )}
+                    </div>
+
+                    {/* Status messages */}
+                    {uploadError && <StatusMessage variant="error" message={uploadError} />}
+                    {uploadSuccess && <StatusMessage variant="success" message={uploadSuccess} />}
                 </div>
 
-                {/* Status messages */}
-                {uploadError && <StatusMessage variant="error" message={uploadError} />}
-                {uploadSuccess && <StatusMessage variant="success" message={uploadSuccess} />}
-
-                {/* Document list */}
-                <div className="space-y-3">
-                    <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                {/* Scrollable document list section */}
+                <div className="flex-1 flex flex-col min-h-0 pb-4">
+                    <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wider shrink-0 mb-3">
                         Uploaded Standards{!isLoading && ` (${documents.length})`}
                     </h2>
 
@@ -158,39 +161,54 @@ export default function StandardsPage() {
                             </p>
                         </div>
                     ) : (
-                        <ul className="space-y-2">
-                            {documents.map((doc) => (
-                                <li
-                                    key={doc.id}
-                                    className="flex items-center gap-4 rounded-lg border border-gray-800 bg-gray-900/60 px-4 py-3"
-                                >
-                                    <FileText className="w-4 h-4 text-blue-400 shrink-0" />
-                                    <div className="flex-1 min-w-0">
-                                        <p className="text-sm text-gray-200 truncate font-medium">
-                                            {doc.name}
-                                        </p>
-                                        <p className="text-xs text-gray-600">
-                                            {doc._count.chunks} chunk
-                                            {doc._count.chunks !== 1 ? 's' : ''} ·{' '}
-                                            {formatDate(doc.createdAt)}
-                                        </p>
-                                    </div>
-                                    <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        disabled={deletingId === doc.id}
-                                        onClick={() => deleteDocument(doc.id, doc.name)}
-                                        className="text-gray-500 hover:text-red-400 hover:bg-red-950/30 h-8 w-8 p-0"
+                        <div className="relative flex-1 min-h-0">
+                            {/* Top fade */}
+                            <div
+                                aria-hidden
+                                style={{ background: 'linear-gradient(to bottom, var(--color-app-bg), transparent)' }}
+                                className="absolute inset-x-0 top-0 h-2 pointer-events-none z-10"
+                            />
+                            {/* Bottom fade */}
+                            <div
+                                aria-hidden
+                                style={{ background: 'linear-gradient(to top, var(--color-app-bg), transparent)' }}
+                                className="absolute inset-x-0 bottom-0 h-2 pointer-events-none z-10"
+                            />
+
+                            <ul className="overflow-y-auto scroll-hide h-full py-2 space-y-2">
+                                {documents.map((doc) => (
+                                    <li
+                                        key={doc.id}
+                                        className="flex items-center gap-4 rounded-lg border border-gray-800 bg-gray-900/60 px-4 py-3"
                                     >
-                                        {deletingId === doc.id ? (
-                                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                        ) : (
-                                            <Trash2 className="w-3.5 h-3.5" />
-                                        )}
-                                    </Button>
-                                </li>
-                            ))}
-                        </ul>
+                                        <FileText className="w-4 h-4 text-blue-400 shrink-0" />
+                                        <div className="flex-1 min-w-0">
+                                            <p className="text-sm text-gray-200 truncate font-medium">
+                                                {doc.name}
+                                            </p>
+                                            <p className="text-xs text-gray-600">
+                                                {doc._count.chunks} chunk
+                                                {doc._count.chunks !== 1 ? 's' : ''} ·{' '}
+                                                {formatDate(doc.createdAt)}
+                                            </p>
+                                        </div>
+                                        <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            disabled={deletingId === doc.id}
+                                            onClick={() => deleteDocument(doc.id, doc.name)}
+                                            className="text-gray-500 hover:text-red-400 hover:bg-red-950/30 h-8 w-8 p-0"
+                                        >
+                                            {deletingId === doc.id ? (
+                                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                            ) : (
+                                                <Trash2 className="w-3.5 h-3.5" />
+                                            )}
+                                        </Button>
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
                     )}
                 </div>
             </main>
