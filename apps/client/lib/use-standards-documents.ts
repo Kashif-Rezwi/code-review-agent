@@ -40,6 +40,7 @@ export function useStandardsDocuments(githubToken?: string): UseStandardsDocumen
     const [uploadSuccess, setUploadSuccess] = useState<string | null>(null)
 
     const fetchDocuments = useCallback(async () => {
+        if (!githubToken) return  // keep isLoading=true until session is ready
         try {
             const docs = await ragService.getDocuments<StandardsDocument[]>(githubToken)
             setDocuments(docs)

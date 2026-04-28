@@ -113,7 +113,7 @@ export default function StandardsPage() {
                                         <span className="text-blue-400">click to browse</span>
                                     </p>
                                     <p className="text-xs text-gray-600 mt-1">
-                                        .txt or .pdf — max 5 MB
+                                        .txt, .pdf or .md — max 5 MB
                                     </p>
                                 </div>
                             </div>
@@ -136,7 +136,7 @@ export default function StandardsPage() {
                             {[1, 2, 3].map((i) => (
                                 <div
                                     key={i}
-                                    className="flex items-center gap-4 rounded-lg border border-gray-800 bg-gray-900/60 px-4 py-3 animate-pulse"
+                                    className="flex items-center gap-4 rounded-lg border border-gray-800 bg-gray-900/60 px-4 py-2 animate-pulse"
                                 >
                                     {/* File icon */}
                                     <div className="w-4 h-4 rounded bg-gray-700 shrink-0" />
@@ -179,7 +179,7 @@ export default function StandardsPage() {
                                 {documents.map((doc) => (
                                     <li
                                         key={doc.id}
-                                        className="flex items-center gap-4 rounded-lg border border-gray-800 bg-gray-900/60 px-4 py-3"
+                                        className="flex items-center gap-4 rounded-lg border border-gray-800 bg-gray-900/60 px-4 py-2"
                                     >
                                         <FileText className="w-4 h-4 text-blue-400 shrink-0" />
                                         <div className="flex-1 min-w-0">
