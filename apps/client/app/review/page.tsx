@@ -1,9 +1,9 @@
-import { redirect } from 'next/navigation'
+import { ReviewPageClient } from '@/components/review/review-page-client'
 
 export const metadata = {
     title: 'Review Your Code',
 }
 
 export default function ReviewPage() {
-    redirect('/review/paste_code')
+    return <ReviewPageClient initialReviewType="paste_code" />
 }
