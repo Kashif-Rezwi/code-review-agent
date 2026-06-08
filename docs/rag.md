@@ -15,7 +15,7 @@ Upload path
   User uploads PDF/text file
         │
         ▼
-  RagController (POST /standards/upload)
+  RagController (POST /rag/upload)
         │
         ▼
   RagService.ingest()
@@ -54,9 +54,9 @@ Retrieval path (runs before every review)
 
 | Method | Route | Description |
 |---|---|---|
-| `POST` | `/standards/upload` | Upload a document (multipart/form-data) |
-| `GET` | `/standards` | List user's uploaded documents |
-| `DELETE` | `/standards/:id` | Delete a document (cascades to all chunks) |
+| `POST` | `/rag/upload` | Upload a document (multipart/form-data) |
+| `GET` | `/rag/documents` | List user's uploaded documents |
+| `DELETE` | `/rag/documents/:id` | Delete a document (cascades to all chunks) |
 
 All endpoints require authentication via `AuthGuard`.
 
@@ -107,8 +107,8 @@ The `embeddings.ts` module in `@cra/ai` exports `chunkText(text: string): string
 
 | Operation | Model | API call |
 |---|---|---|
-| Document embedding | `text-embedding-ada-002` | `embedMany()` |
-| Query embedding | `text-embedding-ada-002` | `embed()` |
+| Document embedding | `text-embedding-3-small` | `embedMany()` |
+| Query embedding | `text-embedding-3-small` | `embed()` |
 
 Both are accessed via `AiService.embeddingModel`.
 

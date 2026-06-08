@@ -11,7 +11,7 @@ The History system persists all completed reviews and exposes them for replay an
 ```
 HistoryController (src/history/history.controller.ts)
   GET  /history              → list all reviews for the user (summary view)
-  GET  /history/stats        → aggregate stats (total reviews, avg score, issue counts)
+  GET  /history/stats        → aggregate stats (total reviews, issue counts)
   GET  /history/:id          → full review detail
   POST /history/:id/chat     → send a message; returns SSE stream of { type:"delta"|"done"|"error" }
 
@@ -44,7 +44,7 @@ The chat endpoint is decorated with `@Sse()` and returns an `Observable<MessageE
 
 **`getReview(id, userId)`** → fetches the full review with all issues and conversations. Throws `NotFoundException` if the ID doesn't exist or belongs to a different user.
 
-**`getStats(userId)`** → aggregates review counts, average score, issue type breakdown.
+**`getStats(userId)`** → aggregates review counts and issue breakdowns.
 
 **`chatGenerator(id, userId, message)`** — the primary complexity:
 1. Calls `getReview` — validates ownership and loads the review with issues and conversation history.
@@ -82,10 +82,9 @@ Note: only issues are included in the context (not positives). The `score` shows
 **`getReview(id, userId)`** — `findFirst` with `where: { id, userId }`, includes `issues` (ordered by severity) and `conversations` (ordered by `createdAt asc`).
 
 **`getStats(userId)`** — raw aggregations:
-- Count by status
-- Average score across completed reviews
+- Count of completed reviews
 - Count of issues by type (`bug`, `security`, `performance`, etc.)
-- Count of reviews by type (`CODE` vs `PR`)
+- Count of issues by severity (`critical`, `warning`, `info`)
 
 **`saveChatQuery(reviewId, userMessage, assistantMessage)`** — creates two `Conversation` rows in a single `createMany` call (user turn + assistant turn), preserving ordering via `createdAt`.
 
@@ -168,7 +167,7 @@ useChatMessages.submit()
 | Component | File | Role |
 |---|---|---|
 | `HistoryReviewList` | `components/history/history-review-list.tsx` | Renders the paginated review list with score badges and status indicators |
-| `HistoryStatsPanel` | `components/history/history-stats-panel.tsx` | Renders aggregate stats (total reviews, avg score, issue breakdown) |
+| `HistoryStatsPanel` | `components/history/history-stats-panel.tsx` | Renders aggregate stats (total reviews and issue breakdown) |
 | `ChatThread` | `components/review/chat-thread.tsx` | Renders all messages with streaming cursor |
 | `ChatInput` | `components/review/chat-input.tsx` | Sticky bottom input with scroll-to-review and scroll-to-latest controls |
 | `useChatMessages` | `lib/use-chat-messages.ts` | Hook: manages messages, streaming state, send logic |
