@@ -26,11 +26,11 @@ Reviews are saved to your history and you can follow up with a chat interface to
 - **Streamed output** — review progress streams live via SSE; you see the AI thinking in real time
 - **Multi-agent clustered PR review** — large PRs are split into domain clusters (e.g. Auth, DB, API), each reviewed by an independent parallel agent, then synthesised into one report
 - **ESLint integration** — the AI can invoke a server-side linter as a tool during the review
-- **RAG-powered custom standards** — upload your team's coding standards (PDF or text); they are vectorised and injected into every review prompt automatically
+- **RAG-powered custom standards** — upload your team's coding standards (PDF, text, or Markdown); they are vectorised and injected into review prompts automatically
 - **Review history** — all reviews are persisted with full trace logs and scores; re-open any past review
 - **Follow-up chat** — ask questions about any completed review in a persistent, context-aware conversation
 - **GitHub OAuth** — sign in with GitHub; the token is used as the auth credential throughout
-- **Queue-backed pipeline** — reviews run as background jobs (BullMQ + Redis), making them robust to network drops and server restarts
+- **Queue-backed pipeline** — reviews run as background jobs (BullMQ + Redis), decoupling long AI runs from HTTP requests and replaying late SSE connections
 
 ---
 
@@ -54,7 +54,7 @@ Reviews are saved to your history and you can follow up with a chat interface to
 │  │  RAG Retrieval ──► AI Pipeline ──► emit events      │  │     │
 │  │       ▲                │                  │         │  │     │
 │  │  pgvector         streamText()        Redis pub/sub │  │     │
-│  │  (Neon DB)       (OpenAI gpt-4o)     replay list    │  │     │
+│  │  (Neon DB)    (OpenAI gpt-4o-mini)  replay list    │  │     │
 │  └──────────────────────────────────────┬──────────────┘  │     │
 │                                         │                 │     │
 │                                    Redis ◄────────────────┘     │
@@ -81,10 +81,10 @@ Reviews are saved to your history and you can follow up with a chat interface to
 
 | Layer | Technology |
 |---|---|
-| **Frontend** | Next.js 14 (App Router), NextAuth.js, Tailwind CSS, Monaco Editor |
+| **Frontend** | Next.js 16 (App Router), NextAuth.js, Tailwind CSS, Monaco Editor |
 | **Backend** | NestJS (Node.js), BullMQ, ioredis |
-| **AI** | OpenAI gpt-4o / gpt-4o-mini via Vercel AI SDK (`streamText`, `generateText`, `generateObject`) |
-| **Embeddings** | `text-embedding-ada-002` via Vercel AI SDK |
+| **AI** | OpenAI gpt-4o-mini via Vercel AI SDK (`streamText`, `generateText`, `generateObject`) |
+| **Embeddings** | `text-embedding-3-small` via Vercel AI SDK |
 | **Database** | PostgreSQL (Neon) with `pgvector` extension, Prisma ORM |
 | **Queue / Pub-Sub** | Redis (BullMQ jobs + pub/sub event channel + SSE replay list) |
 | **Auth** | GitHub OAuth (NextAuth on client, token validation via GitHub `/user` API on server) |
@@ -99,7 +99,7 @@ Reviews are saved to your history and you can follow up with a chat interface to
 ```
 code-review-agent/
 ├── apps/
-│   ├── client/               # Next.js 14 frontend
+│   ├── client/               # Next.js 16 frontend
 │   │   ├── app/              # App Router pages (review, history, standards, login)
 │   │   ├── components/       # UI components (review/, history/, layout/, ui/)
 │   │   └── lib/              # Hooks, SSE consumer, stream reducer, API client
@@ -140,7 +140,7 @@ code-review-agent/
 ### 1. Clone and install dependencies
 
 ```bash
-git clone https://github.com/your-org/code-review-agent.git
+git clone https://github.com/Kashif-Rezwi/code-review-agent.git
 cd code-review-agent
 pnpm install
 ```
@@ -247,4 +247,3 @@ Detailed design documents for each subsystem live in the [`docs/`](./docs/) dire
 | [docs/frontend.md](./docs/frontend.md) | Next.js architecture, hooks, reducers, components |
 | [docs/packages.md](./docs/packages.md) | `@cra/ai` and `@cra/types` shared packages |
 | [docs/deployment.md](./docs/deployment.md) | Render, Vercel, Docker Compose, env var reference |
-

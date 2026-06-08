@@ -14,7 +14,7 @@ Code Review Agent is a monorepo containing two applications (`client` and `serve
 │                                                                             │
 │  ┌──────────────────────────┐    ┌───────────────────────────────────────┐  │
 │  │   apps/client            │    │   apps/server                         │  │
-│  │   (Next.js 14)           │    │   (NestJS)                            │  │
+│  │   (Next.js 16)           │    │   (NestJS)                            │  │
 │  │                          │    │                                       │  │
 │  │  ┌─────────────────────┐ │    │  ┌───────────┐  ┌──────────────────┐  │  │
 │  │  │  Pages (App Router) │ │    │  │  auth/    │  │  review/         │  │  │
@@ -177,7 +177,7 @@ Vercel (CDN + serverless)         Render.com
 
 | Decision | Rationale |
 |---|---|
-| Queue-backed reviews | Decouples HTTP from long AI pipelines; tolerates dropped connections; enables retry logic at the job level |
+| Queue-backed reviews | Decouples HTTP from long AI pipelines and keeps pending work addressable by review ID; expensive LLM jobs are not auto-retried |
 | Redis as both queue broker and SSE relay | Single infrastructure dependency; pub/sub with replay list makes late-joining SSE safe |
 | Shared `@cra/types` package | Ensures client and server always agree on the SSE event contract at compile time |
 | `@cra/ai` as a standalone package | Prompts and tools can be tested/updated independently of the NestJS runtime |

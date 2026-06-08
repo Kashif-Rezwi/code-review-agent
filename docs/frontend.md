@@ -2,7 +2,7 @@
 
 ## Overview
 
-The client is a Next.js 14 application using the App Router. It is authentication-gated via NextAuth.js with the GitHub provider, and its core feature — the live review stream — is managed by a custom hook backed by a pure Redux-style reducer. The UI is built with Tailwind CSS, shadcn/ui primitives, and Monaco Editor for code input.
+The client is a Next.js 16 application using the App Router. It is authentication-gated via NextAuth.js with the GitHub provider, and its core feature — the live review stream — is managed by a custom hook backed by a pure Redux-style reducer. The UI is built with Tailwind CSS, shadcn/ui primitives, and Monaco Editor for code input.
 
 ---
 
@@ -163,9 +163,9 @@ The parent component (`ReviewPageClient`) uses multiple `useEffect` hooks to tri
 
 - `reviewService.createSession(payload, token)` — `POST /review/session`
 - `reviewService.getSession(reviewId, token)` — `GET /review/:id`
-- `standardsService.list(token)` — `GET /standards`
-- `standardsService.upload(file, token)` — `POST /standards/upload` (multipart)
-- `standardsService.delete(id, token)` — `DELETE /standards/:id`
+- `ragService.getDocuments(token)` — `GET /rag/documents`
+- `ragService.uploadDocument(file, token)` — `POST /rag/upload` (multipart)
+- `ragService.deleteDocument(id, token)` — `DELETE /rag/documents/:id`
 
 All calls include `Authorization: Bearer <github_token>` when a token is available.
 

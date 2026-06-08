@@ -1,6 +1,6 @@
 # Code Review Agent — Client
 
-This is the Next.js 14 frontend for Code Review Agent.
+This is the Next.js 16 frontend for Code Review Agent.
 
 > For full documentation, see the [project README](../../README.md) and the [`docs/`](../../docs/) directory.
 
