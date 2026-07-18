@@ -63,13 +63,14 @@ The central model — one row per review session, regardless of type (code paste
 | `id` | `String` (CUID, PK) | Also used as the BullMQ job ID |
 | `userId` | `String` | GitHub user ID |
 | `type` | `ReviewType` | `CODE` or `PR` |
-| `status` | `ReviewStatus` | `PENDING` → `COMPLETE` or `FAILED` |
+| `status` | `ReviewStatus` | Atomic `PENDING` → terminal transition |
 | `input` | `String` (Text) | Raw code or PR URL exactly as submitted |
 | `summary` | `String?` (Text) | Null until AI pipeline completes |
 | `score` | `Int?` | Null until AI pipeline completes (1–10) |
 | `positives` | `String[]` | Array of genuine strengths (default `[]`) |
 | `appliedStandards` | `String[]` | Names of RAG standard docs injected (default `[]`) |
 | `traceLog` | `Json?` | Full ordered array of `ReviewStreamEvent` for replay |
+| `coverage` | `Json?` | Optional PR acquisition/worker coverage; null for code and legacy reviews |
 | `issues` | `Issue[]` | Cascade-deletes |
 | `conversations` | `Conversation[]` | Cascade-deletes |
 | `createdAt` | `DateTime` | |
@@ -77,8 +78,10 @@ The central model — one row per review session, regardless of type (code paste
 **Status transitions:**
 
 ```
-PENDING  ──► COMPLETE   (happy path — AI pipeline completes successfully)
-         └─► FAILED     (any unhandled error during the pipeline)
+PENDING  ──► COMPLETE   (all planned worker clusters succeeded)
+         ├─► PARTIAL    (some clusters succeeded and some failed)
+         ├─► FAILED     (no usable result)
+         └─► CANCELLED  (user cancellation won the terminal transition)
 ```
 
 The `traceLog` column stores the complete `ReviewStreamEvent[]` array recorded during streaming. It enables the history view to replay a finished review exactly as it was streamed, even after the Redis TTL has expired.
@@ -121,7 +124,7 @@ Persists the multi-turn follow-up chat for each review.
 ## Enums
 
 ```
-ReviewStatus: PENDING | COMPLETE | FAILED
+ReviewStatus: PENDING | COMPLETE | PARTIAL | FAILED | CANCELLED
 ReviewType:   CODE | PR
 ```
 
@@ -133,6 +136,7 @@ ReviewType:   CODE | PR
 |---|---|
 | GitHub user ID as primary key | Stable across username changes; avoids an extra join layer |
 | `traceLog` as a JSON column | Allows full review replay from Postgres alone, without Redis history. Simple column append — no separate event-sourcing table needed |
+| `coverage` as nullable JSON | Adds PR file/cluster coverage without invalidating code reviews or historical rows |
 | `pgvector` extension natively in Postgres | Keeps the stack to one database; no separate vector store service required |
 | Cascade deletes everywhere | Deleting a `Document` removes all its chunks; deleting a `Review` removes all issues and conversations. No orphan rows possible |
 | `summary` and `score` nullable | Both are null until the AI pipeline completes, so the DB row can be created before the job runs (PENDING state) |

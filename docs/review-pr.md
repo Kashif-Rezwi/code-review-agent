@@ -1,195 +1,125 @@
-# PR Review Pipeline (Multi-Agent Clustered)
+# PR Review Pipeline (Coverage-Safe Multi-Agent)
 
 ## Overview
 
-The PR review pipeline is the most architecturally complex part of the system. Unlike the single-agent code review, large PRs are split into domain clusters, each reviewed independently by a parallel worker agent, and the results are synthesised by a dedicated synthesis agent. The entire orchestration emits SSE events to the frontend in real time so the user can watch each cluster's progress simultaneously.
+Every pull request now enters one acquisition-independent pipeline:
 
-For single-file code paste review, see [review-code.md](./review-code.md).
-
----
-
-## High-Level Design
-
-```
-POST /review/session { type: "PR", input: prUrl }
-        │
-        ▼
-ReviewController → createSession(PENDING) → enqueue(BullMQ) → return { reviewId }
-
-BullMQ Worker
-        │
-        ▼
-ReviewService.streamAnalyzeFromPR(prUrl, userId, conn, reviewId)
-        │
-        ├── Phase 1:  Fetch PR files + RAG standards (parallel)
-        │               GithubService.fetchPRFiles()
-        │               RagService.retrieveForContext()
-        │
-        ├── Phase 1b: Emit task_plan + task_updates for each file
-        │
-        ├── Phase 2:  planClusters(files) → 1–4 domain clusters
-        │               Emit cluster_plan event
-        │
-        ├── Phase 3:  Run all worker agents in parallel (Promise.allSettled)
-        │               Each → runWorkerAgent(cluster, standards, send)
-        │               Each emits: thinking + tool_start + tool_done + cluster_done
-        │
-        ├── Phase 4a: If 1 cluster → skip synthesis, emit complete
-        │
-        └── Phase 4b: If >1 cluster → synthesizeReview() → emit complete
-                        (2 LLM attempts + programmatic merge fallback)
+```text
+GitHub files API ─┐
+                  ├─ PRSnapshot → exact-once plan → workers → synthesis → persisted review
+Public .diff ─────┘
 ```
 
----
+The public diff is an acquisition fallback, not a review fallback. A GitHub API failure can no longer send a bare URL or one large text prefix to a generic agent. Both acquisition sources produce normalized per-file records before worker count is selected.
 
-## Phase 1 — Data Collection
+## 1. Acquisition
 
-Two parallel `Promise.all` branches:
+`GithubService.fetchPRSnapshot()` returns:
 
-**`GithubService.fetchPRFiles(prUrl)`**
-Fetches the list of changed files with full per-file diffs. Paginated across multiple GitHub API pages. Each file returned as a `PRFile` with `filename`, `additions`, `deletions`, `status`, and `patch`.
+```ts
+interface PRSnapshot {
+  files: NormalizedPRFile[]
+  source: 'github_files_api' | 'public_diff'
+  complete: boolean
+  warnings: string[]
+}
+```
 
-If `fetchPRFiles` returns zero files (network failure, empty PR, etc.), the pipeline **falls back to the single-agent path** using `fetchPRDiff` (the full unified diff) as input to `streamAnalysis`.
+The files API is primary and paginated. Each file is tagged as `full`, `truncated`, `metadata_only`, or `binary`; renames retain `previousFilename`. Missing API patches are filled from a parsed unified diff when possible.
 
-**`RagService.retrieveForContext(...)`**
-Retrieves the user's coding standards from pgvector. Returns `null` if none are uploaded or if retrieval fails — RAG is always optional.
+If authenticated and anonymous file-list attempts fail, the server reads the raw public `.diff` and parses it with the application adapter in `github/unified-diff.parser.ts`. The adapter handles modified, added, deleted, renamed, binary, multi-hunk, no-newline, and space-containing paths.
 
-**Phase 1b — file task events:**
-Before clustering, the UI is told which files exist:
-- `task_plan` event with all filenames → UI shows "Reading files…" stage
-- `task_update` events for each file (status=done, with diff stats) → files light up as read
+Safety policy:
 
----
+- GitHub request timeout: 10 seconds.
+- Network failures, `5xx`, `429`, and rate-limit responses: one retry with capped jitter.
+- `401` and `404`: no same-request retry; move to the appropriate fallback.
+- Raw diff: streamed with a 2 MiB byte limit. If there is no structured file list and the limit is exceeded, the review fails explicitly.
+- Token validation: a status-only request runs at startup. `/health` reports `valid`, `invalid`, `missing`, or `unchecked`, never the token.
 
-## Phase 2 — Cluster Planning
+## 2. Planning and Exact Coverage
 
-`planClusters(files, openai)` from `@cra/ai`:
+Small PRs of up to three files use one worker. Larger PRs request 2–4 relevance-based clusters from the centrally configured AI model.
 
-- **Small PRs (≤3 files):** Returns a single `"general"` cluster — no LLM call needed.
-- **Larger PRs:** Calls `gpt-4o-mini` via `generateObject` with a structured Zod schema to group files into 2–4 domain clusters. Rules enforced in the prompt: related files grouped together, max 4 clusters, every file in exactly one cluster.
-- **Fallback:** Any failure in `generateObject` returns the single `"general"` cluster covering all files.
+Planner output is untrusted and reconciled server-side:
 
-The `cluster_plan` event is emitted immediately after planning. The frontend renders cluster panels instantly — it doesn't wait for the workers to finish.
+- unknown names are discarded;
+- the first duplicate assignment wins;
+- invalid or duplicate IDs are repaired;
+- empty clusters are removed;
+- omitted files go to the cluster with the longest shared directory prefix, with lowest context weight as the tie-breaker;
+- every original filename must occur exactly once before `cluster_plan` is emitted.
 
-Each `ClusterPlan` carries: `id`, `label`, `focus` (1–2 sentence review instruction), and the full `PRFile[]` array.
+An invalid plan or an invalid single cluster for a larger PR uses a deterministic fallback:
 
----
+```text
+cluster count = min(4, max(2, ceil(fileCount / 6)))
+```
 
-## Phase 3 — Parallel Worker Agents
+The fallback seeds every cluster, groups matching source/test files, uses path affinity, and balances patch size plus changed-line weight.
 
-`Promise.allSettled` runs all worker agents concurrently. A failure in one cluster never blocks the others.
+## 3. Workers and Context
 
-### `runWorkerAgent(cluster, standards, send)`
+Workers run through a promise pool capped at three concurrent agents. Each cluster receives at most 40,000 patch characters, with an 8,000-character per-file cap. Context selection keeps complete hunks where possible and appends an explicit omission marker; it never silently cuts a diff line.
 
-Each worker is a self-contained `streamText` loop:
+A worker that throws or returns invalid structured output is retried once at temperature zero with a reinforced JSON-only instruction. Success emits `cluster_done` with the attempt count. A second failure emits `cluster_failed` and remains part of the coverage manifest.
 
-1. **Context construction:** All file diffs for that cluster are formatted as a fenced block. Patches > 3,000 characters are truncated with a `[diff truncated]` notice to keep token budgets reasonable.
-2. **User message:** `"Review the following files…\nYour focus: {cluster.focus}\n\n{fileSection}"`
-3. **System prompt:** `buildWorkerPrompt(cluster.label, cluster.focus, standards?.content)` from `@cra/ai` — a specialised prompt that focuses the agent on the cluster's domain.
-4. **Tools:** Only `runLinter` — GitHub file-fetch tools are not needed (diffs are pre-loaded in context).
-5. **Agent loop:** Same `stopWhen` / `prepareStep` pattern as the code review pipeline (`AGENT_MAX_STEPS.WORKER = 5`).
-6. **Event tagging:** Every event emitted by a worker is tagged with `clusterId` so the frontend can route it to the correct cluster panel.
-7. **Completion:** On success, emits `cluster_done { clusterId, issueCount, durationMs }` and returns the parsed `ReviewData`.
+## 4. Synthesis and Outcomes
 
----
+- Original one-cluster plan + success: return that worker review directly.
+- Original multi-cluster plan + one or more successes: always run synthesis, even if only one worker survived.
+- Some failed clusters: synthesize successful reviews and save `PARTIAL` with exact unreviewed files.
+- All workers failed or no usable files: save `FAILED` and emit one terminal error.
 
-## Phase 4a — Single-Cluster Shortcut
+Synthesis keeps two model attempts plus the deterministic merge fallback. Coverage is injected after synthesis by the server, so model output cannot overstate which files were reviewed.
 
-If `planClusters` returned exactly one cluster (small PR or fallback), the worker's result is the final review. No synthesis step needed. The single worker's `ReviewData` is merged with `appliedStandards`, and a `complete` event is emitted directly.
+`ReviewData.coverage` records numeric total/assigned/reviewed file counts, truncated and metadata-only files, unreviewed files, failed cluster IDs, and the acquisition source. Truncation is disclosed but remains `COMPLETE` when every cluster succeeds.
 
----
+## 5. SSE and UI
 
-## Phase 4b — Synthesis Agent
+PR traces can include:
 
-`synthesizeReview(prUrl, partialReviews, standards)` merges N cluster reviews into one coherent final review.
-
-**Attempt 1 (temperature 0.2):**
-`generateText` with `buildSynthesisSystemPrompt()` and `buildSynthesisUserMessage(prUrl, partialReviews)`. The user message contains all worker reviews as structured JSON. Output is parsed via `parseReviewText`.
-
-**Attempt 2 (temperature 0, reinforced instruction):**
-If attempt 1 fails to parse (prose wrapping around JSON), a second call with a `FINAL INSTRUCTION: Your entire response must be ONE JSON object` suffix and `temperature: 0` is made.
-
-**Programmatic fallback (guaranteed):**
-If both LLM calls fail to produce valid JSON, `mergeReviewsFallback` runs deterministically:
-- Deduplicates issues by `type:title:location` composite key
-- Deduplicates positives via `Set`
-- Averages scores across clusters
-- Concatenates summaries as `"{clusterLabel}: {summary}"` joined with ` · ` (capped at 400 chars)
-
-The fallback always produces a valid `ReviewData` — the user never sees a failure from synthesis.
-
----
-
-## System Prompt Architecture
-
-Three different prompts are used:
-
-| Prompt | Function | File |
-|---|---|---|
-| `buildSystemPrompt("PR_STREAM")` | Fallback single-agent path (no tools; diffs pre-loaded) | `review.prompt.ts` |
-| `buildWorkerPrompt(label, focus, standards)` | Per-cluster worker agent | `worker.prompt.ts` |
-| `buildSynthesisSystemPrompt()` | Synthesis agent | `synthesis.prompt.ts` |
-
-Worker prompts include the cluster label and focus instruction so the agent's review stays within its assigned domain.
-
----
-
-## Streaming Events Emitted
-
-| Event | Emitted by | `clusterId`? |
-|---|---|---|
-| `start` | Orchestrator | No |
-| `task_plan` | Orchestrator (Phase 1b) | No |
-| `task_update` | Orchestrator (Phase 1b) | No |
-| `cluster_plan` | Orchestrator (Phase 2) | No |
-| `thinking` | Worker agent | Yes |
-| `tool_start` | Worker agent | Yes |
-| `tool_done` | Worker agent | Yes |
-| `cluster_done` | Worker agent | Yes |
-| `complete` | Orchestrator (Phase 4a/4b) | No |
-| `error` | Orchestrator | No |
-
-The `clusterId` field on worker events lets the frontend route each event to the correct cluster panel without a separate channel per cluster.
-
----
-
-## Responsibilities
-
-| Component | Owns |
+| Event | Meaning |
 |---|---|
-| `streamAnalyzeFromPR` | Overall orchestration, phase transitions, error recovery |
-| `planClusters` | File grouping strategy, LLM cluster planning |
-| `runWorkerAgent` | Per-cluster agentic loop, diff context construction |
-| `synthesizeReview` | Multi-attempt LLM synthesis + programmatic fallback |
-| `GithubService` | PR file fetching |
-| `RagService` | Standards retrieval |
+| `acquisition` | File count, acquisition source, completeness and sanitized warnings |
+| `task_plan` / `task_update` | Full-path data collection progress |
+| `cluster_plan` | Exact-once worker assignments |
+| `cluster_done` | Successful worker, duration and attempt count |
+| `cluster_failed` | Failed worker after retry |
+| `synthesis_start` | Synthesis began with the successful result count |
+| `complete` | Review plus `outcome: complete | partial` |
 
----
+The client buffers cluster-scoped events received before `cluster_plan` and replays them once the cluster exists. Planner and worker cards render as soon as `clusterMap` exists. Premature SSE closure is surfaced as an error.
 
-## Edge Cases & Error Handling
+PARTIAL reviews are amber, list unreviewed files, remain visible in history and issue statistics, and have a separate aggregate count. Replay mode comes from the persisted review type, so old traces remain valid.
 
-| Scenario | Behaviour |
+## Persistence and Deployment
+
+The only legal session transitions are:
+
+```text
+PENDING → COMPLETE | PARTIAL | FAILED | CANCELLED
+```
+
+Updates include `status: PENDING` in the write condition so competing cancellation/completion attempts cannot overwrite a terminal row. Migration `20260718090000_add_partial_review_coverage` adds the enum value and nullable JSONB column.
+
+Deploy in this order:
+
+1. Test the migration on a Neon branch.
+2. Run `pnpm --filter server exec prisma migrate deploy` against production.
+3. Deploy the server.
+4. Deploy the client.
+5. Verify `/health`, files-API acquisition, public-diff acquisition, PARTIAL display, and a 20-file PR.
+
+## Main Files
+
+| File | Responsibility |
 |---|---|
-| `fetchPRFiles` returns empty | Falls back to single-agent path with `fetchPRDiff` |
-| `planClusters` LLM call fails | Returns single general cluster; pipeline continues |
-| One worker agent fails | `Promise.allSettled` captures the failure; other clusters continue; failed cluster excluded from synthesis |
-| All worker agents fail | `{ type: "error" }` emitted; review marked `FAILED` |
-| Synthesis LLM fails twice | Programmatic `mergeReviewsFallback` always succeeds |
-| PR has only 1–3 files | Single cluster; synthesis skipped |
-| PR diff > 24,000 characters | Diff truncated by `GithubService.fetchPRDiff` with notice |
-| Worker diff > 3,000 characters | Per-file diff truncated with `[diff truncated]` in `runWorkerAgent` |
-
----
-
-## Related Files
-
-| File | Role |
-|---|---|
-| [`apps/server/src/review/review.service.ts`](../apps/server/src/review/review.service.ts) | `streamAnalyzeFromPR`, `runWorkerAgent`, `synthesizeReview`, `mergeReviewsFallback` |
-| [`packages/ai/src/clustering.ts`](../packages/ai/src/clustering.ts) | `planClusters` — LLM file grouping |
-| [`packages/ai/src/prompts/worker.prompt.ts`](../packages/ai/src/prompts/worker.prompt.ts) | Worker agent system prompt |
-| [`packages/ai/src/prompts/synthesis.prompt.ts`](../packages/ai/src/prompts/synthesis.prompt.ts) | Synthesis agent system prompt + user message builder |
-| [`packages/ai/src/prompts/review.prompt.ts`](../packages/ai/src/prompts/review.prompt.ts) | `buildSystemPrompt("PR_STREAM")` — fallback single-agent path |
-| [`packages/ai/src/tools/github.tool.ts`](../packages/ai/src/tools/github.tool.ts) | `PRFile` type, `PRFileSchema` |
-| [`apps/server/src/review/review-parser.util.ts`](../apps/server/src/review/review-parser.util.ts) | JSON extraction and Zod validation |
-| [`apps/server/src/review/review.repository.ts`](../apps/server/src/review/review.repository.ts) | Postgres persistence |
+| `apps/server/src/github/github.service.ts` | Acquisition policy, diagnostics, retries, limits, token health |
+| `apps/server/src/github/unified-diff.parser.ts` | Unified-diff normalization adapter |
+| `packages/ai/src/clustering.ts` | Planner reconciliation and deterministic fallback |
+| `apps/server/src/review/review.service.ts` | Worker pool, retry, synthesis, coverage and terminal outcomes |
+| `apps/server/src/review/review.repository.ts` | Atomic persistence |
+| `packages/types/src/index.ts` | Review, coverage and SSE contracts |
+| `apps/client/lib/review-stream.reducer.ts` | Live/replayed event state and out-of-order buffering |
+| `apps/client/components/review/review-progress.tsx` | Acquisition/planner/worker/synthesis trace UI |
