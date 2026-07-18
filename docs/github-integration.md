@@ -37,15 +37,16 @@ It throws a `BadRequestException` immediately for any URL that does not match th
 
 ### Authenticated (recommended)
 
-Set `GITHUB_TOKEN` in the server environment. This token is added as `Authorization: Bearer <token>` to every API request.
+Set `GITHUB_TOKEN` in the server environment. The trimmed token is preferred for GitHub API requests.
 
 - Supports **private repositories**
 - Rate limit: **5,000 requests/hour**
 - Diffs are fetched via the REST API with `Accept: application/vnd.github.diff`
+- If GitHub rejects the token, public PR requests are retried without credentials; private PRs still fail with the authenticated error
 
 ### Unauthenticated (public repos only)
 
-Without `GITHUB_TOKEN`, the service falls back to GitHub's direct `.diff` URL:
+Public file lists use the unauthenticated REST API. Unified-diff fallback uses GitHub's direct `.diff` URL:
 
 ```
 https://github.com/{owner}/{repo}/pull/{number}.diff
@@ -55,7 +56,7 @@ https://github.com/{owner}/{repo}/pull/{number}.diff
 - Not subject to the strict 60 req/hour unauthenticated API limit (direct URL path)
 - More reliable in shared-IP environments (Vercel, Render, Railway)
 
-The `buildHeaders()` private method handles the conditional auth header injection; all public methods call it transparently.
+The `buildHeaders()` private method handles conditional auth. A broken shared token therefore cannot make an otherwise-public PR unreadable.
 
 ---
 
@@ -74,11 +75,11 @@ This is the primary data source for the clustered multi-agent PR review. Returne
 
 ### `fetchPRDiff(prUrl): string`
 
-Fetches the complete unified diff for the PR as a single string.
+Fetches the available unified diff for the PR as a single string.
 
 - Max size: **24,000 characters** — truncated with a notice if exceeded
 - Guards against HTML login pages (returned by GitHub for private repos without auth) by checking if the response starts with `<`
-- Used as a fallback in the single-agent PR path when `fetchPRFiles` returns zero files
+- Used as a fallback in the single-agent PR path when `fetchPRFiles` fails or returns zero files
 
 ### `fetchFileContent(prUrl, filePath): string`
 
@@ -112,9 +113,10 @@ All public methods call `assertOk(res, prUrl)` which maps GitHub HTTP status cod
 
 | GitHub Status | Exception message |
 |---|---|
-| `404` | PR not found; check repo visibility and PR number |
-| `401` / `403` | Access denied; private repos require `GITHUB_TOKEN` |
-| `429` | Rate limit exceeded; set `GITHUB_TOKEN` |
+| `401` | Configured token is invalid, expired, or revoked |
+| `403` | Token lacks repository permission, or rate-limited when `x-ratelimit-remaining` is zero |
+| `404` | PR is missing or inaccessible to the configured token |
+| `429` | Rate limit exceeded, including retry/reset metadata when GitHub supplies it |
 | Other non-2xx | Generic `GitHub returned {status}` message |
 
 These exceptions propagate through `ReviewService` and are caught by the pipeline's top-level try/catch, which emits an `{ type: "error" }` SSE event and marks the review as `FAILED` in the database.
@@ -125,7 +127,10 @@ These exceptions propagate through `ReviewService` and are caught by the pipelin
 
 | Scenario | Behaviour |
 |---|---|
-| PR with no changed files | `fetchPRFiles` returns `[]`; pipeline falls back to single-agent path with `fetchPRDiff` |
+| Invalid token + public PR | Authenticated request is logged safely and retried without credentials |
+| File-list fetch fails or contains no usable patches | Pipeline fetches a real unified diff; it never sends a bare PR URL to a tool-less model |
+| Both source paths fail | Model is not invoked; review transitions from `PENDING` to `FAILED` with an actionable error |
+| PR with no changed files | `fetchPRFiles` returns `[]`; direct diff confirms whether reviewable changes exist |
 | Diff > 24,000 characters | Truncated with `[diff truncated — PR is too large to review in full]` appended |
 | File > 8,000 characters | Truncated with character count notice |
 | Private repo without token | HTML login page detected → `BadRequestException` with clear message |

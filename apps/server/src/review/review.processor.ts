@@ -28,13 +28,29 @@ export class ReviewProcessor extends WorkerHost {
     async onFailed(job: Job<ReviewJobPayload> | undefined, error: Error) {
         if (!job) return
         const { reviewId } = job.data
+        const publicMessage = 'Background review worker failed. Please try again.'
+        console.error(`Background review job ${reviewId} failed`, error)
 
-        // Force Postgres state sync
-        await this.reviewRepository.markFailed(reviewId, `Review failed unexpectedly: ${error.message}`).catch(() => null)
+        // Force Postgres state sync. If another terminal transition already won
+        // (for example, cancellation), do not append a contradictory Redis event.
+        let transitioned = false
+        try {
+            transitioned = await this.reviewRepository.markFailed(
+                reviewId,
+                publicMessage,
+            )
+        } catch (persistenceError) {
+            console.error('Failed to persist terminal failure state', persistenceError)
+            // The DB is unavailable, but the live client still needs a terminal
+            // signal instead of spinning forever.
+            transitioned = true
+        }
+
+        if (!transitioned) return
 
         // Force terminate any live SSE clients spinning in the browser
         try {
-            const msg = JSON.stringify({ type: 'error', message: `Background job failed: ${error.message}` })
+            const msg = JSON.stringify({ type: 'error', message: publicMessage })
             await this.redisService.emitEvent(reviewId, msg)
         } catch (e) {
             console.error('Failed to emit terminal failure event', e)
