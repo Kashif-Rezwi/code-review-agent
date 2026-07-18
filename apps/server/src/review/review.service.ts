@@ -1,15 +1,9 @@
-import {
-    Injectable,
-    HttpException,
-    InternalServerErrorException,
-    Logger,
-} from '@nestjs/common'
+import { HttpException, Injectable, InternalServerErrorException, Logger } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { generateText, streamText } from 'ai'
 import { AiService } from '../ai/ai.service'
 import {
     buildSystemPrompt,
-    ReviewDataSchema,
     createFetchGithubPRTool,
     createListPRFilesTool,
     createFetchFileContentTool,
@@ -29,11 +23,7 @@ import { QueueService } from '../queue/queue.service'
 import { RedisService } from '../queue/redis.service'
 import type { SseConnection } from './review.sse'
 import { parseReviewText } from './review-parser.util'
-import {
-    parseArgs, pickArgs,
-    toolStartLabel, toolStartDetail,
-    toolDoneLabel, toolDoneDetail,
-} from './review.formatter'
+import { parseArgs, pickArgs, toolStartLabel, toolStartDetail, toolDoneLabel, toolDoneDetail } from './review.formatter'
 import { ThinkingStream } from './review.thinking'
 
 /** Maximum agent loop steps per review type. */
@@ -55,8 +45,7 @@ export class ReviewService {
         private aiService: AiService,
         private queueService: QueueService,
         private redisService: RedisService,
-    ) {
-    }
+    ) {}
 
     async createSession(type: 'CODE' | 'PR', input: string, userId: string) {
         const session = await this.reviewRepository.createSession(type, input, userId)
@@ -70,8 +59,8 @@ export class ReviewService {
         return session
     }
 
-    async markFailed(reviewId: string, message: string) {
-        await this.reviewRepository.markFailed(reviewId, message)
+    async markFailed(reviewId: string, message: string, traceLog?: ReviewStreamEvent[]) {
+        return this.reviewRepository.markFailed(reviewId, message, traceLog)
     }
 
     /**
@@ -87,14 +76,17 @@ export class ReviewService {
         // If the review already reached COMPLETE/FAILED, emitting an error event
         // here would corrupt the Redis replay list seen by future SSE connections.
         if (wasCancelled) {
-            await this.redisService.emitEvent(
-                reviewId,
-                JSON.stringify({ type: 'error', message: 'Review cancelled' }),
-            )
+            await this.redisService.emitEvent(reviewId, JSON.stringify({ type: 'error', message: 'Review cancelled' }))
         }
     }
 
-    async runForQueue(reviewId: string, type: 'CODE' | 'PR', input: string, userId: string, conn: SseConnection): Promise<void> {
+    async runForQueue(
+        reviewId: string,
+        type: 'CODE' | 'PR',
+        input: string,
+        userId: string,
+        conn: SseConnection,
+    ): Promise<void> {
         try {
             if (type === 'PR') {
                 this.githubService.assertValidPRUrl(input)
@@ -103,9 +95,12 @@ export class ReviewService {
                 await this.streamAnalyzeCode(input, userId, conn, reviewId)
             }
         } catch (err) {
-            const message = err instanceof Error ? err.message : 'Review failed'
-            conn.send({ type: 'error' as const, message })
-            await this.markFailed(reviewId, message)
+            const message = this.publicErrorMessage(err)
+            const event = { type: 'error' as const, message }
+            const transitioned = await this.markFailed(reviewId, message, [...conn.getTrace(), event])
+            // A cancelled or already-terminal review must not receive a second,
+            // contradictory terminal event.
+            if (transitioned) conn.send(event)
         }
     }
 
@@ -121,7 +116,7 @@ export class ReviewService {
             'CODE',
             userId,
             conn,
-            reviewId
+            reviewId,
         )
     }
 
@@ -130,123 +125,139 @@ export class ReviewService {
 
         const { send, startedAt } = conn
 
-        try {
-            send({ type: 'start' as const })
+        send({ type: 'start' as const })
 
-            // ── Phase 1: Fetch files and RAG standards in parallel ────────────
-            const [standards, files] = await Promise.all([
-                this.ragService.retrieveForContext('code review standards best practices', userId),
-                this.githubService.fetchPRFiles(prUrl).catch(() => null),
-            ])
+        // ── Phase 1: Fetch files and RAG standards in parallel ────────────
+        const filesPromise: Promise<{
+            files: PRFile[] | null
+            error: unknown | null
+        }> = this.githubService
+            .fetchPRFiles(prUrl)
+            .then((files) => ({ files, error: null }))
+            .catch((error) => ({ files: null, error }))
 
-            // Fallback: if file fetch fails entirely, use old single-agent path
-            if (!files || files.length === 0) {
-                return this.streamAnalysis(
-                    `Please review this GitHub pull request: ${prUrl}`,
-                    standards, prUrl, 'PR', userId, conn, reviewId
-                )
-            }
+        const [standards, fileResult] = await Promise.all([
+            this.ragService.retrieveForContext('code review standards best practices', userId),
+            filesPromise,
+        ])
+        const { files, error: fileListError } = fileResult
 
-            // ── Phase 1b: Emit file list for the Data Collection stage ────────
-            // Fires before planning so the UI shows "Reading files…" first,
-            // then transitions to the Planning stage when cluster_plan arrives.
-            send({
-                type: 'task_plan' as const,
-                tasks: files.map(f => ({
-                    id: f.filename,
-                    label: f.filename.split('/').pop() ?? f.filename,
-                })),
-            })
-            for (const f of files) {
-                const diffLines = f.patch ? f.patch.split('\n').length : 0
-                const detail = diffLines > 0
-                    ? `+${f.additions} -${f.deletions} · ${diffLines} diff lines`
-                    : f.status
-                send({ type: 'task_update' as const, taskId: f.filename, status: 'done', detail })
-            }
-
-            // ── Phase 2: Plan clusters ────────────────────────────────────────
-            // Use lightweight LLM call to plan clusters intelligently.
-            // Falls back to single "general" cluster automatically on error.
-            const clusters = await planClusters(files, this.aiService.provider)
-
-            // Tell the UI exactly what clusters exist — it renders panels immediately
-            send({
-                type: 'cluster_plan' as const,
-                clusters: clusters.map(c => ({
-                    id: c.id,
-                    label: c.label,
-                    focus: c.focus,
-                    files: c.files.map(f => ({
-                        name: f.filename,
-                        additions: f.additions,
-                        deletions: f.deletions,
-                        status: f.status,
-                    })),
-                })),
-            })
-
-            // ── Phase 3: Run all worker agents in parallel ────────────────────
-            // Promise.allSettled means one failing cluster never blocks the others.
-            const workerResults = await Promise.allSettled(
-                clusters.map(cluster => this.runWorkerAgent(cluster, standards, send))
+        // If the structured file-list endpoint is unavailable, fetch an actual
+        // unified diff. Never ask a model to browse a bare URL: PR_STREAM has no
+        // GitHub tools and is only valid when source context is preloaded.
+        const hasReviewablePatch = files?.some((file) => file.patch?.trim()) ?? false
+        if (!files || files.length === 0 || !hasReviewablePatch) {
+            const reason = fileListError
+                ? this.errMsg(fileListError)
+                : files?.length
+                  ? 'GitHub returned changed files without reviewable patches'
+                  : 'GitHub returned an empty changed-file list'
+            this.logger.warn(
+                `PR file list unavailable for review ${reviewId ?? 'unsaved'}; ` +
+                    `using unified diff fallback: ${reason}`,
             )
 
-            // Collect successful results — failed clusters are noted but not fatal
-            const partialReviews = workerResults
-                .map((result, i) => ({ result, cluster: clusters[i] }))
-                .filter(({ result }) => result.status === 'fulfilled')
-                .map(({ result, cluster }) => ({
-                    clusterId: cluster.id,
-                    label: cluster.label,
-                    review: (result as PromiseFulfilledResult<ReviewData>).value,
-                }))
+            const diff = await this.githubService.fetchPRDiff(prUrl)
+            const userMessage =
+                `Please review this GitHub pull request: ${prUrl}\n\n` +
+                `The structured changed-file list was unavailable, so the actual ` +
+                `unified diff is provided below. Analyse only this supplied code context.\n\n` +
+                `<pull_request_diff>\n${diff}\n</pull_request_diff>`
 
-            if (partialReviews.length === 0) {
-                send({ type: 'error' as const, message: 'All cluster agents failed. Please try again.' })
-                if (reviewId) await this.markFailed(reviewId, 'All cluster agents failed')
-                return
-            }
-
-            // ── Phase 4a: Single-cluster shortcut — skip synthesis ────────────
-            // Small PRs (≤3 files) produce one cluster — its review is the final output.
-            if (partialReviews.length === 1) {
-                const only = partialReviews[0].review
-                const merged = { ...only, appliedStandards: standards?.appliedNames }
-                send({
-                    type: 'complete' as const,
-                    review: { ...merged, id: reviewId ?? '' },
-                    durationMs: Date.now() - startedAt,
-                    stepCount: 1,
-                })
-                await this.reviewRepository.saveReview(prUrl, 'PR', merged, userId, conn.getTrace(), reviewId)
-                return
-            }
-
-            // ── Phase 4b: Synthesis agent ─────────────────────────────────────
-            // Two-attempt LLM synthesis with a programmatic merge fallback so a
-            // parse failure never surfaces as an error to the user.
-            const finalReview = await this.synthesizeReview(prUrl, partialReviews, standards)
-            const merged = { ...finalReview, appliedStandards: standards?.appliedNames }
-
-            send({
-                type: 'complete' as const,
-                review: { ...merged, id: reviewId ?? '' },
-                durationMs: Date.now() - startedAt,
-                stepCount: clusters.length + 1, // workers + synthesis
-            })
-            await this.reviewRepository.saveReview(prUrl, 'PR', merged, userId, conn.getTrace(), reviewId)
-
-        } catch (err) {
-            const message = err instanceof Error ? err.message : 'PR review failed'
-            send({ type: 'error' as const, message })
-            if (reviewId) {
-                await this.markFailed(reviewId, message)
-            }
+            return this.streamAnalysis(userMessage, standards, prUrl, 'PR', userId, conn, reviewId)
         }
+
+        // ── Phase 1b: Emit file list for the Data Collection stage ────────
+        // Fires before planning so the UI shows "Reading files…" first,
+        // then transitions to the Planning stage when cluster_plan arrives.
+        send({
+            type: 'task_plan' as const,
+            tasks: files.map((f) => ({
+                id: f.filename,
+                label: f.filename.split('/').pop() ?? f.filename,
+            })),
+        })
+        for (const f of files) {
+            const diffLines = f.patch ? f.patch.split('\n').length : 0
+            const detail = diffLines > 0 ? `+${f.additions} -${f.deletions} · ${diffLines} diff lines` : f.status
+            send({
+                type: 'task_update' as const,
+                taskId: f.filename,
+                status: 'done',
+                detail,
+            })
+        }
+
+        // ── Phase 2: Plan clusters ────────────────────────────────────────
+        // Use lightweight LLM call to plan clusters intelligently.
+        // Falls back to single "general" cluster automatically on error.
+        const clusters = await planClusters(files, this.aiService.provider)
+
+        // Tell the UI exactly what clusters exist — it renders panels immediately
+        send({
+            type: 'cluster_plan' as const,
+            clusters: clusters.map((c) => ({
+                id: c.id,
+                label: c.label,
+                focus: c.focus,
+                files: c.files.map((f) => ({
+                    name: f.filename,
+                    additions: f.additions,
+                    deletions: f.deletions,
+                    status: f.status,
+                })),
+            })),
+        })
+
+        // ── Phase 3: Run all worker agents in parallel ────────────────────
+        // Promise.allSettled means one failing cluster never blocks the others.
+        const workerResults = await Promise.allSettled(
+            clusters.map((cluster) => this.runWorkerAgent(cluster, standards, send)),
+        )
+
+        // Collect successful results — failed clusters are noted but not fatal
+        const partialReviews = workerResults
+            .map((result, i) => ({ result, cluster: clusters[i] }))
+            .filter(({ result }) => result.status === 'fulfilled')
+            .map(({ result, cluster }) => ({
+                clusterId: cluster.id,
+                label: cluster.label,
+                review: (result as PromiseFulfilledResult<ReviewData>).value,
+            }))
+
+        if (partialReviews.length === 0) {
+            throw new InternalServerErrorException('All cluster agents failed. Please try again.')
+        }
+
+        // ── Phase 4a: Single-cluster shortcut — skip synthesis ────────────
+        // Small PRs (≤3 files) produce one cluster — its review is the final output.
+        if (partialReviews.length === 1) {
+            const only = partialReviews[0].review
+            const merged = { ...only, appliedStandards: standards?.appliedNames }
+            await this.completeReview(prUrl, 'PR', merged, userId, conn, reviewId, Date.now() - startedAt, 1)
+            return
+        }
+
+        // ── Phase 4b: Synthesis agent ─────────────────────────────────────
+        // Two-attempt LLM synthesis with a programmatic merge fallback so a
+        // parse failure never surfaces as an error to the user.
+        const finalReview = await this.synthesizeReview(prUrl, partialReviews, standards)
+        const merged = {
+            ...finalReview,
+            appliedStandards: standards?.appliedNames,
+        }
+
+        await this.completeReview(
+            prUrl,
+            'PR',
+            merged,
+            userId,
+            conn,
+            reviewId,
+            Date.now() - startedAt,
+            clusters.length + 1,
+        )
     }
-
-
 
     /** AI streaming phase — runs the model and emits thinking/tool/complete events. */
     private async streamAnalysis(
@@ -291,7 +302,12 @@ export class ReviewService {
 
                 stopWhen: ({ steps }) => {
                     const lastText = steps.at(-1)?.text ?? ''
-                    try { parseReviewText(lastText); return true } catch { /* keep going */ }
+                    try {
+                        parseReviewText(lastText)
+                        return true
+                    } catch {
+                        /* keep going */
+                    }
                     return steps.length >= MAX_STEPS
                 },
 
@@ -306,37 +322,77 @@ export class ReviewService {
 
             const [finalText, steps] = await Promise.all([result.text, result.steps])
 
-            const allTexts = [finalText, ...steps.map(s => s.text).reverse()].filter(t => t.trim())
+            const allTexts = [finalText, ...steps.map((s) => s.text).reverse()].filter((t) => t.trim())
             let review: ReviewData | undefined
             for (const text of allTexts) {
-                try { review = parseReviewText(text); break } catch { /* try next */ }
+                try {
+                    review = parseReviewText(text)
+                    break
+                } catch {
+                    /* try next */
+                }
             }
 
             if (!review) {
+                const message = 'The model did not return a valid review. Please try again.'
                 this.logger.error(
                     `Stream: review parsing failed — steps: ${steps.length}, ` +
-                    `last text: ${JSON.stringify(finalText.slice(0, 300))}`,
+                        `last text: ${JSON.stringify(finalText.slice(0, 300))}`,
                 )
-                _send({ type: 'error' as const, message: 'The model did not return a valid review. Please try again.' })
-                return
+                throw new InternalServerErrorException(message)
             }
 
             const merged = { ...review, appliedStandards: standards?.appliedNames }
-            _send({
-                type: 'complete' as const,
-                review: { ...merged, id: reviewId ?? '' },
-                durationMs: Date.now() - _startedAt,
-                stepCount: getToolCallCount(),
-            })
-            await this.reviewRepository.saveReview(input, reviewType, merged, userId, conn.getTrace(), reviewId)
+            await this.completeReview(
+                input,
+                reviewType,
+                merged,
+                userId,
+                conn,
+                reviewId,
+                Date.now() - _startedAt,
+                getToolCallCount(),
+            )
         } catch (err: unknown) {
-            const message = err instanceof Error ? err.message : 'Code review failed.'
             thinking.flushPending()
-            _send({ type: 'error' as const, message })
-            if (reviewId) {
-                await this.markFailed(reviewId, message)
-            }
+            throw err
         }
+    }
+
+    /** Persist a successful terminal transition before telling SSE clients to close. */
+    private async completeReview(
+        input: string,
+        reviewType: 'CODE' | 'PR',
+        review: ReviewData,
+        userId: string,
+        conn: SseConnection,
+        reviewId: string | undefined,
+        durationMs: number,
+        stepCount: number,
+    ): Promise<void> {
+        const event: ReviewStreamEvent = {
+            type: 'complete',
+            review: { ...review, id: reviewId ?? '' },
+            durationMs,
+            stepCount,
+        }
+        const savedId = await this.reviewRepository.saveReview(
+            input,
+            reviewType,
+            review,
+            userId,
+            [...conn.getTrace(), event],
+            reviewId,
+        )
+
+        // A missing ID for an existing session means cancellation (or another
+        // terminal transition) won the atomic PENDING -> COMPLETE race.
+        if (reviewId && !savedId) {
+            this.logger.warn(`Skipped complete event for non-pending review ${reviewId}`)
+            return
+        }
+
+        conn.send(event)
     }
 
     /** Run one cluster's worker agent, emitting SSE events tagged with clusterId. */
@@ -347,34 +403,29 @@ export class ReviewService {
     ): Promise<ReviewData> {
         const workerStart = Date.now()
 
-        const fileSection = cluster.files.map(f => {
-            const patch = f.patch
-                ? (f.patch.length > MAX_PATCH_CHARS
-                    ? f.patch.slice(0, MAX_PATCH_CHARS) + '\n… [diff truncated]'
-                    : f.patch)
-                : `(no diff — ${f.status})`
-            return `### ${f.filename}  [+${f.additions} -${f.deletions}  status: ${f.status}]\n${patch}`
-        }).join('\n\n')
+        const fileSection = cluster.files
+            .map((f) => {
+                const patch = f.patch
+                    ? f.patch.length > MAX_PATCH_CHARS
+                        ? f.patch.slice(0, MAX_PATCH_CHARS) + '\n… [diff truncated]'
+                        : f.patch
+                    : `(no diff — ${f.status})`
+                return `### ${f.filename}  [+${f.additions} -${f.deletions}  status: ${f.status}]\n${patch}`
+            })
+            .join('\n\n')
 
         const userMessage =
-            `Review the following files from the pull request.\n\n` +
-            `Your focus: ${cluster.focus}\n\n` +
-            fileSection
+            `Review the following files from the pull request.\n\n` + `Your focus: ${cluster.focus}\n\n` + fileSection
 
         const system = buildWorkerPrompt(cluster.label, cluster.focus, standards?.content)
 
         const tools = {
-            runLinter: createRunLinterTool(({ code, language }) =>
-                this.linterService.lint(code, language),
-            ),
+            runLinter: createRunLinterTool(({ code, language }) => this.linterService.lint(code, language)),
         }
 
         const pending = new Map<string, { toolName: string; args: Record<string, unknown>; startedAt: number }>()
-        const thinking = new ThinkingStream(
-            (event) => send({ ...event, clusterId: cluster.id }),
-        )
-        const clusterSend = (event: ReviewStreamEvent) =>
-            send({ ...event, clusterId: cluster.id } as ReviewStreamEvent)
+        const thinking = new ThinkingStream((event) => send({ ...event, clusterId: cluster.id }))
+        const clusterSend = (event: ReviewStreamEvent) => send({ ...event, clusterId: cluster.id } as ReviewStreamEvent)
 
         const { onChunk, onStepFinish } = this.buildStreamCallbacks(clusterSend, pending, thinking)
 
@@ -386,7 +437,12 @@ export class ReviewService {
             temperature: 0.2,
             stopWhen: ({ steps }) => {
                 const lastText = steps.at(-1)?.text ?? ''
-                try { parseReviewText(lastText); return true } catch { /* keep going */ }
+                try {
+                    parseReviewText(lastText)
+                    return true
+                } catch {
+                    /* keep going */
+                }
                 return steps.length >= AGENT_MAX_STEPS.WORKER
             },
             prepareStep: ({ steps }) => {
@@ -399,10 +455,15 @@ export class ReviewService {
 
         const [finalText, steps] = await Promise.all([result.text, result.steps])
 
-        const allTexts = [finalText, ...steps.map(s => s.text).reverse()].filter(t => t.trim())
+        const allTexts = [finalText, ...steps.map((s) => s.text).reverse()].filter((t) => t.trim())
         let review: ReviewData | undefined
         for (const text of allTexts) {
-            try { review = parseReviewText(text); break } catch { /* try next */ }
+            try {
+                review = parseReviewText(text)
+                break
+            } catch {
+                /* try next */
+            }
         }
 
         if (!review) {
@@ -435,7 +496,11 @@ export class ReviewService {
                     // Flush any pending reasoning before showing a tool step.
                     thinking.flushPending()
                     const args = parseArgs(chunk.input ?? chunk.args)
-                    pending.set(chunk.toolCallId, { toolName: chunk.toolName, args, startedAt: Date.now() })
+                    pending.set(chunk.toolCallId, {
+                        toolName: chunk.toolName,
+                        args,
+                        startedAt: Date.now(),
+                    })
                     toolCallCount++
                     _send({
                         type: 'tool_start' as const,
@@ -489,7 +554,11 @@ export class ReviewService {
      */
     private async synthesizeReview(
         prUrl: string,
-        partialReviews: Array<{ clusterId: string; label: string; review: ReviewData }>,
+        partialReviews: Array<{
+            clusterId: string
+            label: string
+            review: ReviewData
+        }>,
         standards: Awaited<ReturnType<RagService['retrieveForContext']>>,
     ): Promise<ReviewData> {
         const baseSystem = standards
@@ -514,7 +583,9 @@ export class ReviewService {
         try {
             const { text } = await generateText({
                 model: this.aiService.defaultModel,
-                system: baseSystem + '\n\nFINAL INSTRUCTION: Your entire response must be ONE JSON object. ' +
+                system:
+                    baseSystem +
+                    '\n\nFINAL INSTRUCTION: Your entire response must be ONE JSON object. ' +
                     'Start with a line containing only { and end with a line containing only }. ' +
                     'Absolutely no text before or after the JSON.',
                 messages: [{ role: 'user', content: userMessage }],
@@ -532,13 +603,17 @@ export class ReviewService {
 
     /** Merge worker partial reviews deterministically — used when LLM synthesis fails twice. */
     private mergeReviewsFallback(
-        partialReviews: Array<{ clusterId: string; label: string; review: ReviewData }>,
+        partialReviews: Array<{
+            clusterId: string
+            label: string
+            review: ReviewData
+        }>,
     ): ReviewData {
         // Deduplicate issues by type+title+location key
         const seen = new Set<string>()
         const issues = partialReviews
             .flatMap(({ review }) => review.issues)
-            .filter(i => {
+            .filter((i) => {
                 const key = `${i.type}:${i.title}:${i.location}`
                 if (seen.has(key)) return false
                 seen.add(key)
@@ -560,9 +635,7 @@ export class ReviewService {
     /** Wire up the required agent tools based on whether this is a PR or pasted code review. */
     private buildAgentTools(reviewType: 'CODE' | 'PR') {
         const baseTools = {
-            runLinter: createRunLinterTool(({ code, language }) =>
-                this.linterService.lint(code, language),
-            ),
+            runLinter: createRunLinterTool(({ code, language }) => this.linterService.lint(code, language)),
         }
 
         if (reviewType === 'CODE') {
@@ -598,5 +671,13 @@ export class ReviewService {
 
     private errMsg(err: unknown): string {
         return err instanceof Error ? err.message : String(err)
+    }
+
+    /** Preserve intentional user-facing HTTP errors; hide unexpected provider/DB details. */
+    private publicErrorMessage(err: unknown): string {
+        if (err instanceof HttpException) return err.message
+
+        this.logger.error(`Review pipeline failed: ${this.errMsg(err)}`)
+        return 'Review failed unexpectedly. Please try again.'
     }
 }
