@@ -81,8 +81,9 @@ When reviewing pasted raw code snippets, ALWAYS call the runLinter tool first be
 const TOOLS_PR_STREAM = `══════════════════════════════════════════════════════════════
 CONTEXT
 ══════════════════════════════════════════════════════════════
-The complete file diffs for this PR are provided directly in the message — no tools are needed.
-Analyse the provided diffs directly and output your review.`
+The available pull-request diff context is provided directly in the message — no tools are needed.
+It may contain per-file patches or a truncated unified diff. Analyse only the supplied context,
+do not claim to browse the PR URL, and do not assume omitted or truncated code is safe.`
 
 // ── Public factory ────────────────────────────────────────────────────────────
 
@@ -91,7 +92,7 @@ Analyse the provided diffs directly and output your review.`
  *
  * - 'CODE'      — pasted code snippet; only runLinter is available
  * - 'PR'        — PR URL review (non-streaming); all four GitHub tools available
- * - 'PR_STREAM' — PR streaming review; diffs are pre-built in the user message, no tools available
+ * - 'PR_STREAM' — PR streaming review; available diff context is pre-built in the user message, no tools available
  */
 export function buildSystemPrompt(context: 'CODE' | 'PR' | 'PR_STREAM'): string {
     const toolsSection =
