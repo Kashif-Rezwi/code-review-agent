@@ -61,6 +61,7 @@ export class ReviewRepository {
         userId: string,
         traceLog?: ReviewStreamEvent[],
         reviewId?: string,
+        outcome: 'complete' | 'partial' = 'complete',
     ): Promise<string | undefined> {
         if (!this.hasDb) return undefined
         const reviewData = {
@@ -68,6 +69,9 @@ export class ReviewRepository {
             score: data.score,
             positives: data.positives,
             appliedStandards: data.appliedStandards ?? [],
+            ...(data.coverage
+                ? { coverage: data.coverage as unknown as Prisma.InputJsonValue }
+                : {}),
             ...(traceLog && traceLog.length > 0 ? { traceLog: traceLog as unknown as Prisma.InputJsonValue } : {}),
             issues: {
                 create: data.issues.map((i) => ({
@@ -87,7 +91,7 @@ export class ReviewRepository {
             try {
                 const saved = await this.prisma.review.update({
                     where: { id: reviewId, status: 'PENDING' },
-                    data: { ...reviewData, status: 'COMPLETE' },
+                    data: { ...reviewData, status: outcome === 'partial' ? 'PARTIAL' : 'COMPLETE' },
                 })
                 return saved.id
             } catch (err: unknown) {
@@ -104,7 +108,7 @@ export class ReviewRepository {
                 userId,
                 type,
                 input,
-                status: 'COMPLETE',
+                status: outcome === 'partial' ? 'PARTIAL' : 'COMPLETE',
                 ...reviewData,
             },
         })

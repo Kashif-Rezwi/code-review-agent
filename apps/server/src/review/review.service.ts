@@ -4,9 +4,6 @@ import { generateText, streamText } from 'ai'
 import { AiService } from '../ai/ai.service'
 import {
     buildSystemPrompt,
-    createFetchGithubPRTool,
-    createListPRFilesTool,
-    createFetchFileContentTool,
     createRunLinterTool,
     planClusters,
     buildWorkerPrompt,
@@ -14,7 +11,7 @@ import {
     buildSynthesisSystemPrompt,
 } from '@cra/ai'
 import type { ReviewData, PRFile, ClusterPlan } from '@cra/ai'
-import type { ReviewStreamEvent } from '@cra/types'
+import type { ReviewCoverage, ReviewStreamEvent } from '@cra/types'
 import { GithubService } from '../github/github.service'
 import { LinterService } from '../linter/linter.service'
 import { RagService } from '../rag/rag.service'
@@ -25,13 +22,52 @@ import type { SseConnection } from './review.sse'
 import { parseReviewText } from './review-parser.util'
 import { parseArgs, pickArgs, toolStartLabel, toolStartDetail, toolDoneLabel, toolDoneDetail } from './review.formatter'
 import { ThinkingStream } from './review.thinking'
+import type { NormalizedPRFile, PRSnapshot } from '../github/github.types'
+
+type MinimalAiStep = { text: string }
+type MinimalStreamResult = {
+    text: PromiseLike<string>
+    steps: PromiseLike<MinimalAiStep[]>
+}
+
+// AI SDK overloads become extremely expensive for type-aware ESLint when a
+// tool-rich call is inferred inline. These narrow adapters keep the SDK's
+// runtime behavior while making the small response surface used here explicit.
+const runStreamText = streamText as unknown as (options: Record<string, unknown>) => MinimalStreamResult
+const runGenerateText = generateText as unknown as (
+    options: Record<string, unknown>,
+) => Promise<{ text: string }>
+const buildLinterTool = createRunLinterTool as unknown as (
+    execute: (input: { code: string; language: 'javascript' | 'typescript' }) => Promise<string>,
+) => unknown
 
 /** Maximum agent loop steps per review type. */
-const AGENT_MAX_STEPS = { CODE: 10, PR: 2, WORKER: 5 } as const
+const AGENT_MAX_STEPS = { CODE: 10, WORKER: 5 } as const
 
 /** Maximum diff characters forwarded to each worker agent per file.
  *  Keeps prompts within token budget while preserving most of the useful signal. */
-const MAX_PATCH_CHARS = 3_000
+const MAX_PATCH_CHARS = 8_000
+const MAX_CLUSTER_PATCH_CHARS = 40_000
+const WORKER_CONCURRENCY = 3
+const WORKER_ATTEMPTS = 2
+
+type StandardsContext = Awaited<ReturnType<RagService['retrieveForContext']>>
+
+type WorkerSuccess = {
+    status: 'fulfilled'
+    cluster: ClusterPlan
+    review: ReviewData
+    attempts: number
+    truncatedFiles: string[]
+}
+
+type WorkerFailure = {
+    status: 'rejected'
+    cluster: ClusterPlan
+    error: unknown
+}
+
+type WorkerOutcome = WorkerSuccess | WorkerFailure
 
 @Injectable()
 export class ReviewService {
@@ -124,62 +160,38 @@ export class ReviewService {
         this.githubService.assertValidPRUrl(prUrl)
 
         const { send, startedAt } = conn
-
         send({ type: 'start' as const })
 
-        // ── Phase 1: Fetch files and RAG standards in parallel ────────────
-        const filesPromise: Promise<{
-            files: PRFile[] | null
-            error: unknown | null
-        }> = this.githubService
-            .fetchPRFiles(prUrl)
-            .then((files) => ({ files, error: null }))
-            .catch((error) => ({ files: null, error }))
-
-        const [standards, fileResult] = await Promise.all([
+        // Acquisition and RAG are independent. Every acquisition source returns
+        // normalized per-file context and therefore enters the same orchestrator.
+        const [standards, snapshot] = await Promise.all([
             this.ragService.retrieveForContext('code review standards best practices', userId),
-            filesPromise,
+            this.githubService.fetchPRSnapshot(prUrl),
         ])
-        const { files, error: fileListError } = fileResult
+        const files = snapshot.files
+        if (files.length === 0) throw new InternalServerErrorException('No reviewable pull-request files were acquired.')
 
-        // If the structured file-list endpoint is unavailable, fetch an actual
-        // unified diff. Never ask a model to browse a bare URL: PR_STREAM has no
-        // GitHub tools and is only valid when source context is preloaded.
-        const hasReviewablePatch = files?.some((file) => file.patch?.trim()) ?? false
-        if (!files || files.length === 0 || !hasReviewablePatch) {
-            const reason = fileListError
-                ? this.errMsg(fileListError)
-                : files?.length
-                  ? 'GitHub returned changed files without reviewable patches'
-                  : 'GitHub returned an empty changed-file list'
-            this.logger.warn(
-                `PR file list unavailable for review ${reviewId ?? 'unsaved'}; ` +
-                    `using unified diff fallback: ${reason}`,
-            )
+        send({
+            type: 'acquisition',
+            source: snapshot.source,
+            fileCount: files.length,
+            complete: snapshot.complete,
+            warnings: snapshot.warnings,
+        })
 
-            const diff = await this.githubService.fetchPRDiff(prUrl)
-            const userMessage =
-                `Please review this GitHub pull request: ${prUrl}\n\n` +
-                `The structured changed-file list was unavailable, so the actual ` +
-                `unified diff is provided below. Analyse only this supplied code context.\n\n` +
-                `<pull_request_diff>\n${diff}\n</pull_request_diff>`
-
-            return this.streamAnalysis(userMessage, standards, prUrl, 'PR', userId, conn, reviewId)
-        }
-
-        // ── Phase 1b: Emit file list for the Data Collection stage ────────
-        // Fires before planning so the UI shows "Reading files…" first,
-        // then transitions to the Planning stage when cluster_plan arrives.
         send({
             type: 'task_plan' as const,
             tasks: files.map((f) => ({
                 id: f.filename,
-                label: f.filename.split('/').pop() ?? f.filename,
+                label: f.filename,
             })),
         })
         for (const f of files) {
             const diffLines = f.patch ? f.patch.split('\n').length : 0
-            const detail = diffLines > 0 ? `+${f.additions} -${f.deletions} · ${diffLines} diff lines` : f.status
+            const context = f.patchState === 'full' ? '' : ` · ${f.patchState.replace('_', ' ')}`
+            const detail = diffLines > 0
+                ? `+${f.additions} -${f.deletions} · ${diffLines} diff lines${context}`
+                : `${f.status}${context}`
             send({
                 type: 'task_update' as const,
                 taskId: f.filename,
@@ -188,12 +200,8 @@ export class ReviewService {
             })
         }
 
-        // ── Phase 2: Plan clusters ────────────────────────────────────────
-        // Use lightweight LLM call to plan clusters intelligently.
-        // Falls back to single "general" cluster automatically on error.
-        const clusters = await planClusters(files, this.aiService.provider)
+        const clusters = await planClusters(files, this.aiService.defaultModel)
 
-        // Tell the UI exactly what clusters exist — it renders panels immediately
         send({
             type: 'cluster_plan' as const,
             clusters: clusters.map((c) => ({
@@ -205,46 +213,54 @@ export class ReviewService {
                     additions: f.additions,
                     deletions: f.deletions,
                     status: f.status,
+                    patchState: this.patchStateOf(f),
                 })),
             })),
         })
 
-        // ── Phase 3: Run all worker agents in parallel ────────────────────
-        // Promise.allSettled means one failing cluster never blocks the others.
-        const workerResults = await Promise.allSettled(
-            clusters.map((cluster) => this.runWorkerAgent(cluster, standards, send)),
+        const workerResults = await this.mapWithConcurrency(
+            clusters,
+            WORKER_CONCURRENCY,
+            async (cluster): Promise<WorkerOutcome> => {
+                try {
+                    const result = await this.runWorkerWithRetry(cluster, standards, send)
+                    return { status: 'fulfilled', cluster, ...result }
+                } catch (error) {
+                    return { status: 'rejected', cluster, error }
+                }
+            },
         )
 
-        // Collect successful results — failed clusters are noted but not fatal
-        const partialReviews = workerResults
-            .map((result, i) => ({ result, cluster: clusters[i] }))
-            .filter(({ result }) => result.status === 'fulfilled')
-            .map(({ result, cluster }) => ({
-                clusterId: cluster.id,
-                label: cluster.label,
-                review: (result as PromiseFulfilledResult<ReviewData>).value,
-            }))
+        const successful = workerResults.filter((result): result is WorkerSuccess => result.status === 'fulfilled')
+        const failed = workerResults.filter((result): result is WorkerFailure => result.status === 'rejected')
+        const partialReviews = successful.map(({ cluster, review }) => ({
+            clusterId: cluster.id,
+            label: cluster.label,
+            review,
+        }))
 
         if (partialReviews.length === 0) {
             throw new InternalServerErrorException('All cluster agents failed. Please try again.')
         }
 
-        // ── Phase 4a: Single-cluster shortcut — skip synthesis ────────────
-        // Small PRs (≤3 files) produce one cluster — its review is the final output.
-        if (partialReviews.length === 1) {
-            const only = partialReviews[0].review
-            const merged = { ...only, appliedStandards: standards?.appliedNames }
-            await this.completeReview(prUrl, 'PR', merged, userId, conn, reviewId, Date.now() - startedAt, 1)
-            return
+        const coverage = this.buildCoverage(snapshot, clusters, successful, failed)
+        let finalReview: ReviewData
+        let synthesisStep = 0
+        if (clusters.length === 1) {
+            finalReview = partialReviews[0].review
+        } else {
+            send({ type: 'synthesis_start', clusterCount: partialReviews.length })
+            finalReview = await this.synthesizeReview(prUrl, partialReviews, standards, coverage)
+            synthesisStep = 1
         }
 
-        // ── Phase 4b: Synthesis agent ─────────────────────────────────────
-        // Two-attempt LLM synthesis with a programmatic merge fallback so a
-        // parse failure never surfaces as an error to the user.
-        const finalReview = await this.synthesizeReview(prUrl, partialReviews, standards)
+        const outcome = coverage.unreviewedFiles.length > 0 || coverage.failedClusters.length > 0
+            ? 'partial'
+            : 'complete'
         const merged = {
             ...finalReview,
             appliedStandards: standards?.appliedNames,
+            coverage,
         }
 
         await this.completeReview(
@@ -255,7 +271,8 @@ export class ReviewService {
             conn,
             reviewId,
             Date.now() - startedAt,
-            clusters.length + 1,
+            successful.length + synthesisStep,
+            outcome,
         )
     }
 
@@ -264,7 +281,7 @@ export class ReviewService {
         userMessage: string,
         standards: Awaited<ReturnType<RagService['retrieveForContext']>>,
         input: string,
-        reviewType: 'CODE' | 'PR',
+        reviewType: 'CODE',
         userId: string,
         conn: SseConnection,
         reviewId?: string,
@@ -276,10 +293,9 @@ export class ReviewService {
         const _send = conn.send
         const _startedAt = conn.startedAt
 
-        const promptContext = reviewType === 'PR' ? 'PR_STREAM' : 'CODE'
         const system = standards
-            ? `${buildSystemPrompt(promptContext)}\n\nYour team's coding standards — apply these during the review:\n\n${standards.content}`
-            : buildSystemPrompt(promptContext)
+            ? `${buildSystemPrompt('CODE')}\n\nYour team's coding standards — apply these during the review:\n\n${standards.content}`
+            : buildSystemPrompt('CODE')
 
         // PR reviews with pre-built context only need a few steps (no file-fetch tools).
         // Code reviews may still call runLinter.
@@ -290,17 +306,17 @@ export class ReviewService {
         const { onChunk, onStepFinish, getToolCallCount } = this.buildStreamCallbacks(_send, pending, thinking)
 
         try {
-            const result = streamText({
+            const result = runStreamText({
                 model: this.aiService.defaultModel,
                 system,
                 messages: [{ role: 'user', content: userMessage }],
                 // PR path: NO tools — context is fully pre-built from diffs. Giving the
                 // model tools in this path causes it to run runLinter on every file.
                 // Code path: linter only.
-                ...(reviewType === 'CODE' && { tools: this.buildAgentTools('CODE') }),
+                tools: this.buildCodeAgentTools(),
                 temperature: 0.2,
 
-                stopWhen: ({ steps }) => {
+                stopWhen: ({ steps }: { steps: MinimalAiStep[] }) => {
                     const lastText = steps.at(-1)?.text ?? ''
                     try {
                         parseReviewText(lastText)
@@ -311,7 +327,7 @@ export class ReviewService {
                     return steps.length >= MAX_STEPS
                 },
 
-                prepareStep: ({ steps }) => {
+                prepareStep: ({ steps }: { steps: MinimalAiStep[] }) => {
                     if (steps.length >= MAX_STEPS - 1) return { toolChoice: 'none' as const }
                     return {}
                 },
@@ -369,12 +385,14 @@ export class ReviewService {
         reviewId: string | undefined,
         durationMs: number,
         stepCount: number,
+        outcome: 'complete' | 'partial' = 'complete',
     ): Promise<void> {
         const event: ReviewStreamEvent = {
             type: 'complete',
             review: { ...review, id: reviewId ?? '' },
             durationMs,
             stepCount,
+            outcome,
         }
         const savedId = await this.reviewRepository.saveReview(
             input,
@@ -383,6 +401,7 @@ export class ReviewService {
             userId,
             [...conn.getTrace(), event],
             reviewId,
+            outcome,
         )
 
         // A missing ID for an existing session means cancellation (or another
@@ -395,32 +414,70 @@ export class ReviewService {
         conn.send(event)
     }
 
-    /** Run one cluster's worker agent, emitting SSE events tagged with clusterId. */
-    private async runWorkerAgent(
+    private async runWorkerWithRetry(
         cluster: ClusterPlan,
-        standards: Awaited<ReturnType<RagService['retrieveForContext']>>,
+        standards: StandardsContext,
         send: (event: ReviewStreamEvent) => void,
-    ): Promise<ReviewData> {
+    ): Promise<{ review: ReviewData; attempts: number; truncatedFiles: string[] }> {
         const workerStart = Date.now()
+        const context = this.buildClusterContext(cluster)
+        let lastError: unknown
 
-        const fileSection = cluster.files
-            .map((f) => {
-                const patch = f.patch
-                    ? f.patch.length > MAX_PATCH_CHARS
-                        ? f.patch.slice(0, MAX_PATCH_CHARS) + '\n… [diff truncated]'
-                        : f.patch
-                    : `(no diff — ${f.status})`
-                return `### ${f.filename}  [+${f.additions} -${f.deletions}  status: ${f.status}]\n${patch}`
-            })
-            .join('\n\n')
+        for (let attempt = 1; attempt <= WORKER_ATTEMPTS; attempt++) {
+            try {
+                const review = await this.runWorkerAttempt(cluster, standards, send, context.text, attempt)
+                send({
+                    type: 'cluster_done',
+                    clusterId: cluster.id,
+                    issueCount: review.issues.length,
+                    durationMs: Date.now() - workerStart,
+                    attempts: attempt,
+                })
+                return { review, attempts: attempt, truncatedFiles: context.truncatedFiles }
+            } catch (error) {
+                lastError = error
+                if (attempt < WORKER_ATTEMPTS) {
+                    send({
+                        type: 'thinking',
+                        clusterId: cluster.id,
+                        text: 'The first worker attempt did not produce a valid review. Retrying with stricter output constraints.',
+                    })
+                }
+            }
+        }
+
+        send({
+            type: 'cluster_failed',
+            clusterId: cluster.id,
+            attempts: WORKER_ATTEMPTS,
+            message: 'Worker could not produce a valid review after retrying.',
+            durationMs: Date.now() - workerStart,
+        })
+        throw lastError instanceof Error ? lastError : new Error(`Worker agent for cluster "${cluster.id}" failed.`)
+    }
+
+    /** Run one worker attempt. Terminal cluster events are emitted by the retry wrapper. */
+    private async runWorkerAttempt(
+        cluster: ClusterPlan,
+        standards: StandardsContext,
+        send: (event: ReviewStreamEvent) => void,
+        fileSection: string,
+        attempt: number,
+    ): Promise<ReviewData> {
+        const retryInstruction = attempt > 1
+            ? '\n\nRETRY REQUIREMENT: Return one valid JSON review object. Do not add trailing prose after the closing brace.'
+            : ''
 
         const userMessage =
-            `Review the following files from the pull request.\n\n` + `Your focus: ${cluster.focus}\n\n` + fileSection
+            `Review the following files from the pull request.\n\n` +
+            `Your focus: ${cluster.focus}\n\n` +
+            fileSection +
+            retryInstruction
 
         const system = buildWorkerPrompt(cluster.label, cluster.focus, standards?.content)
 
-        const tools = {
-            runLinter: createRunLinterTool(({ code, language }) => this.linterService.lint(code, language)),
+        const tools: Record<string, unknown> = {
+            runLinter: buildLinterTool(({ code, language }) => this.linterService.lint(code, language)),
         }
 
         const pending = new Map<string, { toolName: string; args: Record<string, unknown>; startedAt: number }>()
@@ -429,13 +486,13 @@ export class ReviewService {
 
         const { onChunk, onStepFinish } = this.buildStreamCallbacks(clusterSend, pending, thinking)
 
-        const result = streamText({
+        const result = runStreamText({
             model: this.aiService.defaultModel,
             system,
             messages: [{ role: 'user', content: userMessage }],
             tools,
-            temperature: 0.2,
-            stopWhen: ({ steps }) => {
+            temperature: attempt > 1 ? 0 : 0.2,
+            stopWhen: ({ steps }: { steps: MinimalAiStep[] }) => {
                 const lastText = steps.at(-1)?.text ?? ''
                 try {
                     parseReviewText(lastText)
@@ -445,7 +502,7 @@ export class ReviewService {
                 }
                 return steps.length >= AGENT_MAX_STEPS.WORKER
             },
-            prepareStep: ({ steps }) => {
+            prepareStep: ({ steps }: { steps: MinimalAiStep[] }) => {
                 if (steps.length >= AGENT_MAX_STEPS.WORKER - 1) return { toolChoice: 'none' as const }
                 return {}
             },
@@ -470,14 +527,118 @@ export class ReviewService {
             throw new Error(`Worker agent for cluster "${cluster.id}" did not return a valid review.`)
         }
 
-        send({
-            type: 'cluster_done' as const,
-            clusterId: cluster.id,
-            issueCount: review.issues.length,
-            durationMs: Date.now() - workerStart,
+        return review
+    }
+
+    private buildClusterContext(cluster: ClusterPlan): { text: string; truncatedFiles: string[] } {
+        let remaining = MAX_CLUSTER_PATCH_CHARS
+        const truncatedFiles: string[] = []
+        const sections: string[] = []
+
+        for (const file of cluster.files) {
+            if (!file.patch) {
+                const header =
+                    `### ${file.filename}  [+${file.additions} -${file.deletions}  ` +
+                    `status: ${file.status}  context: ${this.patchStateOf(file)}]`
+                sections.push(`${header}\n(no text diff available — review metadata and related files only)`)
+                continue
+            }
+
+            const budget = Math.min(MAX_PATCH_CHARS, Math.max(0, remaining))
+            const selected = this.selectPatchWithinBudget(file.patch, budget)
+            remaining -= selected.text.length
+            if (selected.truncated) {
+                truncatedFiles.push(file.filename)
+                ;(file as NormalizedPRFile).patchState = 'truncated'
+            }
+            const header =
+                `### ${file.filename}  [+${file.additions} -${file.deletions}  ` +
+                `status: ${file.status}  context: ${this.patchStateOf(file)}]`
+            sections.push(`${header}\n${selected.text}`)
+        }
+
+        return { text: sections.join('\n\n'), truncatedFiles }
+    }
+
+    private selectPatchWithinBudget(patch: string, budget: number): { text: string; truncated: boolean } {
+        if (patch.length <= budget) return { text: patch, truncated: false }
+        const marker = '\n… [additional diff hunks omitted due review context budget]'
+        if (budget <= marker.length) return { text: marker.trim(), truncated: true }
+
+        const hunks = patch.split(/(?=^@@\s)/gm).filter(Boolean)
+        const selected: string[] = []
+        let used = marker.length
+        for (const hunk of hunks) {
+            if (used + hunk.length + 1 > budget) break
+            selected.push(hunk.trimEnd())
+            used += hunk.length + 1
+        }
+
+        if (selected.length === 0) {
+            const lines: string[] = []
+            let lineBudget = marker.length
+            for (const line of patch.split('\n')) {
+                if (lineBudget + line.length + 1 > budget) break
+                lines.push(line)
+                lineBudget += line.length + 1
+            }
+            selected.push(lines.join('\n'))
+        }
+
+        return { text: `${selected.join('\n')}${marker}`, truncated: true }
+    }
+
+    private patchStateOf(file: PRFile): NormalizedPRFile['patchState'] {
+        return (file as Partial<NormalizedPRFile>).patchState ?? (file.patch ? 'full' : 'metadata_only')
+    }
+
+    private buildCoverage(
+        snapshot: PRSnapshot,
+        clusters: ClusterPlan[],
+        successful: WorkerSuccess[],
+        failed: WorkerFailure[],
+    ): ReviewCoverage {
+        const assigned = new Set(clusters.flatMap((cluster) => cluster.files.map((file) => file.filename)))
+        const reviewed = new Set(successful.flatMap((result) => result.cluster.files.map((file) => file.filename)))
+        const unreviewed = new Set(failed.flatMap((result) => result.cluster.files.map((file) => file.filename)))
+        const truncated = new Set([
+            ...snapshot.files.filter((file) => file.patchState === 'truncated').map((file) => file.filename),
+            ...successful.flatMap((result) => result.truncatedFiles),
+        ])
+        const metadataOnly = snapshot.files
+            .filter((file) => file.patchState === 'metadata_only' || file.patchState === 'binary')
+            .map((file) => file.filename)
+
+        return {
+            totalFiles: snapshot.files.length,
+            assignedFiles: assigned.size,
+            reviewedFiles: reviewed.size,
+            truncatedFiles: [...truncated].sort(),
+            metadataOnlyFiles: [...new Set(metadataOnly)].sort(),
+            unreviewedFiles: [...unreviewed].sort(),
+            failedClusters: failed.map((result) => result.cluster.id),
+            acquisitionSource: snapshot.source,
+        }
+    }
+
+    private async mapWithConcurrency<T, R>(
+        items: T[],
+        limit: number,
+        worker: (item: T, index: number) => Promise<R>,
+    ): Promise<R[]> {
+        const results = new Array<R>(items.length)
+        let nextIndex = 0
+
+        const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+            while (true) {
+                const index = nextIndex++
+                if (index >= items.length) return
+                results[index] = await worker(items[index], index)
+            }
         })
 
-        return review
+        await Promise.all(runners)
+        return results
     }
 
     /** Extract the onChunk / onStepFinish callbacks so streamAnalysis stays focused on control flow.
@@ -559,16 +720,20 @@ export class ReviewService {
             label: string
             review: ReviewData
         }>,
-        standards: Awaited<ReturnType<RagService['retrieveForContext']>>,
+        standards: StandardsContext,
+        coverage?: ReviewCoverage,
     ): Promise<ReviewData> {
         const baseSystem = standards
             ? `${buildSynthesisSystemPrompt()}\n\nYour team's coding standards:\n\n${standards.content}`
             : buildSynthesisSystemPrompt()
-        const userMessage = buildSynthesisUserMessage(prUrl, partialReviews)
+        const coverageContext = coverage
+            ? `\n\nCoverage manifest (server-verified; do not claim failed clusters were reviewed):\n${JSON.stringify(coverage)}`
+            : ''
+        const userMessage = buildSynthesisUserMessage(prUrl, partialReviews) + coverageContext
 
         // ── Attempt 1: standard ───────────────────────────────────────────────
         try {
-            const { text } = await generateText({
+            const { text } = await runGenerateText({
                 model: this.aiService.defaultModel,
                 system: baseSystem,
                 messages: [{ role: 'user', content: userMessage }],
@@ -581,7 +746,7 @@ export class ReviewService {
 
         // ── Attempt 2: temperature 0 + reinforced JSON-only instruction ───────
         try {
-            const { text } = await generateText({
+            const { text } = await runGenerateText({
                 model: this.aiService.defaultModel,
                 system:
                     baseSystem +
@@ -632,40 +797,10 @@ export class ReviewService {
         return { summary, score: avgScore, issues, positives }
     }
 
-    /** Wire up the required agent tools based on whether this is a PR or pasted code review. */
-    private buildAgentTools(reviewType: 'CODE' | 'PR') {
-        const baseTools = {
-            runLinter: createRunLinterTool(({ code, language }) => this.linterService.lint(code, language)),
-        }
-
-        if (reviewType === 'CODE') {
-            return baseTools
-        }
-
-        // PRs get all GitHub API capabilities on top of the linter
+    /** Pasted-code reviews keep the linter tool; PR acquisition is orchestrated before any model call. */
+    private buildCodeAgentTools(): Record<string, unknown> {
         return {
-            ...baseTools,
-            fetchGithubPR: createFetchGithubPRTool(async ({ prUrl }) => {
-                try {
-                    return await this.githubService.fetchPRDiff(prUrl)
-                } catch (err) {
-                    return `[Tool error: ${this.errMsg(err)}. Follow the OUTPUT RULE and respond with JSON now.]`
-                }
-            }),
-            listPRFiles: createListPRFilesTool(async ({ prUrl }) => {
-                try {
-                    return await this.githubService.fetchPRFiles(prUrl)
-                } catch (err) {
-                    return `[Tool error: ${this.errMsg(err)}. Use fetchGithubPR as fallback.]` as unknown as PRFile[]
-                }
-            }),
-            fetchFileContent: createFetchFileContentTool(async ({ prUrl, filePath }) => {
-                try {
-                    return await this.githubService.fetchFileContent(prUrl, filePath)
-                } catch (err) {
-                    return `[Tool error: ${this.errMsg(err)}. Continue the review without this file's content.]`
-                }
-            }),
+            runLinter: buildLinterTool(({ code, language }) => this.linterService.lint(code, language)),
         }
     }
 

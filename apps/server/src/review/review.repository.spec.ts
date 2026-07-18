@@ -119,6 +119,45 @@ describe('ReviewRepository terminal state transitions', () => {
       );
     });
 
+    it('atomically persists PARTIAL status and coverage on a pending review', async () => {
+      review.update.mockResolvedValue({ id: 'review-1' });
+      const partialData: ReviewData = {
+        ...reviewData,
+        coverage: {
+          totalFiles: 4,
+          assignedFiles: 4,
+          reviewedFiles: 2,
+          truncatedFiles: [],
+          metadataOnlyFiles: [],
+          unreviewedFiles: ['src/c.ts', 'src/d.ts'],
+          failedClusters: ['review-group-2'],
+          acquisitionSource: 'public_diff',
+        },
+      };
+
+      await expect(
+        repository.saveReview(
+          'input',
+          'PR',
+          partialData,
+          'user-1',
+          undefined,
+          'review-1',
+          'partial',
+        ),
+      ).resolves.toBe('review-1');
+
+      expect(review.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'review-1', status: 'PENDING' },
+          data: expect.objectContaining({
+            status: 'PARTIAL',
+            coverage: partialData.coverage,
+          }),
+        }),
+      );
+    });
+
     it('returns undefined when a terminal review causes Prisma P2025', async () => {
       review.update.mockRejectedValue(
         new Prisma.PrismaClientKnownRequestError('Record not found', {
