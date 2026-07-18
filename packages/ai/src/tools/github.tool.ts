@@ -34,6 +34,7 @@ export const PRFileSchema = z.object({
     additions: z.number(),
     deletions: z.number(),
     patch:     z.string().optional(),
+    previous_filename: z.string().optional(),
 })
 
 /** A single changed file in a GitHub PR. Derived from PRFileSchema for runtime safety. */

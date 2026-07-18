@@ -9,6 +9,19 @@ export const ReviewIssueSchema = z.object({
     recommendation: z.string(),
 })
 
+export const ReviewAcquisitionSourceSchema = z.enum(['github_files_api', 'public_diff'])
+
+export const ReviewCoverageSchema = z.object({
+    totalFiles: z.number().int().nonnegative(),
+    assignedFiles: z.number().int().nonnegative(),
+    reviewedFiles: z.number().int().nonnegative(),
+    truncatedFiles: z.array(z.string()),
+    metadataOnlyFiles: z.array(z.string()),
+    unreviewedFiles: z.array(z.string()),
+    failedClusters: z.array(z.string()),
+    acquisitionSource: ReviewAcquisitionSourceSchema,
+})
+
 export const ReviewDataSchema = z.object({
     summary: z.string(),
     score: z.coerce.number().min(1).max(10).transform(n => Math.round(n)),
@@ -18,10 +31,14 @@ export const ReviewDataSchema = z.object({
     appliedStandards: z.array(z.string()).optional(),
     // Populated server-side after DB save — never emitted by the LLM.
     id: z.string().optional(),
+    // Populated server-side for PR reviews. Optional for historical reviews.
+    coverage: ReviewCoverageSchema.optional(),
 })
 
 export type ReviewIssue = z.infer<typeof ReviewIssueSchema>
 export type ReviewData = z.infer<typeof ReviewDataSchema>
+export type ReviewCoverage = z.infer<typeof ReviewCoverageSchema>
+export type ReviewAcquisitionSource = z.infer<typeof ReviewAcquisitionSourceSchema>
 
 /**
  * Events emitted by the /review/[analyze|from-pr]/stream SSE endpoints.
@@ -32,12 +49,25 @@ export type ReviewData = z.infer<typeof ReviewDataSchema>
  */
 export type ReviewStreamEvent =
     | { type: 'start' }
+    | {
+        type: 'acquisition'
+        source: ReviewAcquisitionSource
+        fileCount: number
+        complete: boolean
+        warnings: string[]
+      }
     | { type: 'thinking'; clusterId?: string; text: string }
     | { type: 'task_plan'; tasks: { id: string; label: string }[] }
     | { type: 'task_update'; taskId: string; status: 'running' | 'done'; detail?: string }
     | { type: 'tool_start'; clusterId?: string; tool: string; label: string; callId: string; detail?: string }
     | { type: 'tool_done'; clusterId?: string; callId: string; label: string; detail?: string; durationMs: number }
-    | { type: 'complete'; review: ReviewData; durationMs: number; stepCount: number }
+    | {
+        type: 'complete'
+        review: ReviewData
+        durationMs: number
+        stepCount: number
+        outcome?: 'complete' | 'partial'
+      }
     | { type: 'error'; message: string }
     | {
         type: 'cluster_plan'
@@ -45,7 +75,15 @@ export type ReviewStreamEvent =
             id: string
             label: string
             focus: string
-            files: { name: string; additions: number; deletions: number; status: string }[]
+            files: {
+                name: string
+                additions: number
+                deletions: number
+                status: string
+                patchState?: 'full' | 'truncated' | 'metadata_only' | 'binary'
+            }[]
         }[]
       }
-    | { type: 'cluster_done'; clusterId: string; issueCount: number; durationMs: number }
+    | { type: 'cluster_done'; clusterId: string; issueCount: number; durationMs: number; attempts?: number }
+    | { type: 'cluster_failed'; clusterId: string; attempts: number; message: string; durationMs: number }
+    | { type: 'synthesis_start'; clusterCount: number }

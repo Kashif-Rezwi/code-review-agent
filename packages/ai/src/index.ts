@@ -6,5 +6,5 @@ export type { GithubPRToolInput, ListPRFilesToolInput, PRFile, FetchFileContentI
 export { ReviewDataSchema, ReviewIssueSchema } from '@cra/types'
 export type { ReviewData, ReviewIssue } from '@cra/types'
 export { chunkText } from './embeddings'
-export { planClusters } from './clustering'
-export type { ClusterPlan } from './clustering'
+export { planClusters, reconcileClusterPlan, buildDeterministicClusters, assertExactCoverage } from './clustering'
+export type { ClusterPlan, ProposedCluster } from './clustering'
