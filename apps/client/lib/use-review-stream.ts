@@ -12,9 +12,10 @@ import {
     StreamPhase,
     ClusterState,
     ClusterFile,
+    AcquisitionState,
 } from './review-stream.reducer'
 
-export type { TaskItem, TraceEntry, StreamPhase, ClusterState, ClusterFile }
+export type { TaskItem, TraceEntry, StreamPhase, ClusterState, ClusterFile, AcquisitionState }
 
 export interface UseReviewStreamReturn {
     phase: StreamPhase
@@ -24,6 +25,9 @@ export interface UseReviewStreamReturn {
     review: ReviewData | null
     error: string | null
     totalDurationMs: number | null
+    acquisition: AcquisitionState | null
+    outcome: 'complete' | 'partial' | null
+    synthesisStarted: boolean
     sessionData: { type: 'CODE' | 'PR'; input: string } | null
     submit: (payload: { code: string } | { prUrl: string }) => Promise<string | undefined>
     reset: () => void
@@ -89,6 +93,7 @@ export function useReviewStream(initialReviewId?: string | null, githubToken?: s
         }
 
         const startStream = async () => {
+            let terminalReceived = false
             try {
                 const res = await fetch(`${API_URL}/review/${initialReviewId}/stream`, {
                     headers,
@@ -108,12 +113,25 @@ export function useReviewStream(initialReviewId?: string | null, githubToken?: s
 
                     dispatch({ type: 'EVENT', event, thinkingSeqId })
 
+                    if (event.type === 'complete' || event.type === 'error') {
+                        terminalReceived = true
+                    }
+
                     // Notice: server will just close the connection on 'complete' / 'error'
                     // consumeSSEStream will return cleanly.
                 })
+                if (!terminalReceived && !abortController.signal.aborted) {
+                    throw new Error('Review stream disconnected before a final result was received.')
+                }
             } catch (err: unknown) {
                 if (err instanceof Error && err.name === 'AbortError') return
-                // Ignore other errors, they could be network drops handled elsewhere or standard fetch errors
+                dispatch({
+                    type: 'EVENT',
+                    event: {
+                        type: 'error',
+                        message: err instanceof Error ? err.message : 'Review stream disconnected unexpectedly.',
+                    },
+                })
             }
         }
 
@@ -134,6 +152,9 @@ export function useReviewStream(initialReviewId?: string | null, githubToken?: s
         review: state.review,
         error: state.error,
         totalDurationMs: state.totalDurationMs,
+        acquisition: state.acquisition,
+        outcome: state.outcome,
+        synthesisStarted: state.synthesisStarted,
         submit,
         reset
     }

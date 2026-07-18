@@ -31,11 +31,11 @@ export async function apiFetch<T>(path: string, init?: RequestInit, token?: stri
 // ── Structured API Endpoints ──────────────────────────────────────────────────
 
 export const historyService = {
-    getReviews: <T = any[]>(token?: string) => 
+    getReviews: <T = unknown[]>(token?: string) =>
         apiFetch<T>('/history', undefined, token),
-    getStats: <T = any>(token?: string) => 
+    getStats: <T = unknown>(token?: string) =>
         apiFetch<T>('/history/stats', undefined, token),
-    getReview: <T = any>(id: string, token?: string) => 
+    getReview: <T = unknown>(id: string, token?: string) =>
         apiFetch<T>(`/history/${id}`, undefined, token),
     deleteReview: (id: string, token?: string) =>
         apiFetch<void>(`/history/${id}`, { method: 'DELETE' }, token),
@@ -55,7 +55,7 @@ export const reviewService = {
 }
 
 export const ragService = {
-    getDocuments: <T = any[]>(token?: string) => 
+    getDocuments: <T = unknown[]>(token?: string) =>
         apiFetch<T>('/rag/documents', undefined, token),
     uploadDocument: <T = unknown>(formData: FormData, token?: string) => 
         apiFetch<T>('/rag/upload', { method: 'POST', body: formData }, token),

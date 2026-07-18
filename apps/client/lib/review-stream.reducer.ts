@@ -31,7 +31,13 @@ export type ClusterState = {
     issueCount?: number
     durationMs?: number
     done: boolean
+    failed?: boolean
+    error?: string
+    attempts?: number
 }
+
+export type AcquisitionState = Extract<ReviewStreamEvent, { type: 'acquisition' }>
+type PendingClusterEvent = { event: ReviewStreamEvent; thinkingSeqId?: number }
 
 export interface ReviewStreamState {
     phase: StreamPhase
@@ -42,6 +48,10 @@ export interface ReviewStreamState {
     sessionData: { type: 'CODE' | 'PR'; input: string } | null
     error: string | null
     totalDurationMs: number | null
+    acquisition: AcquisitionState | null
+    outcome: 'complete' | 'partial' | null
+    synthesisStarted: boolean
+    pendingClusterEvents: Map<string, PendingClusterEvent[]>
 }
 
 export const initialReviewStreamState: ReviewStreamState = {
@@ -53,6 +63,10 @@ export const initialReviewStreamState: ReviewStreamState = {
     sessionData: null,
     error: null,
     totalDurationMs: null,
+    acquisition: null,
+    outcome: null,
+    synthesisStarted: false,
+    pendingClusterEvents: new Map(),
 }
 
 // ── Actions ───────────────────────────────────────────────────────────────────
@@ -72,7 +86,7 @@ export type Action =
 export function reviewStreamReducer(state: ReviewStreamState, action: Action): ReviewStreamState {
     switch (action.type) {
         case 'RESET':
-            return { ...initialReviewStreamState }
+            return { ...initialReviewStreamState, clusterMap: new Map(), pendingClusterEvents: new Map() }
 
         case 'SET_CONNECTING':
             return { ...state, phase: 'connecting' }
@@ -85,6 +99,9 @@ export function reviewStreamReducer(state: ReviewStreamState, action: Action): R
             switch (event.type) {
                 case 'start':
                     return { ...state, phase: 'streaming' }
+
+                case 'acquisition':
+                    return { ...state, acquisition: event }
 
                 case 'task_plan':
                     return {
@@ -112,7 +129,21 @@ export function reviewStreamReducer(state: ReviewStreamState, action: Action): R
                             done: false,
                         })
                     }
-                    return { ...state, clusterMap: nextMap }
+                    let nextState: ReviewStreamState = {
+                        ...state,
+                        clusterMap: nextMap,
+                        pendingClusterEvents: new Map(),
+                    }
+                    for (const pending of state.pendingClusterEvents.values()) {
+                        for (const item of pending) {
+                            nextState = reviewStreamReducer(nextState, {
+                                type: 'EVENT',
+                                event: item.event,
+                                thinkingSeqId: item.thinkingSeqId,
+                            })
+                        }
+                    }
+                    return nextState
                 }
 
                 case 'cluster_done': {
@@ -123,11 +154,32 @@ export function reviewStreamReducer(state: ReviewStreamState, action: Action): R
                             ...existing,
                             issueCount: event.issueCount,
                             durationMs: event.durationMs,
+                            attempts: event.attempts,
                             done: true,
                         })
+                    } else {
+                        return bufferClusterEvent(state, event.clusterId, event, action.thinkingSeqId)
                     }
                     return { ...state, clusterMap: nextMap }
                 }
+
+                case 'cluster_failed': {
+                    const nextMap = new Map(state.clusterMap)
+                    const existing = nextMap.get(event.clusterId)
+                    if (!existing) return bufferClusterEvent(state, event.clusterId, event, action.thinkingSeqId)
+                    nextMap.set(event.clusterId, {
+                        ...existing,
+                        durationMs: event.durationMs,
+                        attempts: event.attempts,
+                        done: true,
+                        failed: true,
+                        error: event.message,
+                    })
+                    return { ...state, clusterMap: nextMap }
+                }
+
+                case 'synthesis_start':
+                    return { ...state, synthesisStarted: true }
 
                 case 'thinking': {
                     const entry: TraceEntry = {
@@ -142,6 +194,8 @@ export function reviewStreamReducer(state: ReviewStreamState, action: Action): R
                         const c = nextMap.get(cid)
                         if (c) {
                             nextMap.set(cid, { ...c, traceEntries: [...c.traceEntries, entry] })
+                        } else {
+                            return bufferClusterEvent(state, cid, event, action.thinkingSeqId)
                         }
                         return { ...state, clusterMap: nextMap }
                     } else {
@@ -165,6 +219,8 @@ export function reviewStreamReducer(state: ReviewStreamState, action: Action): R
                         const c = nextMap.get(cid)
                         if (c) {
                             nextMap.set(cid, { ...c, traceEntries: [...c.traceEntries, entry] })
+                        } else {
+                            return bufferClusterEvent(state, cid, event, action.thinkingSeqId)
                         }
                         return { ...state, clusterMap: nextMap }
                     } else {
@@ -190,6 +246,8 @@ export function reviewStreamReducer(state: ReviewStreamState, action: Action): R
                                     : e
                             )
                             nextMap.set(cid, { ...c, traceEntries: updated })
+                        } else {
+                            return bufferClusterEvent(state, cid, event, action.thinkingSeqId)
                         }
                         return { ...state, clusterMap: nextMap }
                     } else {
@@ -218,6 +276,7 @@ export function reviewStreamReducer(state: ReviewStreamState, action: Action): R
                         clusterMap: nextMap,
                         review: event.review,
                         totalDurationMs: event.durationMs,
+                        outcome: event.outcome ?? 'complete',
                         phase: 'complete',
                     }
                 }
@@ -237,4 +296,15 @@ export function reviewStreamReducer(state: ReviewStreamState, action: Action): R
         default:
             return state
     }
+}
+
+function bufferClusterEvent(
+    state: ReviewStreamState,
+    clusterId: string,
+    event: ReviewStreamEvent,
+    thinkingSeqId?: number,
+): ReviewStreamState {
+    const pending = new Map(state.pendingClusterEvents)
+    pending.set(clusterId, [...(pending.get(clusterId) ?? []), { event, thinkingSeqId }])
+    return { ...state, pendingClusterEvents: pending }
 }

@@ -79,7 +79,7 @@ export function useStandardsDocuments(githubToken?: string): UseStandardsDocumen
         } finally {
             setIsUploading(false)
         }
-    }, [fetchDocuments])
+    }, [fetchDocuments, githubToken])
 
     const deleteDocument = useCallback(async (id: string, name: string) => {
         setDeletingId(id)
@@ -92,7 +92,7 @@ export function useStandardsDocuments(githubToken?: string): UseStandardsDocumen
         } finally {
             setDeletingId(null)
         }
-    }, [])
+    }, [githubToken])
 
     return {
         documents,
