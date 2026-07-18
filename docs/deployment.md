@@ -78,7 +78,7 @@ A managed Redis instance. The `REDIS_URL` environment variable is automatically 
 | `DIRECT_URL` | Neon direct connection string (for Prisma) |
 | `GITHUB_CLIENT_ID` | GitHub OAuth App |
 | `GITHUB_CLIENT_SECRET` | GitHub OAuth App |
-| `GITHUB_TOKEN` | *(Optional)* For private repo PR reviews. Not in `.env.example` — add manually if needed |
+| `GITHUB_TOKEN` | *(Optional)* For private repo PR reviews; declared as a secret in `render.yaml` |
 | `HELICONE_API_KEY` | *(Optional)* AI observability |
 
 ---
@@ -235,7 +235,7 @@ Both apps have multi-stage Dockerfiles for minimal production images.
 | `GITHUB_CLIENT_ID` | Yes | GitHub OAuth App client ID |
 | `GITHUB_CLIENT_SECRET` | Yes | GitHub OAuth App client secret |
 | `FRONTEND_URL` | Yes | Client origin (for CORS) |
-| `GITHUB_TOKEN` | No | PAT for private repo PR access (not in `.env.example` — add manually) |
+| `GITHUB_TOKEN` | No | PAT for private repo PR access; present in `.env.example` and must be supplied per environment |
 | `HELICONE_API_KEY` | No | AI observability proxy key |
 | `GROQ_API_KEY` | No | Alternative AI provider |
 | `STRIPE_SECRET_KEY` | No | Stripe billing integration |
