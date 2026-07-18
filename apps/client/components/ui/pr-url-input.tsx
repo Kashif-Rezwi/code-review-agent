@@ -58,8 +58,7 @@ export function PrUrlInput({ value, onChange, onSubmit, disabled, isLoading }: P
             )}
 
             <p className="text-xs text-gray-600">
-                Public repositories only — private repos require a{' '}
-                <code className="text-gray-500">GITHUB_TOKEN</code> on the server.
+                Public repositories only.
             </p>
         </div>
     )
