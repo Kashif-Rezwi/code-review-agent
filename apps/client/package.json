@@ -7,6 +7,9 @@
     "dev": "lsof -ti:3000 | xargs kill -9 || true && rm -rf .next && next dev",
     "dev:clean": "rm -rf .next && next dev",
     "build": "pnpm -w build:packages && next build",
+    "type-check": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "start": "next start",
     "lint": "eslint"
   },
@@ -33,9 +36,13 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.0",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "jsdom": "^26.1.0",
+    "vitest": "^3.2.4"
   }
 }
