@@ -1,4 +1,4 @@
-import { CheckCircle2, BookOpen } from 'lucide-react'
+import { AlertTriangle, BookOpen, CheckCircle2, FileWarning } from 'lucide-react'
 import { ScoreRing } from './score-ring'
 import { IssueCard } from './issue-card'
 import type { ReviewData } from '@/types/review.types'
@@ -8,9 +8,46 @@ import type { ReviewData } from '@/types/review.types'
 export function ReviewPanel({ review }: { review: ReviewData }) {
     const criticalCount = review.issues.filter(i => i.severity === 'critical').length
     const warningCount = review.issues.filter(i => i.severity === 'warning').length
+    const coverage = review.coverage
+    const isPartial = (coverage?.failedClusters.length ?? 0) > 0 || (coverage?.unreviewedFiles.length ?? 0) > 0
+    const hasContextWarnings = (coverage?.truncatedFiles.length ?? 0) > 0 || (coverage?.metadataOnlyFiles.length ?? 0) > 0
 
     return (
         <div className="space-y-4">
+            {coverage && (isPartial || hasContextWarnings) && (
+                <div className={`rounded-lg border px-4 py-3 ${isPartial
+                    ? 'border-amber-500/40 bg-amber-950/20'
+                    : 'border-blue-500/25 bg-blue-950/10'
+                }`}>
+                    <div className="flex items-start gap-2.5">
+                        {isPartial
+                            ? <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0 text-amber-400" />
+                            : <FileWarning className="h-4 w-4 mt-0.5 shrink-0 text-blue-400" />
+                        }
+                        <div className="min-w-0 space-y-1.5">
+                            <p className={`text-sm font-medium ${isPartial ? 'text-amber-200' : 'text-blue-200'}`}>
+                                {isPartial
+                                    ? `Partial review — ${coverage.reviewedFiles}/${coverage.totalFiles} files reviewed`
+                                    : `Review completed with limited context for ${coverage.truncatedFiles.length + coverage.metadataOnlyFiles.length} file${coverage.truncatedFiles.length + coverage.metadataOnlyFiles.length === 1 ? '' : 's'}`
+                                }
+                            </p>
+                            <p className="text-xs text-gray-400">
+                                Acquired via {coverage.acquisitionSource === 'public_diff' ? 'the public diff fallback' : 'the GitHub files API'}.
+                            </p>
+                            {coverage.unreviewedFiles.length > 0 && (
+                                <CoverageFileList label="Not reviewed" files={coverage.unreviewedFiles} tone="amber" />
+                            )}
+                            {coverage.truncatedFiles.length > 0 && (
+                                <CoverageFileList label="Truncated context" files={coverage.truncatedFiles} tone="blue" />
+                            )}
+                            {coverage.metadataOnlyFiles.length > 0 && (
+                                <CoverageFileList label="Metadata only" files={coverage.metadataOnlyFiles} tone="gray" />
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* Header: score ring + summary */}
             <div className="rounded-lg border border-gray-800 bg-gray-900/40 p-4 flex items-start gap-4">
                 <ScoreRing score={review.score} />
@@ -79,5 +116,23 @@ export function ReviewPanel({ review }: { review: ReviewData }) {
                 </div>
             )}
         </div>
+    )
+}
+
+function CoverageFileList({
+    label,
+    files,
+    tone,
+}: {
+    label: string
+    files: string[]
+    tone: 'amber' | 'blue' | 'gray'
+}) {
+    const color = tone === 'amber' ? 'text-amber-300/80' : tone === 'blue' ? 'text-blue-300/80' : 'text-gray-400'
+    return (
+        <p className="text-xs text-gray-500 break-words">
+            <span className={color}>{label}:</span>{' '}
+            {files.join(', ')}
+        </p>
     )
 }

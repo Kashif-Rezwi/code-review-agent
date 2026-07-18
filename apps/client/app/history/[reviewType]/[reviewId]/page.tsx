@@ -26,6 +26,7 @@ interface FullReview extends ReviewData {
     input: string
     conversations: ChatMessage[]
     traceLog: ReviewStreamEvent[] | null
+    status: 'COMPLETE' | 'PARTIAL'
 }
 
 export default function ReviewDetailPage() {
@@ -66,8 +67,10 @@ export default function ReviewDetailPage() {
     }, [submit, scrollToBottom, isAtBottomRef])
 
     // ── HOTFIX: Hooks must execute before early returns (React Error 310) ──
-    const { traceEntries, clusterMap, taskItems, totalDurationMs, mode } =
-        useTraceReplay(review?.traceLog ?? null)
+    const {
+        traceEntries, clusterMap, taskItems, totalDurationMs, mode,
+        acquisition, outcome, synthesisStarted,
+    } = useTraceReplay(review?.traceLog ?? null, review?.type)
 
     const hasTrace = traceEntries.length > 0 || clusterMap.size > 0 || taskItems.length > 0
 
@@ -124,6 +127,9 @@ export default function ReviewDetailPage() {
                                         clusterMap={clusterMap}
                                         totalDurationMs={totalDurationMs}
                                         mode={mode}
+                                        acquisition={acquisition}
+                                        outcome={outcome ?? (review.status === 'PARTIAL' ? 'partial' : 'complete')}
+                                        synthesisStarted={synthesisStarted}
                                     />
                                 </div>
                             </div>

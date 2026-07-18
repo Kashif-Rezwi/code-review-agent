@@ -6,12 +6,11 @@ import { cn } from '@/lib/utils'
 interface ReviewActionContainerProps {
     phase: string
     isStreaming: boolean
-    mode: 'code' | 'pr'
     clusterMapSize: number
     totalDurationMs: number | null
+    outcome?: 'complete' | 'partial' | null
     canSubmit: boolean
     hasAnyInput: boolean
-    isLocked: boolean
     handleReview: () => void
     handleClear: () => void
 }
@@ -19,12 +18,11 @@ interface ReviewActionContainerProps {
 export function ReviewActionContainer({
     phase,
     isStreaming,
-    mode,
     clusterMapSize,
     totalDurationMs,
+    outcome,
     canSubmit,
     hasAnyInput,
-    isLocked,
     handleReview,
     handleClear,
 }: ReviewActionContainerProps) {
@@ -48,6 +46,8 @@ export function ReviewActionContainer({
                                 ? 'text-blue-400/80 animate-pulse'
                                 : phase === 'error'
                                 ? 'text-red-500'
+                                : outcome === 'partial'
+                                ? 'text-amber-400'
                                 : 'text-green-500'
                         )}
                     />
@@ -72,7 +72,7 @@ export function ReviewActionContainer({
                                 <Loader2 className="h-4 w-4 shrink-0 animate-spin text-blue-400 ml-3" />
                             </span>
                         )}
-                        {phase === 'complete' && 'Review complete'}
+                        {phase === 'complete' && (outcome === 'partial' ? 'Review partial' : 'Review complete')}
                         {phase === 'error' && 'Review failed'}
                     </span>
 

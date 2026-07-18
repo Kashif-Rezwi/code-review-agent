@@ -2,9 +2,8 @@
 
 import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, BrainCircuit, Clock, Code2, GitPullRequest, Loader2 } from 'lucide-react'
+import { AlertTriangle } from 'lucide-react'
 import { AppHeader } from '@/components/layout/app-header'
-import { PageHeader } from '@/components/layout/page-header'
 import { ErrorBanner } from '@/components/ui/error-banner'
 import { CodeEditor } from '@/components/review/code-editor'
 import { ReviewPanel } from '@/components/review/review-panel'
@@ -21,7 +20,6 @@ import { ReviewHeader } from '@/components/review/review-header'
 import { ReviewActionContainer } from '@/components/review/review-action-container'
 import { ReviewErrorBoundary } from '@/components/ui/error-boundary'
 import { useReviewScroll } from '@/lib/hooks/use-review-scroll'
-import { cn } from '@/lib/utils'
 import { useSession } from 'next-auth/react'
 
 type Mode = 'code' | 'pr'
@@ -33,24 +31,18 @@ export function ReviewPageClient({ initialReviewType, initialReviewId }: { initi
     const [code, setCode] = useState('')
     const [prUrl, setPrUrl] = useState('')
 
-    const { data: session, status } = useSession()
+    const { data: session } = useSession()
     const githubToken = session?.githubToken
 
-    const { phase, taskItems, traceEntries, clusterMap, sessionData, review, error, totalDurationMs, submit, reset } = useReviewStream(initialReviewId, githubToken)
+    const {
+        phase, taskItems, traceEntries, clusterMap, sessionData, review, error,
+        totalDurationMs, acquisition, outcome, synthesisStarted, submit, reset,
+    } = useReviewStream(initialReviewId, githubToken)
 
     const isStreaming = phase === 'connecting' || phase === 'streaming'
     const { bottomRef, contentRef, scrollToBottom, isAtBottom, isAtBottomRef } = useReviewScroll({ isStreaming })
-
-    useEffect(() => {
-        if (sessionData && sessionData.type) {
-            const isCode = sessionData.type.toUpperCase() === 'CODE'
-            if (isCode) {
-                setCode(sessionData.input || '')
-            } else {
-                setPrUrl(sessionData.input || '')
-            }
-        }
-    }, [sessionData])
+    const displayedCode = sessionData?.type === 'CODE' ? sessionData.input : code
+    const displayedPrUrl = sessionData?.type === 'PR' ? sessionData.input : prUrl
 
     // reviewId drives the follow-up chat — available once complete event arrives.
     const reviewId = review?.id ?? null
@@ -60,8 +52,8 @@ export function ReviewPageClient({ initialReviewType, initialReviewId }: { initi
     const chatSectionRef = useRef<HTMLDivElement>(null)
     const rafRef = useRef<number | null>(null)
 
-    const detectedLanguage = useMemo(() => detectLanguage(code), [code])
-    const tokenCount = useMemo(() => estimateTokens(code), [code])
+    const detectedLanguage = useMemo(() => detectLanguage(displayedCode), [displayedCode])
+    const tokenCount = useMemo(() => estimateTokens(displayedCode), [displayedCode])
     const isOverLimit = tokenCount > CODE_TOKEN_LIMIT
 
     // Lock inputs if there's an initial ID or if we are streaming/complete/error
@@ -69,8 +61,8 @@ export function ReviewPageClient({ initialReviewType, initialReviewId }: { initi
 
     const canSubmit =
         mode === 'code'
-            ? code.trim().length > 0 && !isOverLimit
-            : isValidPrUrl(prUrl)
+            ? displayedCode.trim().length > 0 && !isOverLimit
+            : isValidPrUrl(displayedPrUrl)
 
     const handleEditorChange = useCallback((value: string | undefined) => {
         setCode(value ?? '')
@@ -78,7 +70,7 @@ export function ReviewPageClient({ initialReviewType, initialReviewId }: { initi
 
     const handleReview = async () => {
         if (!canSubmit || isStreaming) return
-        const id = await submit(mode === 'code' ? { code } : { prUrl })
+        const id = await submit(mode === 'code' ? { code: displayedCode } : { prUrl: displayedPrUrl })
         if (id) {
             router.push(`/review/${mode === 'code' ? 'paste_code' : 'github_pr'}/${id}`)
         }
@@ -172,21 +164,21 @@ export function ReviewPageClient({ initialReviewType, initialReviewId }: { initi
 
                 {mode === 'code' ? (
                     <CodeEditor
-                        value={code}
+                        value={displayedCode}
                         language={detectedLanguage}
                         tokenCount={tokenCount}
                         isOverLimit={isOverLimit}
                         onChange={isLocked ? undefined : handleEditorChange}
                         readOnly={isLocked}
-                        isLoading={!!initialReviewId && !code}
+                        isLoading={!!initialReviewId && !sessionData}
                     />
                 ) : (
                     <PrUrlInput
-                        value={prUrl}
+                        value={displayedPrUrl}
                         onChange={setPrUrl}
                         onSubmit={handleReview}
                         disabled={isLocked}
-                        isLoading={!!initialReviewId && !prUrl}
+                        isLoading={!!initialReviewId && !sessionData}
                     />
                 )}
 
@@ -200,12 +192,11 @@ export function ReviewPageClient({ initialReviewType, initialReviewId }: { initi
                 <ReviewActionContainer
                     phase={phase}
                     isStreaming={isStreaming}
-                    mode={mode}
                     clusterMapSize={clusterMap.size}
                     totalDurationMs={totalDurationMs}
+                    outcome={outcome}
                     canSubmit={canSubmit}
-                    hasAnyInput={!!(code || prUrl || review || isLocked)}
-                    isLocked={isLocked}
+                    hasAnyInput={!!(displayedCode || displayedPrUrl || review || isLocked)}
                     handleReview={handleReview}
                     handleClear={handleClear}
                 />
@@ -220,6 +211,9 @@ export function ReviewPageClient({ initialReviewType, initialReviewId }: { initi
                         clusterMap={clusterMap}
                         totalDurationMs={totalDurationMs}
                         mode={mode}
+                        acquisition={acquisition}
+                        outcome={outcome}
+                        synthesisStarted={synthesisStarted}
                     />
                 )}
 
