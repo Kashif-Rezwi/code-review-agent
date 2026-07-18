@@ -48,6 +48,7 @@ model DocumentChunk {
 enum ReviewStatus {
   PENDING
   COMPLETE
+  PARTIAL
   FAILED
   CANCELLED
 }
@@ -68,6 +69,7 @@ model Review {
   positives        String[]       @default([])
   appliedStandards String[]       @default([])
   traceLog         Json?          // ordered array of ReviewStreamEvent; null for pre-migration rows
+  coverage         Json?          // PR file/cluster coverage metadata; null for legacy/code reviews
   issues           Issue[]
   conversations    Conversation[]
   createdAt        DateTime       @default(now())
