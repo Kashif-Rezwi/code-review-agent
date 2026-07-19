@@ -29,6 +29,7 @@ const reviewData: ReviewData = {
 
 describe('ReviewRepository terminal state transitions', () => {
   let review: ReviewDelegateMock;
+  let reviewDispatch: { create: jest.Mock; updateMany: jest.Mock };
   let repository: ReviewRepository;
 
   beforeEach(() => {
@@ -40,9 +41,42 @@ describe('ReviewRepository terminal state transitions', () => {
     const config = {
       get: jest.fn().mockReturnValue('postgresql://configured'),
     } as unknown as ConfigService;
-    const prisma = { review } as unknown as PrismaService;
+    reviewDispatch = {
+      create: jest.fn(),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+    };
+    const prisma = {
+      review,
+      reviewDispatch,
+      $transaction: jest.fn((callback: (transaction: unknown) => unknown) =>
+        Promise.resolve(callback({ review, reviewDispatch })),
+      ),
+    } as unknown as PrismaService;
 
     repository = new ReviewRepository(config, prisma);
+  });
+
+  it('creates the review and dispatch intent in the same transaction', async () => {
+    review.create.mockResolvedValue({
+      id: 'review-1',
+      type: 'PR',
+      input: 'https://github.com/acme/repo/pull/1',
+      userId: 'user-1',
+      status: 'PENDING',
+    });
+    reviewDispatch.create.mockResolvedValue({ id: 'dispatch-1' });
+
+    await expect(repository.createSession('PR', 'https://github.com/acme/repo/pull/1', 'user-1'))
+      .resolves.toMatchObject({ id: 'review-1' });
+    expect(review.create).toHaveBeenCalledWith({
+      data: {
+        userId: 'user-1',
+        type: 'PR',
+        input: 'https://github.com/acme/repo/pull/1',
+        status: 'PENDING',
+      },
+    });
+    expect(reviewDispatch.create).toHaveBeenCalledWith({ data: { reviewId: 'review-1' } });
   });
 
   describe('markFailed', () => {

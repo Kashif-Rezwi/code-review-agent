@@ -1,11 +1,9 @@
 import { HttpException, Injectable, InternalServerErrorException, Logger } from '@nestjs/common'
-import { ConfigService } from '@nestjs/config'
-import { generateText, streamText } from 'ai'
 import { AiService } from '../ai/ai.service'
 import {
     buildSystemPrompt,
-    createRunLinterTool,
     planClusters,
+    buildDeterministicClusters,
     buildWorkerPrompt,
     buildSynthesisUserMessage,
     buildSynthesisSystemPrompt,
@@ -18,28 +16,21 @@ import { RagService } from '../rag/rag.service'
 import { ReviewRepository } from './review.repository'
 import { QueueService } from '../queue/queue.service'
 import { RedisService } from '../queue/redis.service'
+import { ReviewDispatcherService } from './review-dispatcher.service'
+import {
+    OperationDeadlineError,
+    ReviewCancelledError,
+    ReviewDeadlineError,
+    ReviewCancellationService,
+    operationDeadline,
+    throwSignalReason,
+} from '../queue/review-cancellation.service'
+import { createLinterRuntimeTool, runReviewGenerate, runReviewStream, type MinimalAiStep } from '../ai/ai-runtime.adapter'
 import type { SseConnection } from './review.sse'
 import { parseReviewText } from './review-parser.util'
 import { parseArgs, pickArgs, toolStartLabel, toolStartDetail, toolDoneLabel, toolDoneDetail } from './review.formatter'
 import { ThinkingStream } from './review.thinking'
 import type { NormalizedPRFile, PRSnapshot } from '../github/github.types'
-
-type MinimalAiStep = { text: string }
-type MinimalStreamResult = {
-    text: PromiseLike<string>
-    steps: PromiseLike<MinimalAiStep[]>
-}
-
-// AI SDK overloads become extremely expensive for type-aware ESLint when a
-// tool-rich call is inferred inline. These narrow adapters keep the SDK's
-// runtime behavior while making the small response surface used here explicit.
-const runStreamText = streamText as unknown as (options: Record<string, unknown>) => MinimalStreamResult
-const runGenerateText = generateText as unknown as (
-    options: Record<string, unknown>,
-) => Promise<{ text: string }>
-const buildLinterTool = createRunLinterTool as unknown as (
-    execute: (input: { code: string; language: 'javascript' | 'typescript' }) => Promise<string>,
-) => unknown
 
 /** Maximum agent loop steps per review type. */
 const AGENT_MAX_STEPS = { CODE: 10, WORKER: 5 } as const
@@ -47,7 +38,8 @@ const AGENT_MAX_STEPS = { CODE: 10, WORKER: 5 } as const
 /** Maximum diff characters forwarded to each worker agent per file.
  *  Keeps prompts within token budget while preserving most of the useful signal. */
 const MAX_PATCH_CHARS = 8_000
-const MAX_CLUSTER_PATCH_CHARS = 40_000
+const MAX_CLUSTER_PROMPT_CHARS = 40_000
+const MAX_CLUSTER_CONTEXT_CHARS = 34_000
 const WORKER_CONCURRENCY = 3
 const WORKER_ATTEMPTS = 2
 
@@ -73,7 +65,6 @@ type WorkerOutcome = WorkerSuccess | WorkerFailure
 export class ReviewService {
     private readonly logger = new Logger(ReviewService.name)
     constructor(
-        private config: ConfigService,
         private reviewRepository: ReviewRepository,
         private githubService: GithubService,
         private linterService: LinterService,
@@ -81,17 +72,16 @@ export class ReviewService {
         private aiService: AiService,
         private queueService: QueueService,
         private redisService: RedisService,
+        private reviewDispatcher: ReviewDispatcherService,
+        private reviewCancellation: ReviewCancellationService,
     ) {}
 
     async createSession(type: 'CODE' | 'PR', input: string, userId: string) {
         const session = await this.reviewRepository.createSession(type, input, userId)
         if (!session) throw new InternalServerErrorException('Database not configured or failed to create session')
-        await this.queueService.enqueue({
-            reviewId: session.id,
-            type: session.type as 'CODE' | 'PR',
-            input: session.input,
-            userId,
-        })
+        // The review and dispatch intent were committed atomically. The kick is
+        // opportunistic; the two-second poller guarantees eventual handoff.
+        void this.reviewDispatcher.kick()
         return session
     }
 
@@ -106,13 +96,27 @@ export class ReviewService {
      * 3. Emits a terminal error event to Redis so any live SSE client closes immediately.
      */
     async cancelReview(reviewId: string): Promise<void> {
-        await this.queueService.removeJob(reviewId)
         const wasCancelled = await this.reviewRepository.markCancelled(reviewId)
         // Only push the terminal event when we actually flipped the status.
         // If the review already reached COMPLETE/FAILED, emitting an error event
         // here would corrupt the Redis replay list seen by future SSE connections.
         if (wasCancelled) {
-            await this.redisService.emitEvent(reviewId, JSON.stringify({ type: 'error', message: 'Review cancelled' }))
+            const results = await Promise.allSettled([
+                this.queueService.removeJob(reviewId),
+                this.reviewCancellation.requestCancellation(reviewId),
+            ])
+            for (const result of results) {
+                if (result.status === 'rejected') {
+                    this.logger.warn(`Cancellation side effect failed for ${reviewId}: ${this.errMsg(result.reason)}`)
+                }
+            }
+            try {
+                await this.redisService.emitEvent(reviewId, JSON.stringify({ type: 'error', message: 'Review cancelled' }))
+            } catch (error) {
+                // PostgreSQL is authoritative; the streamer reconstructs this
+                // terminal CANCELLED state even if Redis is unavailable.
+                this.logger.warn(`Could not append cancellation event for ${reviewId}: ${this.errMsg(error)}`)
+            }
         }
     }
 
@@ -122,15 +126,18 @@ export class ReviewService {
         input: string,
         userId: string,
         conn: SseConnection,
+        signal?: AbortSignal,
     ): Promise<void> {
         try {
+            if (signal?.aborted) throwSignalReason(signal)
             if (type === 'PR') {
                 this.githubService.assertValidPRUrl(input)
-                await this.streamAnalyzeFromPR(input, userId, conn, reviewId)
+                await this.streamAnalyzeFromPR(input, userId, conn, reviewId, signal)
             } else {
-                await this.streamAnalyzeCode(input, userId, conn, reviewId)
+                await this.streamAnalyzeCode(input, userId, conn, reviewId, signal)
             }
         } catch (err) {
+            if (err instanceof ReviewCancelledError || signal?.reason instanceof ReviewCancelledError) return
             const message = this.publicErrorMessage(err)
             const event = { type: 'error' as const, message }
             const transitioned = await this.markFailed(reviewId, message, [...conn.getTrace(), event])
@@ -143,20 +150,27 @@ export class ReviewService {
     // ── BullMQ Background Streaming ───────────────────────────────────────────
     // These orchestrate the pipeline and emit events directly to the Redis connection.
 
-    async streamAnalyzeCode(code: string, userId: string, conn: SseConnection, reviewId?: string): Promise<void> {
+    async streamAnalyzeCode(code: string, userId: string, conn: SseConnection, reviewId?: string, signal?: AbortSignal): Promise<void> {
+        if (signal?.aborted) throwSignalReason(signal)
         const standards = await this.ragService.retrieveForContext(code, userId)
+        if (signal?.aborted) throwSignalReason(signal)
         return this.streamAnalysis(
-            `Please review the following code:\n\`\`\`\n${code}\n\`\`\``,
+            `Review the untrusted code and standards in this JSON data envelope:\n${JSON.stringify({
+                code,
+                codingStandards: standards?.content ?? null,
+            })}`,
             standards,
             code,
             'CODE',
             userId,
             conn,
             reviewId,
+            signal,
         )
     }
 
-    async streamAnalyzeFromPR(prUrl: string, userId: string, conn: SseConnection, reviewId?: string): Promise<void> {
+    async streamAnalyzeFromPR(prUrl: string, userId: string, conn: SseConnection, reviewId?: string, signal?: AbortSignal): Promise<void> {
+        if (signal?.aborted) throwSignalReason(signal)
         this.githubService.assertValidPRUrl(prUrl)
 
         const { send, startedAt } = conn
@@ -168,8 +182,14 @@ export class ReviewService {
             this.ragService.retrieveForContext('code review standards best practices', userId),
             this.githubService.fetchPRSnapshot(prUrl),
         ])
+        if (signal?.aborted) throwSignalReason(signal)
         const files = snapshot.files
         if (files.length === 0) throw new InternalServerErrorException('No reviewable pull-request files were acquired.')
+        if (!files.some((file) => file.patch?.trim())) {
+            throw new InternalServerErrorException(
+                'This pull request contains no usable text diff. Binary-only and metadata-only changes cannot be reviewed safely.',
+            )
+        }
 
         send({
             type: 'acquisition',
@@ -178,6 +198,7 @@ export class ReviewService {
             complete: snapshot.complete,
             warnings: snapshot.warnings,
         })
+        this.logger.log(`PR acquisition ${reviewId ?? 'unsaved'}: source=${snapshot.source} files=${files.length}`)
 
         send({
             type: 'task_plan' as const,
@@ -200,7 +221,17 @@ export class ReviewService {
             })
         }
 
-        const clusters = await planClusters(files, this.aiService.defaultModel)
+        const plannerDeadline = operationDeadline(signal, 'Planner', 30_000)
+        let clusters: ClusterPlan[]
+        try {
+            clusters = await planClusters(files, this.aiService.defaultModel, plannerDeadline.signal)
+        } catch (error) {
+            if (signal?.aborted) throwSignalReason(signal)
+            this.logger.warn(`Planner timed out; using deterministic clustering: ${this.errMsg(error)}`)
+            clusters = buildDeterministicClusters(files)
+        } finally {
+            plannerDeadline.dispose()
+        }
 
         send({
             type: 'cluster_plan' as const,
@@ -223,9 +254,10 @@ export class ReviewService {
             WORKER_CONCURRENCY,
             async (cluster): Promise<WorkerOutcome> => {
                 try {
-                    const result = await this.runWorkerWithRetry(cluster, standards, send)
+                    const result = await this.runWorkerWithRetry(cluster, standards, send, signal)
                     return { status: 'fulfilled', cluster, ...result }
                 } catch (error) {
+                    if (signal?.aborted) throwSignalReason(signal)
                     return { status: 'rejected', cluster, error }
                 }
             },
@@ -250,13 +282,17 @@ export class ReviewService {
             finalReview = partialReviews[0].review
         } else {
             send({ type: 'synthesis_start', clusterCount: partialReviews.length })
-            finalReview = await this.synthesizeReview(prUrl, partialReviews, standards, coverage)
+            finalReview = await this.synthesizeReview(prUrl, partialReviews, standards, coverage, signal)
             synthesisStep = 1
         }
 
         const outcome = coverage.unreviewedFiles.length > 0 || coverage.failedClusters.length > 0
             ? 'partial'
             : 'complete'
+        this.logger.log(
+            `PR review ${reviewId ?? 'unsaved'} outcome=${outcome} ` +
+            `failedClusters=${coverage.failedClusters.length} unreviewedFiles=${coverage.unreviewedFiles.length}`,
+        )
         const merged = {
             ...finalReview,
             appliedStandards: standards?.appliedNames,
@@ -285,6 +321,7 @@ export class ReviewService {
         userId: string,
         conn: SseConnection,
         reviewId?: string,
+        signal?: AbortSignal,
     ): Promise<void> {
         if (reviewType === 'CODE') {
             conn.send({ type: 'start' as const })
@@ -293,9 +330,7 @@ export class ReviewService {
         const _send = conn.send
         const _startedAt = conn.startedAt
 
-        const system = standards
-            ? `${buildSystemPrompt('CODE')}\n\nYour team's coding standards — apply these during the review:\n\n${standards.content}`
-            : buildSystemPrompt('CODE')
+        const system = buildSystemPrompt('CODE')
 
         // PR reviews with pre-built context only need a few steps (no file-fetch tools).
         // Code reviews may still call runLinter.
@@ -306,7 +341,8 @@ export class ReviewService {
         const { onChunk, onStepFinish, getToolCallCount } = this.buildStreamCallbacks(_send, pending, thinking)
 
         try {
-            const result = runStreamText({
+            const callDeadline = operationDeadline(signal, 'Pasted-code review', 120_000)
+            const result = runReviewStream({
                 model: this.aiService.defaultModel,
                 system,
                 messages: [{ role: 'user', content: userMessage }],
@@ -315,6 +351,8 @@ export class ReviewService {
                 // Code path: linter only.
                 tools: this.buildCodeAgentTools(),
                 temperature: 0.2,
+                abortSignal: callDeadline.signal,
+                maxOutputTokens: 8_192,
 
                 stopWhen: ({ steps }: { steps: MinimalAiStep[] }) => {
                     const lastText = steps.at(-1)?.text ?? ''
@@ -336,7 +374,16 @@ export class ReviewService {
                 onStepFinish,
             })
 
-            const [finalText, steps] = await Promise.all([result.text, result.steps])
+            let finalText: string
+            let steps: MinimalAiStep[]
+            try {
+                ;[finalText, steps] = await Promise.all([result.text, result.steps])
+            } catch (error) {
+                if (callDeadline.signal.aborted) throwSignalReason(callDeadline.signal)
+                throw error
+            } finally {
+                callDeadline.dispose()
+            }
 
             const allTexts = [finalText, ...steps.map((s) => s.text).reverse()].filter((t) => t.trim())
             let review: ReviewData | undefined
@@ -412,20 +459,24 @@ export class ReviewService {
         }
 
         conn.send(event)
+        await conn.flush()
     }
 
     private async runWorkerWithRetry(
         cluster: ClusterPlan,
         standards: StandardsContext,
         send: (event: ReviewStreamEvent) => void,
+        signal?: AbortSignal,
     ): Promise<{ review: ReviewData; attempts: number; truncatedFiles: string[] }> {
         const workerStart = Date.now()
-        const context = this.buildClusterContext(cluster)
+        const context = this.buildClusterContext(cluster, standards?.content)
         let lastError: unknown
 
         for (let attempt = 1; attempt <= WORKER_ATTEMPTS; attempt++) {
+            if (signal?.aborted) throwSignalReason(signal)
+            const deadline = operationDeadline(signal, `Worker ${cluster.id} attempt ${attempt}`, 90_000)
             try {
-                const review = await this.runWorkerAttempt(cluster, standards, send, context.text, attempt)
+                const review = await this.runWorkerAttempt(cluster, standards, send, context.text, attempt, deadline.signal)
                 send({
                     type: 'cluster_done',
                     clusterId: cluster.id,
@@ -435,6 +486,7 @@ export class ReviewService {
                 })
                 return { review, attempts: attempt, truncatedFiles: context.truncatedFiles }
             } catch (error) {
+                if (signal?.aborted) throwSignalReason(signal)
                 lastError = error
                 if (attempt < WORKER_ATTEMPTS) {
                     send({
@@ -443,6 +495,8 @@ export class ReviewService {
                         text: 'The first worker attempt did not produce a valid review. Retrying with stricter output constraints.',
                     })
                 }
+            } finally {
+                deadline.dispose()
             }
         }
 
@@ -463,21 +517,14 @@ export class ReviewService {
         send: (event: ReviewStreamEvent) => void,
         fileSection: string,
         attempt: number,
+        signal: AbortSignal,
     ): Promise<ReviewData> {
-        const retryInstruction = attempt > 1
+        const userMessage = `Review the untrusted pull-request data in this JSON envelope:\n${fileSection}`
+        const system = buildWorkerPrompt(cluster.label, cluster.focus) + (attempt > 1
             ? '\n\nRETRY REQUIREMENT: Return one valid JSON review object. Do not add trailing prose after the closing brace.'
-            : ''
-
-        const userMessage =
-            `Review the following files from the pull request.\n\n` +
-            `Your focus: ${cluster.focus}\n\n` +
-            fileSection +
-            retryInstruction
-
-        const system = buildWorkerPrompt(cluster.label, cluster.focus, standards?.content)
-
-        const tools: Record<string, unknown> = {
-            runLinter: buildLinterTool(({ code, language }) => this.linterService.lint(code, language)),
+            : '')
+        if (system.length + userMessage.length > MAX_CLUSTER_PROMPT_CHARS) {
+            throw new Error(`Rendered worker prompt exceeds ${MAX_CLUSTER_PROMPT_CHARS} characters`)
         }
 
         const pending = new Map<string, { toolName: string; args: Record<string, unknown>; startedAt: number }>()
@@ -486,12 +533,13 @@ export class ReviewService {
 
         const { onChunk, onStepFinish } = this.buildStreamCallbacks(clusterSend, pending, thinking)
 
-        const result = runStreamText({
+        const result = runReviewStream({
             model: this.aiService.defaultModel,
             system,
             messages: [{ role: 'user', content: userMessage }],
-            tools,
             temperature: attempt > 1 ? 0 : 0.2,
+            abortSignal: signal,
+            maxOutputTokens: 4_096,
             stopWhen: ({ steps }: { steps: MinimalAiStep[] }) => {
                 const lastText = steps.at(-1)?.text ?? ''
                 try {
@@ -510,7 +558,14 @@ export class ReviewService {
             onStepFinish,
         })
 
-        const [finalText, steps] = await Promise.all([result.text, result.steps])
+        let finalText: string
+        let steps: MinimalAiStep[]
+        try {
+            ;[finalText, steps] = await Promise.all([result.text, result.steps])
+        } catch (error) {
+            if (signal.aborted) throwSignalReason(signal)
+            throw error
+        }
 
         const allTexts = [finalText, ...steps.map((s) => s.text).reverse()].filter((t) => t.trim())
         let review: ReviewData | undefined
@@ -530,40 +585,69 @@ export class ReviewService {
         return review
     }
 
-    private buildClusterContext(cluster: ClusterPlan): { text: string; truncatedFiles: string[] } {
-        let remaining = MAX_CLUSTER_PATCH_CHARS
-        const truncatedFiles: string[] = []
-        const sections: string[] = []
+    private buildClusterContext(cluster: ClusterPlan, standardsContent?: string): { text: string; truncatedFiles: string[] } {
+        const truncated = new Set<string>()
+        const textFiles = cluster.files.filter((file) => Boolean(file.patch))
+        const metadata = cluster.files.map((file) => ({
+            filename: file.filename,
+            status: file.status,
+            additions: file.additions,
+            deletions: file.deletions,
+            patchState: this.patchStateOf(file),
+            patch: '',
+        }))
+        const baseEnvelope = {
+            clusterLabel: cluster.label,
+            focusHint: cluster.focus,
+            codingStandards: standardsContent?.slice(0, 5_000) ?? null,
+            files: metadata,
+        }
+        const metadataSize = JSON.stringify(baseEnvelope).length
+        const available = Math.max(0, MAX_CLUSTER_CONTEXT_CHARS - 1_000 - metadataSize)
+        const fairBudget = textFiles.length > 0
+            ? Math.min(MAX_PATCH_CHARS, Math.floor(available / textFiles.length))
+            : 0
 
-        for (const file of cluster.files) {
-            if (!file.patch) {
-                const header =
-                    `### ${file.filename}  [+${file.additions} -${file.deletions}  ` +
-                    `status: ${file.status}  context: ${this.patchStateOf(file)}]`
-                sections.push(`${header}\n(no text diff available — review metadata and related files only)`)
-                continue
+        const records = cluster.files.map((file) => {
+            if (!file.patch) return metadata.find((entry) => entry.filename === file.filename)!
+            const selected = this.selectPatchWithinBudget(file.patch, fairBudget)
+            if (selected.truncated) truncated.add(file.filename)
+            return {
+                filename: file.filename,
+                status: file.status,
+                additions: file.additions,
+                deletions: file.deletions,
+                patchState: selected.truncated ? 'truncated' : this.patchStateOf(file),
+                patch: selected.text,
             }
+        })
 
-            const budget = Math.min(MAX_PATCH_CHARS, Math.max(0, remaining))
-            const selected = this.selectPatchWithinBudget(file.patch, budget)
-            remaining -= selected.text.length
-            if (selected.truncated) {
-                truncatedFiles.push(file.filename)
-                ;(file as NormalizedPRFile).patchState = 'truncated'
-            }
-            const header =
-                `### ${file.filename}  [+${file.additions} -${file.deletions}  ` +
-                `status: ${file.status}  context: ${this.patchStateOf(file)}]`
-            sections.push(`${header}\n${selected.text}`)
+        const envelope = {
+            clusterLabel: cluster.label,
+            focusHint: cluster.focus,
+            codingStandards: standardsContent?.slice(0, 5_000) ?? null,
+            files: records,
+        }
+        let text = JSON.stringify(envelope)
+        while (text.length > MAX_CLUSTER_CONTEXT_CHARS - 500) {
+            const largest = records
+                .filter((record) => record.patch.length > 0)
+                .sort((left, right) => right.patch.length - left.patch.length || left.filename.localeCompare(right.filename))[0]
+            if (!largest) throw new Error('Cluster metadata exceeds the safe worker prompt budget')
+            const selected = this.selectPatchWithinBudget(largest.patch, Math.floor(largest.patch.length / 2))
+            largest.patch = selected.text
+            largest.patchState = 'truncated'
+            truncated.add(largest.filename)
+            text = JSON.stringify(envelope)
         }
 
-        return { text: sections.join('\n\n'), truncatedFiles }
+        return { text, truncatedFiles: [...truncated].sort() }
     }
 
     private selectPatchWithinBudget(patch: string, budget: number): { text: string; truncated: boolean } {
         if (patch.length <= budget) return { text: patch, truncated: false }
         const marker = '\n… [additional diff hunks omitted due review context budget]'
-        if (budget <= marker.length) return { text: marker.trim(), truncated: true }
+        if (budget <= marker.length) return { text: '', truncated: true }
 
         const hunks = patch.split(/(?=^@@\s)/gm).filter(Boolean)
         const selected: string[] = []
@@ -651,51 +735,58 @@ export class ReviewService {
         let toolCallCount = 0
 
         return {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            onChunk: ({ chunk }: { chunk: any }) => {
-                if (chunk.type === 'tool-call') {
+            onChunk: ({ chunk: rawChunk }: { chunk: unknown }) => {
+                const chunk = asRecord(rawChunk)
+                const chunkType = stringValue(chunk.type)
+                if (chunkType === 'tool-call') {
+                    const toolCallId = stringValue(chunk.toolCallId)
+                    const toolName = stringValue(chunk.toolName)
+                    if (!toolCallId || !toolName) return
                     // Flush any pending reasoning before showing a tool step.
                     thinking.flushPending()
                     const args = parseArgs(chunk.input ?? chunk.args)
-                    pending.set(chunk.toolCallId, {
-                        toolName: chunk.toolName,
+                    pending.set(toolCallId, {
+                        toolName,
                         args,
                         startedAt: Date.now(),
                     })
                     toolCallCount++
                     _send({
                         type: 'tool_start' as const,
-                        tool: chunk.toolName,
-                        callId: chunk.toolCallId,
-                        label: toolStartLabel(chunk.toolName, args),
-                        detail: toolStartDetail(chunk.toolName, args),
+                        tool: toolName,
+                        callId: toolCallId,
+                        label: toolStartLabel(toolName, args),
+                        detail: toolStartDetail(toolName, args),
                     })
                 }
 
                 const textDelta: unknown = chunk.text ?? chunk.textDelta
-                if (chunk.type === 'text-delta' && typeof textDelta === 'string') {
+                if (chunkType === 'text-delta' && typeof textDelta === 'string') {
                     thinking.onDelta(textDelta)
                 }
             },
 
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            onStepFinish: ({ toolCalls, toolResults }: { toolCalls: any[]; toolResults: any[] }) => {
-                for (const tr of toolResults ?? []) {
-                    const p = pending.get(tr.toolCallId)
-                    pending.delete(tr.toolCallId)
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    const tc = (toolCalls ?? []).find((c: any) => c.toolCallId === tr.toolCallId)
+            onStepFinish: ({ toolCalls, toolResults }: { toolCalls?: unknown; toolResults?: unknown }) => {
+                const calls = Array.isArray(toolCalls) ? toolCalls.map(asRecord) : []
+                const results = Array.isArray(toolResults) ? toolResults.map(asRecord) : []
+                for (const tr of results) {
+                    const toolCallId = stringValue(tr.toolCallId)
+                    if (!toolCallId) continue
+                    const p = pending.get(toolCallId)
+                    pending.delete(toolCallId)
+                    const tc = calls.find((candidate) => stringValue(candidate.toolCallId) === toolCallId)
                     const tcArgs = parseArgs(tc?.input ?? tc?.args)
                     const pArgs = p?.args ?? {}
                     const trArgs = parseArgs(tr.input ?? tr.args)
                     const args = pickArgs(pArgs, tcArgs, trArgs)
                     const output = tr.output ?? tr.result
                     const startedAt = p?.startedAt ?? Date.now()
+                    const toolName = stringValue(tr.toolName) ?? p?.toolName ?? 'tool'
                     _send({
                         type: 'tool_done' as const,
-                        callId: tr.toolCallId,
-                        label: toolDoneLabel(tr.toolName, args, output),
-                        detail: toolDoneDetail(tr.toolName, args, output),
+                        callId: toolCallId,
+                        label: toolDoneLabel(toolName, args, output),
+                        detail: toolDoneDetail(toolName, args, output),
                         durationMs: Date.now() - startedAt,
                     })
                 }
@@ -722,31 +813,41 @@ export class ReviewService {
         }>,
         standards: StandardsContext,
         coverage?: ReviewCoverage,
+        signal?: AbortSignal,
     ): Promise<ReviewData> {
-        const baseSystem = standards
-            ? `${buildSynthesisSystemPrompt()}\n\nYour team's coding standards:\n\n${standards.content}`
-            : buildSynthesisSystemPrompt()
-        const coverageContext = coverage
-            ? `\n\nCoverage manifest (server-verified; do not claim failed clusters were reviewed):\n${JSON.stringify(coverage)}`
-            : ''
-        const userMessage = buildSynthesisUserMessage(prUrl, partialReviews) + coverageContext
+        const baseSystem = buildSynthesisSystemPrompt()
+        const userMessage = buildSynthesisUserMessage(prUrl, partialReviews) +
+            `\n\nAdditional untrusted JSON data:\n${JSON.stringify({
+                coverage: coverage ?? null,
+                codingStandards: standards?.content ?? null,
+            })}`
 
         // ── Attempt 1: standard ───────────────────────────────────────────────
+        const firstDeadline = operationDeadline(signal, 'Synthesis attempt 1', 60_000)
         try {
-            const { text } = await runGenerateText({
+            const { text } = await runReviewGenerate({
                 model: this.aiService.defaultModel,
                 system: baseSystem,
                 messages: [{ role: 'user', content: userMessage }],
                 temperature: 0.2,
+                abortSignal: firstDeadline.signal,
+                maxOutputTokens: 8_192,
             })
             return parseReviewText(text)
         } catch (err) {
+            if (firstDeadline.signal.aborted && !signal?.aborted) {
+                this.logger.warn('Synthesis attempt 1 timed out')
+            }
+            if (signal?.aborted) throwSignalReason(signal)
             this.logger.warn(`Synthesis attempt 1 failed: ${err instanceof Error ? err.message : err}`)
+        } finally {
+            firstDeadline.dispose()
         }
 
         // ── Attempt 2: temperature 0 + reinforced JSON-only instruction ───────
+        const secondDeadline = operationDeadline(signal, 'Synthesis attempt 2', 60_000)
         try {
-            const { text } = await runGenerateText({
+            const { text } = await runReviewGenerate({
                 model: this.aiService.defaultModel,
                 system:
                     baseSystem +
@@ -755,10 +856,15 @@ export class ReviewService {
                     'Absolutely no text before or after the JSON.',
                 messages: [{ role: 'user', content: userMessage }],
                 temperature: 0,
+                abortSignal: secondDeadline.signal,
+                maxOutputTokens: 8_192,
             })
             return parseReviewText(text)
         } catch (err) {
+            if (signal?.aborted) throwSignalReason(signal)
             this.logger.warn(`Synthesis attempt 2 failed: ${err instanceof Error ? err.message : err}`)
+        } finally {
+            secondDeadline.dispose()
         }
 
         // ── Fallback: deterministic merge — guaranteed valid ReviewData ────────
@@ -784,15 +890,16 @@ export class ReviewService {
                 seen.add(key)
                 return true
             })
+            .slice(0, 100)
 
-        const positives = [...new Set(partialReviews.flatMap(({ review }) => review.positives))]
+        const positives = [...new Set(partialReviews.flatMap(({ review }) => review.positives))].slice(0, 50)
         const avgScore = Math.round(
             partialReviews.reduce((sum, { review }) => sum + review.score, 0) / partialReviews.length,
         )
         const summary = partialReviews
             .map(({ label, review }) => `${label}: ${review.summary}`)
             .join(' · ')
-            .slice(0, 400)
+            .slice(0, 2_000)
 
         return { summary, score: avgScore, issues, positives }
     }
@@ -800,7 +907,7 @@ export class ReviewService {
     /** Pasted-code reviews keep the linter tool; PR acquisition is orchestrated before any model call. */
     private buildCodeAgentTools(): Record<string, unknown> {
         return {
-            runLinter: buildLinterTool(({ code, language }) => this.linterService.lint(code, language)),
+            runLinter: createLinterRuntimeTool(({ code, language }) => this.linterService.lint(code, language)),
         }
     }
 
@@ -810,9 +917,25 @@ export class ReviewService {
 
     /** Preserve intentional user-facing HTTP errors; hide unexpected provider/DB details. */
     private publicErrorMessage(err: unknown): string {
+        if (err instanceof ReviewDeadlineError) {
+            return 'Review exceeded the five-minute processing deadline. Try a smaller pull request or retry later.'
+        }
+        if (err instanceof OperationDeadlineError) {
+            return `${err.operation} timed out. Please try again.`
+        }
         if (err instanceof HttpException) return err.message
 
         this.logger.error(`Review pipeline failed: ${this.errMsg(err)}`)
         return 'Review failed unexpectedly. Please try again.'
     }
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+    return value !== null && typeof value === 'object' && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : {}
+}
+
+function stringValue(value: unknown): string | undefined {
+    return typeof value === 'string' ? value : undefined
 }

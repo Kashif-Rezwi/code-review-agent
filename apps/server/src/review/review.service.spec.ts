@@ -1,5 +1,4 @@
 import { Logger } from '@nestjs/common'
-import { ConfigService } from '@nestjs/config'
 import type { ReviewData, ReviewStreamEvent } from '@cra/types'
 
 import { AiService } from '../ai/ai.service'
@@ -89,6 +88,7 @@ function createHarness(): Harness {
             operations.push(`send:${event.type}`)
         },
         getTrace: () => events,
+        flush: jest.fn().mockResolvedValue(undefined),
     }
     const reviewRepository = {
         createSession: jest.fn(),
@@ -107,7 +107,6 @@ function createHarness(): Harness {
         fetchPRSnapshot: jest.fn(),
     }
     const service = new ReviewService(
-        {} as ConfigService,
         reviewRepository as unknown as ReviewRepository,
         githubService as unknown as GithubService,
         { lint: jest.fn() } as unknown as LinterService,
@@ -115,6 +114,8 @@ function createHarness(): Harness {
         { defaultModel: { modelId: 'configured-test-model' }, provider: jest.fn() } as unknown as AiService,
         { enqueue: jest.fn(), removeJob: jest.fn() } as unknown as QueueService,
         { emitEvent: jest.fn() } as unknown as RedisService,
+        { kick: jest.fn() } as never,
+        { requestCancellation: jest.fn() } as never,
     )
 
     return { service, conn, events, operations, githubService, reviewRepository }
@@ -152,7 +153,7 @@ describe('ReviewService coverage-safe PR orchestration', () => {
         expect(harness.events.filter((event) => event.type === 'synthesis_start')).toHaveLength(1)
         expect(streamTextMock).toHaveBeenCalledTimes(2)
         expect(streamTextMock.mock.calls.every(([request]) =>
-            String(request.messages?.[0]?.content).includes('Review the following files from the pull request.'),
+            String(request.messages?.[0]?.content).includes('untrusted pull-request data'),
         )).toBe(true)
         expect(harness.reviewRepository.saveReview).toHaveBeenCalledWith(
             PR_URL,
@@ -180,7 +181,7 @@ describe('ReviewService coverage-safe PR orchestration', () => {
         expect(harness.events.filter((event) => event.type === 'cluster_done')).toHaveLength(2)
         expect(harness.events.some((event) => event.type === 'synthesis_start')).toBe(true)
         expect(streamTextMock.mock.calls.every(([request]) =>
-            String(request.messages?.[0]?.content).includes('Your focus:'),
+            String(request.messages?.[0]?.content).includes('"focusHint"'),
         )).toBe(true)
     })
 
@@ -289,5 +290,37 @@ describe('ReviewService coverage-safe PR orchestration', () => {
         expect(savedReview.coverage?.truncatedFiles).toEqual(['src/large.ts'])
         expect(savedReview.coverage?.unreviewedFiles).toEqual([])
         expect(harness.reviewRepository.saveReview.mock.calls[0][6]).toBe('complete')
+    })
+
+    it('fails a binary-only PR before planner or worker invocation', async () => {
+        const harness = createHarness()
+        const data = snapshot(1)
+        data.files[0] = { ...data.files[0], patch: undefined, patchState: 'binary' }
+        harness.githubService.fetchPRSnapshot.mockResolvedValue(data)
+
+        await harness.service.runForQueue(REVIEW_ID, 'PR', PR_URL, USER_ID, harness.conn)
+
+        expect(generateObjectMock).not.toHaveBeenCalled()
+        expect(streamTextMock).not.toHaveBeenCalled()
+        expect(harness.reviewRepository.markFailed).toHaveBeenCalledWith(
+            REVIEW_ID,
+            expect.stringMatching(/no usable text diff/i),
+            expect.any(Array),
+        )
+    })
+
+    it('keeps the complete worker prompt within 40,000 characters and does not mutate snapshot state', async () => {
+        const harness = createHarness()
+        const data = snapshot(12)
+        data.files = data.files.map((item, index) => file(`src/domain/file-${index}.ts`, 20_000))
+        const originalStates = data.files.map((item) => item.patchState)
+        harness.githubService.fetchPRSnapshot.mockResolvedValue(data)
+
+        await harness.service.runForQueue(REVIEW_ID, 'PR', PR_URL, USER_ID, harness.conn)
+
+        for (const [request] of streamTextMock.mock.calls) {
+            expect(String(request.system).length + String(request.messages?.[0]?.content).length).toBeLessThanOrEqual(40_000)
+        }
+        expect(data.files.map((item) => item.patchState)).toEqual(originalStates)
     })
 })

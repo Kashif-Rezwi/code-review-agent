@@ -79,4 +79,16 @@ describe('coverage-safe cluster planning', () => {
         expect(sourceCluster?.files.map((item) => item.filename)).toContain('src/auth/session.test.ts')
         assertExactCoverage(files, result)
     })
+
+    it('never collapses four related source/test variants into one cluster', () => {
+        const files = [
+            file('src/foo.ts'),
+            file('src/foo.test.ts'),
+            file('src/foo.spec.ts'),
+            file('src/__tests__/foo.ts'),
+        ]
+        const result = buildDeterministicClusters(files)
+        expect(result).toHaveLength(2)
+        assertExactCoverage(files, result)
+    })
 })
