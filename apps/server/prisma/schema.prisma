@@ -48,6 +48,7 @@ model DocumentChunk {
 enum ReviewStatus {
   PENDING
   COMPLETE
+  PARTIAL
   FAILED
   CANCELLED
 }
@@ -55,6 +56,14 @@ enum ReviewStatus {
 enum ReviewType {
   CODE
   PR
+}
+
+enum DispatchStatus {
+  PENDING
+  PROCESSING
+  DISPATCHED
+  FAILED
+  CANCELLED
 }
 
 model Review {
@@ -68,9 +77,27 @@ model Review {
   positives        String[]       @default([])
   appliedStandards String[]       @default([])
   traceLog         Json?          // ordered array of ReviewStreamEvent; null for pre-migration rows
+  coverage         Json?          // PR file/cluster coverage metadata; null for legacy/code reviews
   issues           Issue[]
   conversations    Conversation[]
+  dispatch         ReviewDispatch?
   createdAt        DateTime       @default(now())
+}
+
+model ReviewDispatch {
+  id           String         @id @default(cuid())
+  reviewId     String         @unique
+  review       Review         @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  status       DispatchStatus @default(PENDING)
+  attempts     Int            @default(0)
+  availableAt  DateTime       @default(now())
+  lockedUntil  DateTime?
+  lastError    String?        @db.Text
+  dispatchedAt DateTime?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  @@index([status, availableAt])
 }
 
 model Issue {

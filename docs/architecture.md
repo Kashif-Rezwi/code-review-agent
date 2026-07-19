@@ -72,8 +72,8 @@ External dependencies
 
 7. ReviewService        createRedisEmitter(reviewId) — all events go to Redis
                         Runs review pipeline (see review-pr.md or review-code.md)
-                        Emits: start → task_plan → task_updates → cluster_plan
-                               → thinking/tool events → complete
+                        Emits: start → acquisition → task plan/updates → cluster plan
+                               → worker events → synthesis → complete/partial
 
 8. Redis                Each event is:
                         - Appended to replay list  rl:<reviewId>  (TTL 1 hour)
@@ -125,7 +125,7 @@ The AI package is the single source of truth for all LLM-facing abstractions:
 
 - **Prompts** — system prompt builders for code review, worker agents, and synthesis
 - **Tools** — Vercel AI SDK tool definitions: `fetchGithubPR`, `listPRFiles`, `fetchFileContent`, `runLinter`
-- **Cluster planner** — `planClusters()` — groups PR files into domain clusters using `gpt-4o-mini`
+- **Cluster planner** — `planClusters()` — groups PR files with the centrally configured model, then enforces exact-once coverage
 - **Embeddings** — `chunkText()` — text chunking utility for RAG ingestion
 
 The server imports from `@cra/ai`; the package has no awareness of NestJS or HTTP.
@@ -134,7 +134,7 @@ The server imports from `@cra/ai`; the package has no awareness of NestJS or HTT
 
 Defines the shared contract between the server's streaming output and the client's SSE consumer:
 
-- **`ReviewStreamEvent`** — a discriminated union of all possible SSE event shapes (`start`, `thinking`, `tool_start`, `tool_done`, `task_plan`, `task_update`, `cluster_plan`, `cluster_done`, `complete`, `error`)
+- **`ReviewStreamEvent`** — the typed SSE union, including acquisition, cluster success/failure, synthesis and complete/partial outcome events
 - **`ReviewData`** / **`ReviewDataSchema`** — the final review output structure, validated with Zod on both sides
 
 Both packages are built before the apps (`pnpm build:packages`) and consumed as local workspace dependencies.

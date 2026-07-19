@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import type { ComponentPropsWithoutRef } from 'react'
 import {
     CheckCircle2,
@@ -100,12 +100,9 @@ export function ToolStep({ entry }: { entry: Extract<TraceEntry, { kind: 'tool' 
 
     // Auto-expand while running so the user sees live detail (file path, diff stats).
     // Collapse automatically when the tool call finishes; user can re-expand at any time.
-    const [expanded, setExpanded] = useState(isRunning)
+    const [manuallyExpanded, setManuallyExpanded] = useState(false)
     const [detailExpanded, setDetailExpanded] = useState(false)
-
-    useEffect(() => {
-        if (entry.status === 'done') setExpanded(false)
-    }, [entry.status])
+    const expanded = isRunning || manuallyExpanded
 
     const isLongDetail = (entry.detail?.length ?? 0) > DETAIL_PREVIEW_LENGTH
     const previewDetail = isLongDetail && !detailExpanded
@@ -120,7 +117,7 @@ export function ToolStep({ entry }: { entry: Extract<TraceEntry, { kind: 'tool' 
                     ? <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-400 shrink-0" />
                     : entry.detail
                         ? <button
-                              onClick={() => setExpanded(p => !p)}
+                              onClick={() => setManuallyExpanded(p => !p)}
                               className="shrink-0 text-gray-700 hover:text-gray-400 transition-colors rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500/50"
                           >
                               {expanded

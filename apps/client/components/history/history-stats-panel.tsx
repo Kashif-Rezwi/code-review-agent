@@ -4,6 +4,7 @@ import { TYPE_CONFIG } from '@/types/review-config'
 
 export interface Stats {
     totalReviews: number
+    partialReviews: number
     issuesByType: Array<{ type: string; count: number }>
     issuesBySeverity: Array<{ severity: string; count: number }>
 }
@@ -42,6 +43,11 @@ export function HistoryStatsPanel({ stats, isLoading }: HistoryStatsPanelProps) 
                     {stats.totalReviews} review{stats.totalReviews !== 1 ? 's' : ''} total
                 </span>
             </div>
+            {stats.partialReviews > 0 && (
+                <div className="inline-flex items-center gap-1.5 self-start rounded-full border border-amber-500/25 bg-amber-950/20 px-2.5 py-1 text-xs text-amber-300/80">
+                    {stats.partialReviews} partial review{stats.partialReviews !== 1 ? 's' : ''}
+                </div>
+            )}
             <div className="flex flex-wrap gap-2">
                 {stats.issuesByType.length === 0 ? (
                     <span className="text-xs text-gray-600">No issues recorded yet.</span>

@@ -1,0 +1,50 @@
+diff --git a/src/modified.ts b/src/modified.ts
+index 1111111..2222222 100644
+--- a/src/modified.ts
++++ b/src/modified.ts
+@@ -1,3 +1,3 @@
+ export const first = true
+-export const second = false
++export const second = true
+ export const third = true
+@@ -10,2 +10,3 @@ export function run() {
+   execute()
++  verify()
+ }
+diff --git a/src/added.ts b/src/added.ts
+new file mode 100644
+index 0000000..3333333
+--- /dev/null
++++ b/src/added.ts
+@@ -0,0 +1,2 @@
++export const added = true
++export const value = 42
+diff --git a/src/deleted.ts b/src/deleted.ts
+deleted file mode 100644
+index 4444444..0000000
+--- a/src/deleted.ts
++++ /dev/null
+@@ -1 +0,0 @@
+-export const removed = true
+diff --git a/src/old-name.ts b/src/new-name.ts
+similarity index 90%
+rename from src/old-name.ts
+rename to src/new-name.ts
+--- a/src/old-name.ts
++++ b/src/new-name.ts
+@@ -1 +1 @@
+-export const oldName = true
++export const newName = true
+diff --git a/assets/logo.png b/assets/logo.png
+new file mode 100644
+index 0000000..5555555
+Binary files /dev/null and b/assets/logo.png differ
+diff --git "a/src/space file.ts" "b/src/space file.ts"
+index 6666666..7777777 100644
+--- "a/src/space file.ts"
++++ "b/src/space file.ts"
+@@ -1 +1 @@
+-export const spaced = false
+\ No newline at end of file
++export const spaced = true
+\ No newline at end of file

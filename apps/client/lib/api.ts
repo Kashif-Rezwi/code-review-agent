@@ -1,6 +1,21 @@
 /** Base URL for all server API calls — set NEXT_PUBLIC_API_URL in your .env */
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? ''
 
+export async function apiErrorMessage(response: Response): Promise<string> {
+    const fallback = `Request failed with status ${response.status}`
+    const text = await response.text().catch(() => '')
+    if (!text) return fallback
+    try {
+        const parsed = JSON.parse(text) as { message?: unknown; error?: unknown }
+        if (Array.isArray(parsed.message)) return parsed.message.filter((item): item is string => typeof item === 'string').join(', ') || fallback
+        if (typeof parsed.message === 'string') return parsed.message
+        if (typeof parsed.error === 'string') return parsed.error
+    } catch {
+        // A non-JSON upstream error is still more useful than a generic status.
+    }
+    return text
+}
+
 /**
  * Typed fetch wrapper for the CRA API.
  * - Prepends API_URL automatically
@@ -18,8 +33,7 @@ export async function apiFetch<T>(path: string, init?: RequestInit, token?: stri
         },
     })
     if (!res.ok) {
-        const msg = await res.text().catch(() => `HTTP ${res.status}`)
-        throw new Error(msg || `Request failed with status ${res.status}`)
+        throw new Error(await apiErrorMessage(res))
     }
     // 204 No Content (and any other bodyless response) must not be parsed as JSON
     if (res.status === 204 || res.headers.get('content-length') === '0') {
@@ -31,11 +45,11 @@ export async function apiFetch<T>(path: string, init?: RequestInit, token?: stri
 // ── Structured API Endpoints ──────────────────────────────────────────────────
 
 export const historyService = {
-    getReviews: <T = any[]>(token?: string) => 
+    getReviews: <T = unknown[]>(token?: string) =>
         apiFetch<T>('/history', undefined, token),
-    getStats: <T = any>(token?: string) => 
+    getStats: <T = unknown>(token?: string) =>
         apiFetch<T>('/history/stats', undefined, token),
-    getReview: <T = any>(id: string, token?: string) => 
+    getReview: <T = unknown>(id: string, token?: string) =>
         apiFetch<T>(`/history/${id}`, undefined, token),
     deleteReview: (id: string, token?: string) =>
         apiFetch<void>(`/history/${id}`, { method: 'DELETE' }, token),
@@ -55,7 +69,7 @@ export const reviewService = {
 }
 
 export const ragService = {
-    getDocuments: <T = any[]>(token?: string) => 
+    getDocuments: <T = unknown[]>(token?: string) =>
         apiFetch<T>('/rag/documents', undefined, token),
     uploadDocument: <T = unknown>(formData: FormData, token?: string) => 
         apiFetch<T>('/rag/upload', { method: 'POST', body: formData }, token),

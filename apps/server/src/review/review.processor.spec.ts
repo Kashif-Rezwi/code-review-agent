@@ -32,6 +32,7 @@ describe('ReviewProcessor failed-job terminal signaling', () => {
       {} as ReviewService,
       redisService as unknown as RedisService,
       reviewRepository as unknown as ReviewRepository,
+      { createExecution: jest.fn() } as never,
     );
   });
 

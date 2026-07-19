@@ -10,10 +10,11 @@ import { RagModule } from '../rag/rag.module'
 import { AuthModule } from '../auth/auth.module'
 import { QueueModule } from '../queue/queue.module'
 import { HistoryModule } from '../history/history.module'
+import { ReviewDispatcherService } from './review-dispatcher.service'
 
 @Module({
     imports: [GithubModule, LinterModule, RagModule, AuthModule, QueueModule, HistoryModule],
     controllers: [ReviewController],
-    providers: [ReviewService, ReviewRepository, ReviewProcessor, ReviewStreamerService],
+    providers: [ReviewService, ReviewRepository, ReviewProcessor, ReviewStreamerService, ReviewDispatcherService],
 })
 export class ReviewModule {}

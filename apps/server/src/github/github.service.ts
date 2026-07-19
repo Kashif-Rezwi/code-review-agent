@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, Logger, UnauthorizedException } from '@nestjs/common'
+import { Injectable, BadRequestException, Logger, OnModuleInit, UnauthorizedException } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { z } from 'zod'
 import { PRFileSchema } from '@cra/ai'
@@ -11,23 +11,35 @@ export interface GithubUserResponse {
     email: string | null
     avatar_url: string
 }
-import { parsePRUrl, decodeGitHubFileBase64 } from './github.utils'
-import { GithubCacheService } from './github-cache.service'
+import { parsePRUrl } from './github.utils'
+import { parseUnifiedDiff } from './unified-diff.parser'
+import type { GithubTokenHealth, NormalizedPRFile, PRSnapshot } from './github.types'
 
-const MAX_DIFF_CHARS = 24_000
+const MAX_RAW_DIFF_BYTES = 2 * 1024 * 1024
+const GITHUB_TIMEOUT_MS = 10_000
+const MAX_RETRY_DELAY_MS = 2_000
 
 @Injectable()
-export class GithubService {
+export class GithubService implements OnModuleInit {
     private readonly logger = new Logger(GithubService.name)
     private readonly token?: string
+    private tokenHealth: GithubTokenHealth
 
-    constructor(
-        config: ConfigService,
-        private readonly cache: GithubCacheService,
-    ) {
+    constructor(config: ConfigService) {
         // Render and other hosting dashboards preserve whitespace literally. An empty
         // or padded token should never produce a malformed Authorization header.
         this.token = config.get<string>('GITHUB_TOKEN')?.trim() || undefined
+        this.tokenHealth = this.token ? 'unchecked' : 'missing'
+    }
+
+    onModuleInit(): void {
+        // Health validation is diagnostic only. Public PR review remains available
+        // through the direct diff fallback even when the shared token is rejected.
+        void this.validateConfiguredToken()
+    }
+
+    getTokenHealth(): GithubTokenHealth {
+        return this.tokenHealth
     }
 
     /** Called by ReviewService before the agent loop to short-circuit on bad URLs. Throws BadRequestException on invalid input. */
@@ -36,7 +48,7 @@ export class GithubService {
     }
 
     async fetchUserProfile(token: string): Promise<GithubUserResponse> {
-        const res = await fetch('https://api.github.com/user', {
+        const res = await this.fetchWithPolicy('https://api.github.com/user', {
             headers: {
                 Authorization: `Bearer ${token}`,
                 Accept: 'application/vnd.github+json',
@@ -52,6 +64,83 @@ export class GithubService {
         }
 
         return (await res.json()) as GithubUserResponse
+    }
+
+    /**
+     * Acquire a normalized, per-file PR snapshot. Both the structured REST path
+     * and the unified-diff fallback produce the same contract, so acquisition
+     * availability never changes the review strategy.
+     */
+    async fetchPRSnapshot(prUrl: string): Promise<PRSnapshot> {
+        let apiFiles: PRFile[] | null = null
+        const warnings: string[] = []
+
+        try {
+            apiFiles = await this.fetchPRFiles(prUrl)
+        } catch (error) {
+            warnings.push(`GitHub file-list request failed: ${this.errorMessage(error)}`)
+        }
+
+        if (apiFiles?.length) {
+            const files = apiFiles.map((file) => this.normalizeApiFile(file))
+            const missingPatchFiles = files.filter((file) => file.patchState === 'metadata_only')
+
+            if (missingPatchFiles.length > 0) {
+                try {
+                    const parsed = parseUnifiedDiff(await this.fetchPRDiff(prUrl))
+                    warnings.push(...parsed.warnings)
+                    this.mergeParsedPatches(files, parsed.files)
+                } catch (error) {
+                    warnings.push(
+                        `Could not enrich ${missingPatchFiles.length} patchless file(s): ${this.errorMessage(error)}`,
+                    )
+                }
+            }
+
+            const unresolved = files.filter((file) => file.patchState === 'metadata_only')
+            if (unresolved.length > 0) {
+                warnings.push(`${unresolved.length} file(s) are available as metadata only.`)
+            }
+
+            return {
+                files,
+                source: 'github_files_api',
+                complete: unresolved.length === 0,
+                warnings: this.uniqueWarnings(warnings),
+            }
+        }
+
+        if (apiFiles && apiFiles.length === 0) {
+            warnings.push('GitHub file-list request returned no changed files.')
+        }
+
+        // The structured endpoint has already exhausted authenticated and
+        // anonymous API access. Move directly to GitHub's raw public diff so a
+        // bad shared token cannot force the model-facing fallback path.
+        let parsed: ReturnType<typeof parseUnifiedDiff>
+        try {
+            parsed = parseUnifiedDiff(await this.fetchPublicPRDiff(prUrl))
+        } catch (error) {
+            const diagnostic = warnings.length > 0 ? `${warnings.join(' ')} ` : ''
+            throw new BadRequestException(
+                `Pull-request acquisition failed. ${diagnostic}` +
+                    `Public diff fallback failed: ${this.errorMessage(error)}`,
+            )
+        }
+        warnings.push(...parsed.warnings)
+        if (parsed.files.length === 0) {
+            throw new BadRequestException('No reviewable files could be parsed from the GitHub pull request diff.')
+        }
+
+        const metadataOnly = parsed.files.filter((file) => file.patchState === 'metadata_only')
+        if (metadataOnly.length > 0) warnings.push(`${metadataOnly.length} file(s) are available as metadata only.`)
+
+        return {
+            files: parsed.files,
+            source: 'public_diff',
+            complete: metadataOnly.length === 0,
+            warnings: this.uniqueWarnings(warnings),
+        }
     }
 
     async fetchPRDiff(prUrl: string): Promise<string> {
@@ -89,9 +178,10 @@ export class GithubService {
                     `Both authenticated and public PR diff fetches failed for ` +
                         `${owner}/${repo}#${number}; public error: ${this.errorMessage(publicError)}`,
                 )
-                // The authenticated error normally contains the most useful diagnosis
-                // (invalid token, rate limit, or missing repository access).
-                throw authenticatedError
+                throw new BadRequestException(
+                    `GitHub diff acquisition failed. Authenticated attempt: ${this.errorMessage(authenticatedError)} ` +
+                        `Public attempt: ${this.errorMessage(publicError)}`,
+                )
             }
             throw publicError
         }
@@ -116,7 +206,7 @@ export class GithubService {
             // succeeds, keep the remaining pagination requests unauthenticated.
             if (usedPublicFallback) preferAuthenticatedRequest = false
 
-            const raw = await res.json()
+            const raw: unknown = await res.json()
             let page: PRFile[]
             try {
                 page = z.array(PRFileSchema).parse(raw)
@@ -134,71 +224,7 @@ export class GithubService {
         return allFiles
     }
 
-    /**
-     * Fetch the full source of any file in the repository.
-     * Used by the autonomous review agent to investigate imports, called
-     * functions, or base classes when the diff alone is not enough.
-     * Response content from GitHub Contents API is base64-encoded.
-     */
-    async fetchFileContent(prUrl: string, filePath: string): Promise<string> {
-        const { owner, repo, number } = parsePRUrl(prUrl)
-
-        // Fetch from the PR's head branch (not the default branch) so we get
-        // the actual version of the file as it exists in the PR.
-        const ref = await this.fetchPRHeadRef(owner, repo, number)
-        const qsRef = ref ? `?ref=${encodeURIComponent(ref)}` : ''
-
-        const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${filePath}${qsRef}`, {
-            headers: this.buildHeaders('application/vnd.github.v3+json'),
-        })
-
-        if (res.status === 404) {
-            throw new BadRequestException(`File not found in repository: ${filePath}`)
-        }
-        this.assertOk(res, prUrl)
-
-        const data = await res.json()
-
-        if (data.encoding !== 'base64' || typeof data.content !== 'string') {
-            throw new BadRequestException(`Unexpected GitHub API response for file: ${filePath}`)
-        }
-
-        // GitHub embeds newlines in the base64 string — strip before decoding
-        const content = decodeGitHubFileBase64(data.content)
-
-        const MAX_FILE_CHARS = 8_000
-        if (content.length > MAX_FILE_CHARS) {
-            return (
-                content.slice(0, MAX_FILE_CHARS) +
-                `\n\n[file truncated — ${content.length} chars total, showing first ${MAX_FILE_CHARS}]`
-            )
-        }
-
-        return content || `(empty file: ${filePath})`
-    }
-
     // ── Private helpers ────────────────────────────────────────────────────────
-
-    /** Get the head commit SHA of a PR so fetchFileContent reads the PR's version. */
-    private async fetchPRHeadRef(owner: string, repo: string, number: number): Promise<string | null> {
-        const key = `${owner}/${repo}/${number}`
-        const cached = this.cache.getHeadRef(key)
-        if (cached) return cached
-        try {
-            const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/pulls/${number}`, {
-                headers: this.buildHeaders('application/vnd.github.v3+json'),
-            })
-            if (!res.ok) return null
-            const data = await res.json()
-            const sha = data?.head?.sha as string | undefined
-            if (sha) {
-                this.cache.setHeadRef(key, sha)
-            }
-            return sha ?? null
-        } catch {
-            return null
-        }
-    }
 
     /** Build GitHub API request headers. `accept` varies per endpoint. */
     private buildHeaders(accept: string, includeToken = true): Record<string, string> {
@@ -223,7 +249,7 @@ export class GithubService {
         preferAuthenticatedRequest: boolean,
     ): Promise<{ response: Response; usedPublicFallback: boolean }> {
         const useToken = preferAuthenticatedRequest && !!this.token
-        const response = await fetch(url, {
+        const response = await this.fetchWithPolicy(url, {
             headers: this.buildHeaders(accept, useToken),
         })
 
@@ -238,8 +264,9 @@ export class GithubService {
             `Authenticated GitHub request failed (${response.status}); ` +
                 `retrying without credentials for public repository access`,
         )
+        await response.body?.cancel().catch(() => undefined)
 
-        const publicResponse = await fetch(url, {
+        const publicResponse = await this.fetchWithPolicy(url, {
             headers: this.buildHeaders(accept, false),
         })
         if (publicResponse.ok) {
@@ -247,8 +274,12 @@ export class GithubService {
             return { response: publicResponse, usedPublicFallback: true }
         }
 
+        const publicError = this.responseError(publicResponse, prUrl)
         this.logger.error(`Unauthenticated GitHub fallback also failed (${publicResponse.status})`)
-        throw authenticatedError
+        throw new BadRequestException(
+            `GitHub file-list acquisition failed. Authenticated attempt: ${authenticatedError.message} ` +
+                `Public attempt: ${publicError.message}`,
+        )
     }
 
     private canRetryAsPublic(status: number): boolean {
@@ -262,10 +293,12 @@ export class GithubService {
 
     private responseError(res: Response, prUrl: string): BadRequestException {
         const requestId = res.headers.get('x-github-request-id')
-        const context = requestId ? ` GitHub request ID: ${requestId}.` : ''
         const remaining = res.headers.get('x-ratelimit-remaining')
         const retryAfter = res.headers.get('retry-after')
         const reset = res.headers.get('x-ratelimit-reset')
+        const context = ` GitHub diagnostics: status=${res.status}; requestId=${requestId ?? 'unavailable'}; ` +
+            `remaining=${remaining ?? 'unavailable'}; reset=${reset ?? 'unavailable'}; ` +
+            `retryAfter=${retryAfter ?? 'unavailable'}.`
 
         if (res.status === 401) {
             return new BadRequestException(
@@ -292,7 +325,8 @@ export class GithubService {
 
         if (res.status === 404) {
             return new BadRequestException(
-                `PR not found or not accessible: ${prUrl}. ` + `Check the URL and private-repository access.${context}`,
+                `PR not found or not accessible (404): ${prUrl}. ` +
+                    `Check the URL and private-repository access.${context}`,
             )
         }
 
@@ -300,7 +334,7 @@ export class GithubService {
     }
 
     private async readDiffResponse(res: Response, prUrl: string): Promise<string> {
-        const diff = await res.text()
+        const diff = await this.readTextWithLimit(res, MAX_RAW_DIFF_BYTES)
 
         // Guard against private repositories returning an HTML login page.
         if (diff.trimStart().startsWith('<')) {
@@ -315,10 +349,6 @@ export class GithubService {
             )
         }
 
-        if (diff.length > MAX_DIFF_CHARS) {
-            return diff.slice(0, MAX_DIFF_CHARS) + '\n\n[diff truncated — PR is too large to review in full]'
-        }
-
         return diff
     }
 
@@ -331,7 +361,7 @@ export class GithubService {
      * Supports private repos; benefits from the 5 000 req/hr token rate limit.
      */
     private fetchViaApi(owner: string, repo: string, number: number) {
-        return fetch(`https://api.github.com/repos/${owner}/${repo}/pulls/${number}`, {
+        return this.fetchWithPolicy(`https://api.github.com/repos/${owner}/${repo}/pulls/${number}`, {
             headers: this.buildHeaders('application/vnd.github.diff'),
         })
     }
@@ -342,8 +372,141 @@ export class GithubService {
      * in shared-IP environments (Vercel, Railway, etc.).
      */
     private fetchViaDirect(owner: string, repo: string, number: number) {
-        return fetch(`https://github.com/${owner}/${repo}/pull/${number}.diff`, {
+        return this.fetchWithPolicy(`https://github.com/${owner}/${repo}/pull/${number}.diff`, {
             headers: { 'User-Agent': 'code-review-agent/1.0' },
         })
+    }
+
+    private async fetchPublicPRDiff(prUrl: string): Promise<string> {
+        const { owner, repo, number } = parsePRUrl(prUrl)
+        const response = await this.fetchViaDirect(owner, repo, number)
+        this.assertOk(response, prUrl)
+        return this.readDiffResponse(response, prUrl)
+    }
+
+    private normalizeApiFile(file: PRFile): NormalizedPRFile {
+        const patch = file.patch?.trim() ? file.patch : undefined
+        return {
+            ...file,
+            patch,
+            previousFilename: file.previous_filename,
+            patchState: patch ? 'full' : 'metadata_only',
+        }
+    }
+
+    private mergeParsedPatches(target: NormalizedPRFile[], parsed: NormalizedPRFile[]): void {
+        const byName = new Map<string, NormalizedPRFile>()
+        for (const file of parsed) {
+            byName.set(file.filename, file)
+            if (file.previousFilename) byName.set(file.previousFilename, file)
+        }
+
+        for (const file of target) {
+            if (file.patchState !== 'metadata_only') continue
+            const fallback = byName.get(file.filename) ?? (file.previousFilename ? byName.get(file.previousFilename) : undefined)
+            if (!fallback) continue
+            file.patch = fallback.patch
+            file.patchState = fallback.patchState
+            file.previousFilename ??= fallback.previousFilename
+        }
+    }
+
+    private uniqueWarnings(warnings: string[]): string[] {
+        return [...new Set(warnings.filter(Boolean))]
+    }
+
+    private async validateConfiguredToken(): Promise<void> {
+        if (!this.token) {
+            this.tokenHealth = 'missing'
+            return
+        }
+
+        try {
+            const response = await this.fetchWithPolicy('https://api.github.com/rate_limit', {
+                headers: this.buildHeaders('application/vnd.github+json'),
+            })
+            this.tokenHealth = response.ok ? 'valid' : 'invalid'
+            if (!response.ok) this.logger.warn(`Configured GITHUB_TOKEN validation returned ${response.status}`)
+            await response.body?.cancel().catch(() => undefined)
+        } catch (error) {
+            this.tokenHealth = 'unchecked'
+            this.logger.warn(`Could not validate configured GITHUB_TOKEN: ${this.errorMessage(error)}`)
+        }
+    }
+
+    private async readTextWithLimit(response: Response, maxBytes: number): Promise<string> {
+        if (!response.body) {
+            const text = await response.text()
+            if (Buffer.byteLength(text, 'utf8') > maxBytes) throw this.diffTooLargeError(maxBytes)
+            return text
+        }
+
+        const reader = response.body.getReader()
+        const decoder = new TextDecoder()
+        let bytes = 0
+        let output = ''
+
+        try {
+            while (true) {
+                const { done, value } = await reader.read()
+                if (done) break
+                bytes += value.byteLength
+                if (bytes > maxBytes) {
+                    await reader.cancel()
+                    throw this.diffTooLargeError(maxBytes)
+                }
+                output += decoder.decode(value, { stream: true })
+            }
+            output += decoder.decode()
+            return output
+        } finally {
+            reader.releaseLock()
+        }
+    }
+
+    private diffTooLargeError(maxBytes: number): BadRequestException {
+        return new BadRequestException(
+            `The pull request diff is too large to acquire safely (${Math.floor(maxBytes / 1024 / 1024)} MiB limit).`,
+        )
+    }
+
+    private async fetchWithPolicy(url: string, init: RequestInit): Promise<Response> {
+        let lastError: unknown
+
+        for (let attempt = 0; attempt < 2; attempt++) {
+            try {
+                const response = await fetch(url, {
+                    ...init,
+                    signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
+                })
+                if (attempt === 0 && this.isRetryableStatus(response)) {
+                    await response.body?.cancel().catch(() => undefined)
+                    await this.waitBeforeRetry(response)
+                    continue
+                }
+                return response
+            } catch (error) {
+                lastError = error
+                if (attempt === 0) {
+                    await this.waitBeforeRetry()
+                    continue
+                }
+            }
+        }
+
+        throw lastError instanceof Error ? lastError : new Error('GitHub request failed')
+    }
+
+    private isRetryableStatus(response: Response): boolean {
+        return response.status === 429 || response.status >= 500 ||
+            (response.status === 403 && response.headers.get('x-ratelimit-remaining') === '0')
+    }
+
+    private async waitBeforeRetry(response?: Response): Promise<void> {
+        if (process.env.NODE_ENV === 'test') return
+        const retryAfterSeconds = Number(response?.headers.get('retry-after'))
+        const fromHeader = Number.isFinite(retryAfterSeconds) ? retryAfterSeconds * 1_000 : 0
+        const delay = Math.min(MAX_RETRY_DELAY_MS, fromHeader || Math.floor(250 + Math.random() * 750))
+        await new Promise((resolve) => setTimeout(resolve, delay))
     }
 }

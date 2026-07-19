@@ -1,306 +1,326 @@
-import { BadRequestException, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { streamText } from 'ai';
-import type { ReviewStreamEvent } from '@cra/types';
+import { Logger } from '@nestjs/common'
+import type { ReviewData, ReviewStreamEvent } from '@cra/types'
 
-import { AiService } from '../ai/ai.service';
-import { GithubService } from '../github/github.service';
-import { LinterService } from '../linter/linter.service';
-import { QueueService } from '../queue/queue.service';
-import { RedisService } from '../queue/redis.service';
-import { RagService } from '../rag/rag.service';
-import { ReviewRepository } from './review.repository';
-import { ReviewService } from './review.service';
-import type { SseConnection } from './review.sse';
+import { AiService } from '../ai/ai.service'
+import { GithubService } from '../github/github.service'
+import type { NormalizedPRFile, PRSnapshot } from '../github/github.types'
+import { LinterService } from '../linter/linter.service'
+import { QueueService } from '../queue/queue.service'
+import { RedisService } from '../queue/redis.service'
+import { RagService } from '../rag/rag.service'
+import { ReviewRepository } from './review.repository'
+import { ReviewService } from './review.service'
+import type { SseConnection } from './review.sse'
 
 jest.mock('ai', () => ({
-  generateText: jest.fn(),
-  streamText: jest.fn(),
-}));
+    generateObject: jest.fn(),
+    generateText: jest.fn(),
+    streamText: jest.fn(),
+    tool: jest.fn((definition) => definition),
+}))
 
-const PR_URL = 'https://github.com/vercel/next.js/pull/91191';
-const REVIEW_ID = 'review-123';
-const USER_ID = 'user-123';
-const UNIFIED_DIFF = [
-  'diff --git a/src/example.ts b/src/example.ts',
-  '--- a/src/example.ts',
-  '+++ b/src/example.ts',
-  '@@ -1 +1 @@',
-  '-const enabled = false',
-  '+const enabled = true',
-].join('\n');
-const VALID_REVIEW = {
-  summary: 'The change is small and safe.',
-  score: 8,
-  issues: [],
-  positives: ['The intent is clear.'],
-};
-
-const streamTextMock = streamText as jest.MockedFunction<typeof streamText>;
-
-interface Harness {
-  service: ReviewService;
-  conn: SseConnection;
-  events: ReviewStreamEvent[];
-  operations: string[];
-  githubService: {
-    assertValidPRUrl: jest.Mock;
-    fetchPRFiles: jest.Mock;
-    fetchPRDiff: jest.Mock;
-  };
-  reviewRepository: {
-    saveReview: jest.Mock;
-    markFailed: jest.Mock;
-  };
+const PR_URL = 'https://github.com/vercel/next.js/pull/91191'
+const REVIEW_ID = 'review-123'
+const USER_ID = 'user-123'
+const VALID_REVIEW: ReviewData = {
+    summary: 'The change is safe and well scoped.',
+    score: 8,
+    issues: [],
+    positives: ['The intent is clear.'],
 }
 
-function mockModelText(text: string): void {
-  streamTextMock.mockReturnValue({
-    text: Promise.resolve(text),
-    steps: Promise.resolve([{ text }]),
-  } as unknown as ReturnType<typeof streamText>);
+// Pull mocks from Jest rather than importing AI SDK function types. The SDK's
+// overloads are intentionally deep and add no value to this behavioral suite.
+const aiMocks = jest.requireMock<{ [key: string]: jest.Mock }>('ai')
+const streamTextMock = aiMocks.streamText
+const generateTextMock = aiMocks.generateText
+const generateObjectMock = aiMocks.generateObject
+
+interface Harness {
+    service: ReviewService
+    conn: SseConnection
+    events: ReviewStreamEvent[]
+    operations: string[]
+    githubService: {
+        assertValidPRUrl: jest.Mock
+        fetchPRSnapshot: jest.Mock
+    }
+    reviewRepository: {
+        saveReview: jest.Mock
+        markFailed: jest.Mock
+    }
+}
+
+function workerResult(text: string) {
+    return {
+        text: Promise.resolve(text),
+        steps: Promise.resolve([{ text }]),
+    } as never
+}
+
+function file(filename: string, patchLength = 50): NormalizedPRFile {
+    return {
+        filename,
+        status: 'modified',
+        additions: 2,
+        deletions: 1,
+        patch: `@@ -1 +1 @@\n-old\n+${'x'.repeat(patchLength)}`,
+        patchState: 'full',
+    }
+}
+
+function snapshot(fileCount: number, source: PRSnapshot['source'] = 'github_files_api'): PRSnapshot {
+    return {
+        files: Array.from({ length: fileCount }, (_, index) => file(`src/domain-${index % 4}/file-${index}.ts`, 50 + index)),
+        source,
+        complete: true,
+        warnings: source === 'public_diff' ? ['Authenticated and anonymous file-list attempts failed.'] : [],
+    }
 }
 
 function createHarness(): Harness {
-  const events: ReviewStreamEvent[] = [];
-  const operations: string[] = [];
-  const conn: SseConnection = {
-    startedAt: Date.now(),
-    send: (event) => {
-      events.push(event);
-      operations.push(`send:${event.type}`);
-    },
-    getTrace: () => events,
-  };
-  const reviewRepository = {
-    createSession: jest.fn(),
-    saveReview: jest.fn().mockImplementation(() => {
-      operations.push('save');
-      return Promise.resolve(REVIEW_ID);
-    }),
-    markFailed: jest.fn().mockImplementation(() => {
-      operations.push('markFailed');
-      return Promise.resolve(true);
-    }),
-    markCancelled: jest.fn(),
-  };
-  const githubService = {
-    assertValidPRUrl: jest.fn(),
-    fetchPRFiles: jest.fn(),
-    fetchPRDiff: jest.fn(),
-    fetchFileContent: jest.fn(),
-  };
-  const ragService = {
-    retrieveForContext: jest.fn().mockResolvedValue(null),
-  };
-  const aiService = {
-    defaultModel: { modelId: 'test-model' },
-    provider: jest.fn(),
-  };
+    const events: ReviewStreamEvent[] = []
+    const operations: string[] = []
+    const conn: SseConnection = {
+        startedAt: Date.now(),
+        send: (event) => {
+            events.push(event)
+            operations.push(`send:${event.type}`)
+        },
+        getTrace: () => events,
+        flush: jest.fn().mockResolvedValue(undefined),
+    }
+    const reviewRepository = {
+        createSession: jest.fn(),
+        saveReview: jest.fn().mockImplementation(() => {
+            operations.push('save')
+            return Promise.resolve(REVIEW_ID)
+        }),
+        markFailed: jest.fn().mockImplementation(() => {
+            operations.push('markFailed')
+            return Promise.resolve(true)
+        }),
+        markCancelled: jest.fn(),
+    }
+    const githubService = {
+        assertValidPRUrl: jest.fn(),
+        fetchPRSnapshot: jest.fn(),
+    }
+    const service = new ReviewService(
+        reviewRepository as unknown as ReviewRepository,
+        githubService as unknown as GithubService,
+        { lint: jest.fn() } as unknown as LinterService,
+        { retrieveForContext: jest.fn().mockResolvedValue(null) } as unknown as RagService,
+        { defaultModel: { modelId: 'configured-test-model' }, provider: jest.fn() } as unknown as AiService,
+        { enqueue: jest.fn(), removeJob: jest.fn() } as unknown as QueueService,
+        { emitEvent: jest.fn() } as unknown as RedisService,
+        { kick: jest.fn() } as never,
+        { requestCancellation: jest.fn() } as never,
+    )
 
-  const service = new ReviewService(
-    {} as ConfigService,
-    reviewRepository as unknown as ReviewRepository,
-    githubService as unknown as GithubService,
-    { lint: jest.fn() } as unknown as LinterService,
-    ragService as unknown as RagService,
-    aiService as unknown as AiService,
-    { enqueue: jest.fn(), removeJob: jest.fn() } as unknown as QueueService,
-    { emitEvent: jest.fn() } as unknown as RedisService,
-  );
-
-  return {
-    service,
-    conn,
-    events,
-    operations,
-    githubService,
-    reviewRepository,
-  };
+    return { service, conn, events, operations, githubService, reviewRepository }
 }
 
-describe('ReviewService PR acquisition and terminal-state handling', () => {
-  beforeEach(() => {
-    streamTextMock.mockReset();
-    jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
-    jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
-  });
+describe('ReviewService coverage-safe PR orchestration', () => {
+    beforeEach(() => {
+        streamTextMock.mockReset()
+        generateTextMock.mockReset()
+        generateObjectMock.mockReset()
+        generateObjectMock.mockRejectedValue(new Error('planner unavailable'))
+        streamTextMock.mockImplementation(() => workerResult(JSON.stringify(VALID_REVIEW)))
+        generateTextMock.mockResolvedValue({ text: JSON.stringify(VALID_REVIEW) } as never)
+        jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined)
+        jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined)
+    })
 
-  afterEach(() => {
-    jest.restoreAllMocks();
-  });
+    afterEach(() => jest.restoreAllMocks())
 
-  it('supplies a real unified diff to the model when the file-list request fails and persists before completing', async () => {
-    const harness = createHarness();
-    harness.githubService.fetchPRFiles.mockRejectedValue(
-      new Error('file list unavailable'),
-    );
-    harness.githubService.fetchPRDiff.mockResolvedValue(UNIFIED_DIFF);
-    mockModelText(JSON.stringify(VALID_REVIEW));
+    it('runs files API acquisition through planner, workers and synthesis, then persists before completion', async () => {
+        const harness = createHarness()
+        harness.githubService.fetchPRSnapshot.mockResolvedValue(snapshot(8))
 
-    await harness.service.runForQueue(
-      REVIEW_ID,
-      'PR',
-      PR_URL,
-      USER_ID,
-      harness.conn,
-    );
+        await harness.service.runForQueue(REVIEW_ID, 'PR', PR_URL, USER_ID, harness.conn)
 
-    expect(streamTextMock).toHaveBeenCalledTimes(1);
-    const request = streamTextMock.mock.calls[0][0];
-    const modelMessage = request.messages?.[0];
-    expect(modelMessage?.role).toBe('user');
-    expect(modelMessage?.content).toEqual(
-      expect.stringContaining(UNIFIED_DIFF),
-    );
-    expect(modelMessage?.content).toEqual(
-      expect.stringContaining('<pull_request_diff>'),
-    );
-    expect(modelMessage?.content).not.toMatch(
-      /^\s*https:\/\/github\.com\/[^\s]+\s*$/,
-    );
+        const acquisition = harness.events.find((event) => event.type === 'acquisition')
+        const plan = harness.events.find((event) => event.type === 'cluster_plan')
+        const taskPlan = harness.events.find((event) => event.type === 'task_plan')
+        expect(acquisition).toMatchObject({ source: 'github_files_api', fileCount: 8 })
+        expect(plan?.type === 'cluster_plan' ? plan.clusters.length : 0).toBeGreaterThanOrEqual(2)
+        expect(taskPlan?.type === 'task_plan' ? taskPlan.tasks.map((task) => task.id) : []).toEqual(
+            snapshot(8).files.map((item) => item.filename),
+        )
+        expect(harness.events.filter((event) => event.type === 'cluster_done')).toHaveLength(2)
+        expect(harness.events.filter((event) => event.type === 'synthesis_start')).toHaveLength(1)
+        expect(streamTextMock).toHaveBeenCalledTimes(2)
+        expect(streamTextMock.mock.calls.every(([request]) =>
+            String(request.messages?.[0]?.content).includes('untrusted pull-request data'),
+        )).toBe(true)
+        expect(harness.reviewRepository.saveReview).toHaveBeenCalledWith(
+            PR_URL,
+            'PR',
+            expect.objectContaining({ coverage: expect.objectContaining({ totalFiles: 8, assignedFiles: 8 }) }),
+            USER_ID,
+            expect.any(Array),
+            REVIEW_ID,
+            'complete',
+        )
+        expect(harness.operations.indexOf('save')).toBeLessThan(harness.operations.indexOf('send:complete'))
+    })
 
-    expect(harness.reviewRepository.markFailed).not.toHaveBeenCalled();
-    expect(harness.reviewRepository.saveReview).toHaveBeenCalledTimes(1);
-    expect(harness.operations.indexOf('save')).toBeLessThan(
-      harness.operations.indexOf('send:complete'),
-    );
-    expect(
-      harness.events.filter((event) => event.type === 'complete'),
-    ).toHaveLength(1);
-    expect(
-      harness.events.filter((event) => event.type === 'error'),
-    ).toHaveLength(0);
+    it('uses the same clustered path for a public-diff snapshot and never invokes the generic PR agent', async () => {
+        const harness = createHarness()
+        harness.githubService.fetchPRSnapshot.mockResolvedValue(snapshot(7, 'public_diff'))
 
-    const saveCall = harness.reviewRepository.saveReview.mock
-      .calls[0] as unknown as Parameters<ReviewRepository['saveReview']>;
-    const persistedTrace = saveCall[4] ?? [];
-    expect(persistedTrace.at(-1)).toMatchObject({ type: 'complete' });
-  });
+        await harness.service.runForQueue(REVIEW_ID, 'PR', PR_URL, USER_ID, harness.conn)
 
-  it('does not invoke the model and records exactly one terminal failure when both GitHub acquisitions fail', async () => {
-    const harness = createHarness();
-    harness.githubService.fetchPRFiles.mockRejectedValue(
-      new Error('file list unavailable'),
-    );
-    harness.githubService.fetchPRDiff.mockRejectedValue(
-      new BadRequestException('GitHub PR is not accessible'),
-    );
+        expect(harness.events).toContainEqual(expect.objectContaining({
+            type: 'acquisition',
+            source: 'public_diff',
+            fileCount: 7,
+        }))
+        expect(harness.events.filter((event) => event.type === 'cluster_done')).toHaveLength(2)
+        expect(harness.events.some((event) => event.type === 'synthesis_start')).toBe(true)
+        expect(streamTextMock.mock.calls.every(([request]) =>
+            String(request.messages?.[0]?.content).includes('"focusHint"'),
+        )).toBe(true)
+    })
 
-    await harness.service.runForQueue(
-      REVIEW_ID,
-      'PR',
-      PR_URL,
-      USER_ID,
-      harness.conn,
-    );
+    it('assigns every file in a 20-file PR exactly once and runs no more than three workers concurrently', async () => {
+        const harness = createHarness()
+        harness.githubService.fetchPRSnapshot.mockResolvedValue(snapshot(20))
+        let active = 0
+        let maxActive = 0
+        streamTextMock.mockImplementation(() => {
+            active++
+            maxActive = Math.max(maxActive, active)
+            const text = new Promise<string>((resolve) => {
+                setTimeout(() => {
+                    active--
+                    resolve(JSON.stringify(VALID_REVIEW))
+                }, 5)
+            })
+            return {
+                text,
+                steps: text.then((value) => [{ text: value }]),
+            } as never
+        })
 
-    expect(streamTextMock).not.toHaveBeenCalled();
-    expect(harness.reviewRepository.saveReview).not.toHaveBeenCalled();
-    expect(harness.reviewRepository.markFailed).toHaveBeenCalledTimes(1);
-    expect(harness.reviewRepository.markFailed).toHaveBeenCalledWith(
-      REVIEW_ID,
-      'GitHub PR is not accessible',
-      [
-        { type: 'start' },
-        { type: 'error', message: 'GitHub PR is not accessible' },
-      ],
-    );
+        await harness.service.runForQueue(REVIEW_ID, 'PR', PR_URL, USER_ID, harness.conn)
 
-    const terminalEvents = harness.events.filter(
-      (event) => event.type === 'complete' || event.type === 'error',
-    );
-    expect(terminalEvents).toEqual([
-      { type: 'error', message: 'GitHub PR is not accessible' },
-    ]);
-  });
+        const plan = harness.events.find((event) => event.type === 'cluster_plan')
+        const assignments = plan?.type === 'cluster_plan'
+            ? plan.clusters.flatMap((cluster) => cluster.files.map((item) => item.name))
+            : []
+        expect(assignments).toHaveLength(20)
+        expect(new Set(assignments).size).toBe(20)
+        expect(plan?.type === 'cluster_plan' ? plan.clusters.length : 0).toBeGreaterThanOrEqual(2)
+        expect(maxActive).toBe(3)
+        const savedReview = harness.reviewRepository.saveReview.mock.calls[0][2] as ReviewData
+        expect(savedReview.coverage).toMatchObject({ totalFiles: 20, assignedFiles: 20, reviewedFiles: 20 })
+    })
 
-  it('uses unified diff fallback when GitHub returns files without reviewable patches', async () => {
-    const harness = createHarness();
-    harness.githubService.fetchPRFiles.mockResolvedValue([
-      {
-        filename: 'assets/large-binary.dat',
-        status: 'modified',
-        additions: 0,
-        deletions: 0,
-      },
-    ]);
-    harness.githubService.fetchPRDiff.mockResolvedValue(UNIFIED_DIFF);
-    mockModelText(JSON.stringify(VALID_REVIEW));
+    it('retries an invalid worker once at temperature zero and finishes COMPLETE', async () => {
+        const harness = createHarness()
+        harness.githubService.fetchPRSnapshot.mockResolvedValue(snapshot(3))
+        streamTextMock
+            .mockImplementationOnce(() => workerResult('not valid JSON'))
+            .mockImplementationOnce(() => workerResult(JSON.stringify(VALID_REVIEW)))
 
-    await harness.service.runForQueue(
-      REVIEW_ID,
-      'PR',
-      PR_URL,
-      USER_ID,
-      harness.conn,
-    );
+        await harness.service.runForQueue(REVIEW_ID, 'PR', PR_URL, USER_ID, harness.conn)
 
-    expect(harness.githubService.fetchPRDiff).toHaveBeenCalledWith(PR_URL);
-    expect(streamTextMock.mock.calls[0][0].messages?.[0]?.content).toEqual(
-      expect.stringContaining(UNIFIED_DIFF),
-    );
-  });
+        expect(streamTextMock).toHaveBeenCalledTimes(2)
+        expect(streamTextMock.mock.calls[1][0].temperature).toBe(0)
+        expect(harness.events).toContainEqual(expect.objectContaining({ type: 'cluster_done', attempts: 2 }))
+        expect(harness.events).toContainEqual(expect.objectContaining({ type: 'complete', outcome: 'complete' }))
+        expect(harness.events.some((event) => event.type === 'synthesis_start')).toBe(false)
+    })
 
-  it('marks the review failed when the model output is not a valid review', async () => {
-    const harness = createHarness();
-    harness.githubService.fetchPRFiles.mockRejectedValue(
-      new Error('file list unavailable'),
-    );
-    harness.githubService.fetchPRDiff.mockResolvedValue(UNIFIED_DIFF);
-    mockModelText("I'm unable to access external websites, including GitHub.");
+    it('persists PARTIAL with exact unreviewed files after one cluster permanently fails', async () => {
+        const harness = createHarness()
+        const data = snapshot(7)
+        data.files[0].filename = 'src/failing/always-fail.ts'
+        harness.githubService.fetchPRSnapshot.mockResolvedValue(data)
+        streamTextMock.mockImplementation((request) => {
+            const prompt = String(request.messages?.[0]?.content)
+            return workerResult(prompt.includes('always-fail.ts') ? 'invalid output' : JSON.stringify(VALID_REVIEW))
+        })
 
-    await harness.service.runForQueue(
-      REVIEW_ID,
-      'PR',
-      PR_URL,
-      USER_ID,
-      harness.conn,
-    );
+        await harness.service.runForQueue(REVIEW_ID, 'PR', PR_URL, USER_ID, harness.conn)
 
-    const expectedMessage =
-      'The model did not return a valid review. Please try again.';
-    expect(harness.reviewRepository.saveReview).not.toHaveBeenCalled();
-    expect(harness.reviewRepository.markFailed).toHaveBeenCalledTimes(1);
-    expect(harness.reviewRepository.markFailed).toHaveBeenCalledWith(
-      REVIEW_ID,
-      expectedMessage,
-      [{ type: 'start' }, { type: 'error', message: expectedMessage }],
-    );
-    expect(harness.events.filter((event) => event.type === 'error')).toEqual([
-      { type: 'error', message: expectedMessage },
-    ]);
-  });
+        const plan = harness.events.find((event) => event.type === 'cluster_plan')
+        const failedEvent = harness.events.find((event) => event.type === 'cluster_failed')
+        expect(plan?.type).toBe('cluster_plan')
+        expect(failedEvent?.type).toBe('cluster_failed')
+        const failedFiles = plan?.type === 'cluster_plan' && failedEvent?.type === 'cluster_failed'
+            ? plan.clusters.find((cluster) => cluster.id === failedEvent.clusterId)?.files.map((item) => item.name).sort()
+            : undefined
+        const savedReview = harness.reviewRepository.saveReview.mock.calls[0][2] as ReviewData
+        expect(savedReview.coverage?.unreviewedFiles).toEqual(failedFiles)
+        expect(savedReview.coverage?.failedClusters).toEqual([failedEvent?.type === 'cluster_failed' ? failedEvent.clusterId : ''])
+        expect(harness.reviewRepository.saveReview.mock.calls[0][6]).toBe('partial')
+        expect(harness.events.at(-1)).toEqual(expect.objectContaining({ type: 'complete', outcome: 'partial' }))
+        expect(harness.events.some((event) => event.type === 'synthesis_start')).toBe(true)
+    })
 
-  it('does not expose unexpected persistence details to SSE clients or history', async () => {
-    const harness = createHarness();
-    harness.githubService.fetchPRFiles.mockRejectedValue(
-      new Error('file list unavailable'),
-    );
-    harness.githubService.fetchPRDiff.mockResolvedValue(UNIFIED_DIFF);
-    mockModelText(JSON.stringify(VALID_REVIEW));
-    harness.reviewRepository.saveReview.mockRejectedValue(
-      new Error('database at postgresql://private-host failed'),
-    );
+    it('fails atomically with one terminal event when all workers fail', async () => {
+        const harness = createHarness()
+        harness.githubService.fetchPRSnapshot.mockResolvedValue(snapshot(7))
+        streamTextMock.mockImplementation(() => workerResult('invalid output'))
 
-    await harness.service.runForQueue(
-      REVIEW_ID,
-      'PR',
-      PR_URL,
-      USER_ID,
-      harness.conn,
-    );
+        await harness.service.runForQueue(REVIEW_ID, 'PR', PR_URL, USER_ID, harness.conn)
 
-    const publicMessage = 'Review failed unexpectedly. Please try again.';
-    expect(harness.reviewRepository.markFailed).toHaveBeenCalledWith(
-      REVIEW_ID,
-      publicMessage,
-      expect.arrayContaining([{ type: 'error', message: publicMessage }]),
-    );
-    expect(harness.events.at(-1)).toEqual({
-      type: 'error',
-      message: publicMessage,
-    });
-    expect(JSON.stringify(harness.events)).not.toContain('private-host');
-  });
-});
+        expect(harness.events.filter((event) => event.type === 'cluster_failed')).toHaveLength(2)
+        expect(harness.events.filter((event) => event.type === 'error')).toHaveLength(1)
+        expect(harness.events.filter((event) => event.type === 'complete')).toHaveLength(0)
+        expect(harness.reviewRepository.markFailed).toHaveBeenCalledTimes(1)
+        expect(harness.reviewRepository.saveReview).not.toHaveBeenCalled()
+    })
+
+    it('discloses truncated context while remaining COMPLETE when its worker succeeds', async () => {
+        const harness = createHarness()
+        const data = snapshot(1)
+        data.files[0] = file('src/large.ts', 20_000)
+        harness.githubService.fetchPRSnapshot.mockResolvedValue(data)
+
+        await harness.service.runForQueue(REVIEW_ID, 'PR', PR_URL, USER_ID, harness.conn)
+
+        const prompt = String(streamTextMock.mock.calls[0][0].messages?.[0]?.content)
+        const savedReview = harness.reviewRepository.saveReview.mock.calls[0][2] as ReviewData
+        expect(prompt).toContain('additional diff hunks omitted')
+        expect(savedReview.coverage?.truncatedFiles).toEqual(['src/large.ts'])
+        expect(savedReview.coverage?.unreviewedFiles).toEqual([])
+        expect(harness.reviewRepository.saveReview.mock.calls[0][6]).toBe('complete')
+    })
+
+    it('fails a binary-only PR before planner or worker invocation', async () => {
+        const harness = createHarness()
+        const data = snapshot(1)
+        data.files[0] = { ...data.files[0], patch: undefined, patchState: 'binary' }
+        harness.githubService.fetchPRSnapshot.mockResolvedValue(data)
+
+        await harness.service.runForQueue(REVIEW_ID, 'PR', PR_URL, USER_ID, harness.conn)
+
+        expect(generateObjectMock).not.toHaveBeenCalled()
+        expect(streamTextMock).not.toHaveBeenCalled()
+        expect(harness.reviewRepository.markFailed).toHaveBeenCalledWith(
+            REVIEW_ID,
+            expect.stringMatching(/no usable text diff/i),
+            expect.any(Array),
+        )
+    })
+
+    it('keeps the complete worker prompt within 40,000 characters and does not mutate snapshot state', async () => {
+        const harness = createHarness()
+        const data = snapshot(12)
+        data.files = data.files.map((item, index) => file(`src/domain/file-${index}.ts`, 20_000))
+        const originalStates = data.files.map((item) => item.patchState)
+        harness.githubService.fetchPRSnapshot.mockResolvedValue(data)
+
+        await harness.service.runForQueue(REVIEW_ID, 'PR', PR_URL, USER_ID, harness.conn)
+
+        for (const [request] of streamTextMock.mock.calls) {
+            expect(String(request.system).length + String(request.messages?.[0]?.content).length).toBeLessThanOrEqual(40_000)
+        }
+        expect(data.files.map((item) => item.patchState)).toEqual(originalStates)
+    })
+})

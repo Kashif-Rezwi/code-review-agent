@@ -25,14 +25,17 @@ The complete set of SSE event shapes. Each event has a `type` discriminant:
 | `type` | Direction | Carries |
 |---|---|---|
 | `start` | server → client | *(nothing — signals pipeline began)* |
+| `acquisition` | server → client | `source`, `fileCount`, `complete`, sanitized `warnings` |
 | `thinking` | server → client | `text: string`, `clusterId?: string` |
 | `task_plan` | server → client | `tasks: { id, label }[]` |
 | `task_update` | server → client | `taskId`, `status`, `detail?` |
 | `tool_start` | server → client | `tool`, `callId`, `label`, `detail?`, `clusterId?` |
 | `tool_done` | server → client | `callId`, `label`, `detail?`, `durationMs`, `clusterId?` |
 | `cluster_plan` | server → client | `clusters: { id, label, focus, files[] }[]` |
-| `cluster_done` | server → client | `clusterId`, `issueCount`, `durationMs` |
-| `complete` | server → client | `review: ReviewData`, `durationMs`, `stepCount` |
+| `cluster_done` | server → client | `clusterId`, `issueCount`, `durationMs`, `attempts?` |
+| `cluster_failed` | server → client | `clusterId`, `attempts`, `message`, `durationMs` |
+| `synthesis_start` | server → client | successful `clusterCount` |
+| `complete` | server → client | `review: ReviewData`, `durationMs`, `stepCount`, `outcome?` |
 | `error` | server → client | `message: string` |
 
 `clusterId` is present only on events emitted by worker agents in the multi-agent PR path. All single-agent events leave it `undefined`.
@@ -49,6 +52,7 @@ ReviewData {
   positives:        string[]
   appliedStandards: string[]  (added server-side, never from LLM)
   id:               string    (added server-side after DB save)
+  coverage?:        ReviewCoverage (added server-side for PR reviews)
 }
 ```
 
@@ -130,9 +134,9 @@ Tool for fetching a specific file's full source from the PR's head branch. Input
 
 All tool factories follow the same pattern: they accept an `impl` function and return a Zod-typed Vercel AI SDK tool object. The tool definition lives here; the implementation lives in the server's service layer. This separation means the `@cra/ai` package never depends on NestJS or ioredis.
 
-#### `planClusters(files, openai): ClusterPlan[]`
+#### `planClusters(files, model): ClusterPlan[]`
 
-Groups PR files into domain clusters. See [review-pr.md](./review-pr.md) for the full algorithm. Exported types: `ClusterPlan`.
+Groups PR files into exact-once domain clusters using the centrally configured model, then reconciles duplicates, omissions, and unknown names. Deterministic path/weight fallback always creates 2–4 groups for PRs larger than three files. See [review-pr.md](./review-pr.md).
 
 #### `PRFile` / `PRFileSchema`
 

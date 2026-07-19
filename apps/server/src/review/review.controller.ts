@@ -24,7 +24,8 @@ export class ReviewController {
 
     @Sse(':reviewId/stream')
     streamReview(@Param('reviewId') reviewId: string, @Req() req: Request): Observable<MessageEvent> {
-        return this.reviewStreamerService.createStream(reviewId, req.user!.userId)
+        const lastEventId = req.header('last-event-id')
+        return this.reviewStreamerService.createStream(reviewId, req.user!.userId, lastEventId)
     }
 
     @Get(':reviewId')

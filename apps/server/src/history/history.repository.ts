@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common'
 import { PrismaService } from '../prisma/prisma.service'
-import type { Review, Issue, Conversation } from '@prisma/client'
+import { ReviewStatus, type Review, type Issue, type Conversation } from '@prisma/client'
 
 export type ReviewWithRelations = Review & {
     issues: Issue[]
@@ -15,12 +15,14 @@ export class HistoryRepository {
 
     listReviews(userId: string) {
         return this.prisma.review.findMany({
-            where: { userId, status: 'COMPLETE' },
+            where: { userId, status: { in: ['COMPLETE', 'PARTIAL'] } },
             select: {
                 id: true,
                 type: true,
+                status: true,
                 summary: true,
                 score: true,
+                coverage: true,
                 createdAt: true,
                 _count: { select: { issues: true } },
             },
@@ -39,23 +41,26 @@ export class HistoryRepository {
     }
 
     async getStats(userId: string) {
-        const [totalReviews, byType, bySeverity] = await Promise.all([
-            this.prisma.review.count({ where: { userId, status: 'COMPLETE' } }),
+        const terminalStatuses: ReviewStatus[] = ['COMPLETE', 'PARTIAL']
+        const [totalReviews, partialReviews, byType, bySeverity] = await Promise.all([
+            this.prisma.review.count({ where: { userId, status: { in: terminalStatuses } } }),
+            this.prisma.review.count({ where: { userId, status: 'PARTIAL' } }),
             this.prisma.issue.groupBy({
                 by: ['type'],
-                where: { review: { userId, status: 'COMPLETE' } },
+                where: { review: { userId, status: { in: terminalStatuses } } },
                 _count: { type: true },
                 orderBy: { _count: { type: 'desc' } },
             }),
             this.prisma.issue.groupBy({
                 by: ['severity'],
-                where: { review: { userId, status: 'COMPLETE' } },
+                where: { review: { userId, status: { in: terminalStatuses } } },
                 _count: { severity: true },
             }),
         ])
 
         return {
             totalReviews,
+            partialReviews,
             issuesByType: byType.map((r) => ({ type: r.type, count: r._count.type })),
             issuesBySeverity: bySeverity.map((r) => ({
                 severity: r.severity,

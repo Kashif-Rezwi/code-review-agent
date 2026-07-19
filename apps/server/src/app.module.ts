@@ -8,12 +8,14 @@ import { AuthModule } from './auth/auth.module'
 import { HealthController } from './health.controller'
 import { QueueModule } from './queue/queue.module'
 import { AiModule } from './ai/ai.module'
+import { GithubModule } from './github/github.module'
 
 @Module({
     imports: [
         ConfigModule.forRoot({ isGlobal: true }),
         PrismaModule,
         AiModule,
+        GithubModule,
         AuthModule,
         RagModule,
         ReviewModule,

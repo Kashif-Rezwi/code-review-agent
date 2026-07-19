@@ -5,6 +5,7 @@ import { RedisService } from '../queue/redis.service'
 import { ReviewRepository } from './review.repository'
 import { createRedisEmitter } from '../queue/review.emitter'
 import type { ReviewJobPayload } from '../queue/queue.service'
+import { ReviewCancellationService } from '../queue/review-cancellation.service'
 
 /**
  * Executes AI pipelines in the background.
@@ -16,6 +17,7 @@ export class ReviewProcessor extends WorkerHost {
         private readonly reviewService: ReviewService,
         private readonly redisService: RedisService,
         private readonly reviewRepository: ReviewRepository,
+        private readonly cancellation: ReviewCancellationService,
     ) {
         super()
     }
@@ -59,6 +61,7 @@ export class ReviewProcessor extends WorkerHost {
 
     async process(job: Job<ReviewJobPayload>): Promise<void> {
         const { reviewId, type, input, userId } = job.data
+        const execution = await this.cancellation.createExecution(reviewId, 5 * 60_000)
 
         // 1. Create a Redis-backed Emitter that perfectly implements SseConnection
         const conn = createRedisEmitter(this.redisService, reviewId)
@@ -66,6 +69,15 @@ export class ReviewProcessor extends WorkerHost {
         // 2. Run the pipeline. Errors are caught internally by runForQueue,
         // which emits { type: "error" } over Redis and updates the DB.
         // We do *not* throw to BullMQ, because we do not want it to retry expensive LLM runs.
-        await this.reviewService.runForQueue(reviewId, type, input, userId, conn)
+        try {
+            await this.reviewService.runForQueue(reviewId, type, input, userId, conn, execution.signal)
+        } finally {
+            // A BullMQ completion must never race the terminal Stream append.
+            try {
+                await conn.flush()
+            } finally {
+                await execution.dispose()
+            }
+        }
     }
 }

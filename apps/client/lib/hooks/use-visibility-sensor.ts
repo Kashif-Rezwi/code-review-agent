@@ -5,7 +5,7 @@ export function useVisibilitySensor(ref: RefObject<HTMLElement | null>, defaultV
 
     useEffect(() => {
         const el = ref.current
-        if (!el) { setIsVisible(defaultVisible); return }
+        if (!el) return
         
         const observer = new IntersectionObserver(
             ([entry]) => setIsVisible(entry.isIntersecting),

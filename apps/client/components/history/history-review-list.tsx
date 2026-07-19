@@ -12,6 +12,7 @@ export interface ReviewSummary {
     type: 'CODE' | 'PR'
     summary: string
     score: number
+    status: 'COMPLETE' | 'PARTIAL'
     createdAt: string
     _count: { issues: number }
 }
@@ -122,6 +123,11 @@ export function HistoryReviewList({ reviews, isLoading, onDelete }: HistoryRevie
                                                     : <Code2 className="w-3 h-3" />}
                                                 {review.type}
                                             </Badge>
+                                            {review.status === 'PARTIAL' && (
+                                                <span className="rounded-full border border-amber-500/30 bg-amber-950/20 px-2 py-0.5 text-[10px] font-medium text-amber-300/80">
+                                                    PARTIAL
+                                                </span>
+                                            )}
                                         </div>
 
                                         {/* Summary — clickable */}

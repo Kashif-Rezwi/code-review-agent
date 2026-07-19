@@ -179,6 +179,14 @@ npx prisma migrate dev         # development (create + apply)
 npx prisma studio              # visual DB browser
 ```
 
+For the coverage-safe PR pipeline, test migration `20260718090000_add_partial_review_coverage` on a Neon branch first. Apply it in production before deploying code that writes `PARTIAL`:
+
+```bash
+pnpm --filter server exec prisma migrate deploy
+```
+
+Deploy in this order: database migration, server, then client. The new enum value and nullable `coverage` JSONB column leave historical rows and trace logs valid.
+
 ---
 
 ## Dockerfiles

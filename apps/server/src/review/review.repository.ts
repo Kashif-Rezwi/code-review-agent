@@ -20,8 +20,14 @@ export class ReviewRepository {
     async createSession(type: 'CODE' | 'PR', input: string, userId: string) {
         if (!this.hasDb) return null
         try {
-            return await this.prisma.review.create({
-                data: { userId, type, input, status: 'PENDING' },
+            return await this.prisma.$transaction(async (transaction) => {
+                const review = await transaction.review.create({
+                    data: { userId, type, input, status: 'PENDING' },
+                })
+                await transaction.reviewDispatch.create({
+                    data: { reviewId: review.id },
+                })
+                return review
             })
         } catch (err) {
             this.logger.warn(`Failed to create review session: ${err instanceof Error ? err.message : err}`)
@@ -47,11 +53,19 @@ export class ReviewRepository {
     /** Returns true if the review was actually cancelled (was PENDING), false otherwise. */
     async markCancelled(reviewId: string): Promise<boolean> {
         if (!this.hasDb) return false
-        const result = await this.prisma.review.updateMany({
-            where: { id: reviewId, status: 'PENDING' },
-            data: { status: 'CANCELLED' },
+        return this.prisma.$transaction(async (transaction) => {
+            const result = await transaction.review.updateMany({
+                where: { id: reviewId, status: 'PENDING' },
+                data: { status: 'CANCELLED' },
+            })
+            if (result.count > 0) {
+                await transaction.reviewDispatch.updateMany({
+                    where: { reviewId, status: { in: ['PENDING', 'PROCESSING'] } },
+                    data: { status: 'CANCELLED', lockedUntil: null },
+                })
+            }
+            return result.count > 0
         })
-        return result.count > 0
     }
 
     async saveReview(
@@ -61,6 +75,7 @@ export class ReviewRepository {
         userId: string,
         traceLog?: ReviewStreamEvent[],
         reviewId?: string,
+        outcome: 'complete' | 'partial' = 'complete',
     ): Promise<string | undefined> {
         if (!this.hasDb) return undefined
         const reviewData = {
@@ -68,6 +83,9 @@ export class ReviewRepository {
             score: data.score,
             positives: data.positives,
             appliedStandards: data.appliedStandards ?? [],
+            ...(data.coverage
+                ? { coverage: data.coverage as unknown as Prisma.InputJsonValue }
+                : {}),
             ...(traceLog && traceLog.length > 0 ? { traceLog: traceLog as unknown as Prisma.InputJsonValue } : {}),
             issues: {
                 create: data.issues.map((i) => ({
@@ -87,14 +105,14 @@ export class ReviewRepository {
             try {
                 const saved = await this.prisma.review.update({
                     where: { id: reviewId, status: 'PENDING' },
-                    data: { ...reviewData, status: 'COMPLETE' },
+                    data: { ...reviewData, status: outcome === 'partial' ? 'PARTIAL' : 'COMPLETE' },
                 })
                 return saved.id
             } catch (err: unknown) {
                 if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') {
                     return undefined
                 }
-                this.logger.error(`Failed to save review ${reviewId}: ${err instanceof Error ? err.message : err}`)
+                this.logger.error(`Failed to save review ${reviewId}: ${err instanceof Error ? err.message : String(err)}`)
                 throw err
             }
         }
@@ -104,7 +122,7 @@ export class ReviewRepository {
                 userId,
                 type,
                 input,
-                status: 'COMPLETE',
+                status: outcome === 'partial' ? 'PARTIAL' : 'COMPLETE',
                 ...reviewData,
             },
         })

@@ -1,6 +1,6 @@
 'use client'
 
-import { useRef, useState, useCallback } from 'react'
+import { useState } from 'react'
 import { useVisibilitySensor } from '@/lib/hooks/use-visibility-sensor'
 import { ArrowUp, ChevronUp, ChevronDown } from 'lucide-react'
 import { cn } from '@/lib/utils'

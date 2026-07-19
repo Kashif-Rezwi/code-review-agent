@@ -1,149 +1,93 @@
-# GitHub Integration
+# GitHub PR Data Acquisition
 
-## Overview
+## Purpose
 
-The GitHub integration serves two distinct purposes: authenticating users (handled by NextAuth, documented in [authentication.md](./authentication.md)) and fetching Pull Request data for review. This document covers only the PR data access layer — how the server fetches PR diffs, file lists, and individual file content from the GitHub REST API.
+`GithubService` supplies normalized per-file PR data to the review orchestrator. It is separate from GitHub sign-in: the browser session token authenticates app users, while the optional server `GITHUB_TOKEN` raises API limits and permits configured private-repository access.
 
----
+The server token architecture is intentionally unchanged. A GitHub App/OAuth credential migration is a separate project.
 
-## High-Level Design
+## Normalized Snapshot
 
-`GithubService` is a single NestJS injectable service that wraps the GitHub REST API. It is called exclusively by `ReviewService` during the PR review pipeline. It supports two authentication modes — authenticated (with a `GITHUB_TOKEN`) and unauthenticated — and handles rate limits, pagination, and error cases uniformly.
+`fetchPRSnapshot(prUrl)` is the orchestration entry point:
 
-```
-ReviewService
-  │
-  ├── assertValidPRUrl(url)       — fail-fast URL validation before the pipeline starts
-  ├── fetchPRFiles(prUrl)         — returns PRFile[] (paginated)
-  ├── fetchPRDiff(prUrl)          — returns full unified diff string
-  └── fetchFileContent(prUrl, filePath) — returns full source of one file
-```
-
----
-
-## PR URL Parsing
-
-All methods begin with `parsePRUrl(url)` from `github.utils.ts`. This function validates and deconstructs URLs of the form:
-
-```
-https://github.com/{owner}/{repo}/pull/{number}
+```text
+/pulls/:number/files (authenticated, then anonymous when appropriate)
+                    │
+                    ├─ success ── normalize files ── enrich missing patches from diff
+                    │
+                    └─ failure ── public .diff ── parse per-file records
 ```
 
-It throws a `BadRequestException` immediately for any URL that does not match this pattern. This prevents the agent loop from starting with invalid input.
+Both branches return `PRSnapshot { files, source, complete, warnings }`. Each file contains normal GitHub metadata plus:
 
----
+- `patchState`: `full | truncated | metadata_only | binary`
+- `previousFilename` for renames
+- a canonical patch rebuilt from parsed hunks when the public diff is used
 
-## Authentication Modes
+The parser adapter is `unified-diff.parser.ts`, backed by `parse-diff@0.12.0`. Keeping the package behind an adapter prevents package-specific shapes from leaking into review planning.
 
-### Authenticated (recommended)
+## Files API
 
-Set `GITHUB_TOKEN` in the server environment. The trimmed token is preferred for GitHub API requests.
+`fetchPRFiles()` follows `Link: rel="next"` pagination at 100 files per page and validates every response with `PRFileSchema`.
 
-- Supports **private repositories**
-- Rate limit: **5,000 requests/hour**
-- Diffs are fetched via the REST API with `Accept: application/vnd.github.diff`
-- If GitHub rejects the token, public PR requests are retried without credentials; private PRs still fail with the authenticated error
+When a configured token is rejected, a public request is attempted for statuses where anonymous access may still work. If both fail, the thrown diagnostic retains both status-specific messages, GitHub request IDs, and rate-limit/retry headers when supplied. Responses and logs never contain the token.
 
-### Unauthenticated (public repos only)
+## Public Unified-Diff Fallback
 
-Public file lists use the unauthenticated REST API. Unified-diff fallback uses GitHub's direct `.diff` URL:
+If the structured list cannot be acquired, `fetchPRSnapshot()` goes directly to:
 
-```
+```text
 https://github.com/{owner}/{repo}/pull/{number}.diff
 ```
 
-- Works for public repos only
-- Not subject to the strict 60 req/hour unauthenticated API limit (direct URL path)
-- More reliable in shared-IP environments (Vercel, Render, Railway)
+The response is read as a byte stream with a hard 2 MiB limit. An oversized diff without a structured file list fails with “PR too large to acquire safely”; the server never reviews an unknown prefix. HTML login pages, empty diffs and unparseable/empty file sets also fail explicitly.
 
-The `buildHeaders()` private method handles conditional auth. A broken shared token therefore cannot make an otherwise-public PR unreadable.
+When the files API succeeds but a patch is absent, the parsed diff is used only to fill the matching file. Binary files remain explicit `binary` records without invented text.
 
----
+## Request Policy
 
-## Methods
+All GitHub requests use:
 
-### `fetchPRFiles(prUrl): PRFile[]`
+- a 10-second timeout;
+- one retry for network failures, `5xx`, `429`, and rate-limit `403` responses;
+- at most two seconds of jitter/backoff;
+- no same-request retry for `401` or `404`.
 
-Fetches the list of files changed in a PR, with per-file diff patches.
+After an authenticated file request fails, the anonymous files attempt and public `.diff` fallback are separate steps. This preserves diagnostics without repeatedly sending a known-bad token.
 
-- Uses `GET /repos/{owner}/{repo}/pulls/{number}/files?per_page=100`
-- **Paginates** — follows the GitHub `Link: rel="next"` header until all pages are consumed
-- Each file is validated against the `PRFileSchema` Zod schema (defined in `@cra/ai`)
-- Returns an array of `PRFile` objects with: `filename`, `status`, `additions`, `deletions`, `patch`
+## Token Health
 
-This is the primary data source for the clustered multi-agent PR review. Returned file objects flow directly into `planClusters()` and then into each worker agent's context.
+At server startup, a status-only request to GitHub `/rate_limit` validates the configured token. This check is diagnostic and does not block public PR review.
 
-### `fetchPRDiff(prUrl): string`
+`GET /health` returns:
 
-Fetches the available unified diff for the PR as a single string.
+```json
+{
+  "status": "ok",
+  "githubToken": "valid"
+}
+```
 
-- Max size: **24,000 characters** — truncated with a notice if exceeded
-- Guards against HTML login pages (returned by GitHub for private repos without auth) by checking if the response starts with `<`
-- Used as a fallback in the single-agent PR path when `fetchPRFiles` fails or returns zero files
+`githubToken` is one of `valid`, `invalid`, `missing`, or `unchecked`. Invalid tokens make the aggregate status `degraded`; secrets are never returned.
 
-### `fetchFileContent(prUrl, filePath): string`
+## Failure Behavior
 
-Fetches the full source code of a specific file from the PR's head branch.
-
-- Uses `GET /repos/{owner}/{repo}/contents/{path}?ref={headSha}`
-- Fetches the head commit SHA via `fetchPRHeadRef()` (cached in `GithubCacheService`) to ensure the correct file version is read
-- Returns max **8,000 characters** — truncated with a notice if exceeded
-- GitHub's Contents API returns base64-encoded file content; `decodeGitHubFileBase64()` decodes it
-
-### `fetchUserProfile(token): GithubUserResponse`
-
-Validates a GitHub OAuth token and fetches the user's profile.
-
-- Used only by `AuthService` during token resolution
-- Throws `UnauthorizedException` on 401 from GitHub
-
----
-
-## Caching
-
-`GithubCacheService` (`github-cache.service.ts`) maintains an in-memory cache for PR head commit SHAs. This prevents redundant API calls during a single review session when `fetchFileContent` is called multiple times for files in the same PR.
-
-The cache is keyed by `"{owner}/{repo}/{number}"` and is not TTL-bounded (it lives for the lifetime of the process).
-
----
-
-## Error Handling
-
-All public methods call `assertOk(res, prUrl)` which maps GitHub HTTP status codes to descriptive `BadRequestException` messages:
-
-| GitHub Status | Exception message |
+| Condition | Result |
 |---|---|
-| `401` | Configured token is invalid, expired, or revoked |
-| `403` | Token lacks repository permission, or rate-limited when `x-ratelimit-remaining` is zero |
-| `404` | PR is missing or inaccessible to the configured token |
-| `429` | Rate limit exceeded, including retry/reset metadata when GitHub supplies it |
-| Other non-2xx | Generic `GitHub returned {status}` message |
+| Authenticated files `401`, anonymous files succeeds | Use files API snapshot |
+| Authenticated files `401`, anonymous files `403`, public diff succeeds | Use parsed public-diff snapshot and retain sanitized warnings |
+| Some API patches missing | Fill matching text from parsed diff |
+| Binary changed file | Keep explicit binary metadata |
+| Raw diff exceeds 2 MiB and no file list exists | Fail safely |
+| Token invalid but PR public | Public paths remain available |
+| All acquisition paths fail | Review becomes `FAILED`; no model sees a bare PR URL |
 
-These exceptions propagate through `ReviewService` and are caught by the pipeline's top-level try/catch, which emits an `{ type: "error" }` SSE event and marks the review as `FAILED` in the database.
-
----
-
-## Edge Cases
-
-| Scenario | Behaviour |
-|---|---|
-| Invalid token + public PR | Authenticated request is logged safely and retried without credentials |
-| File-list fetch fails or contains no usable patches | Pipeline fetches a real unified diff; it never sends a bare PR URL to a tool-less model |
-| Both source paths fail | Model is not invoked; review transitions from `PENDING` to `FAILED` with an actionable error |
-| PR with no changed files | `fetchPRFiles` returns `[]`; direct diff confirms whether reviewable changes exist |
-| Diff > 24,000 characters | Truncated with `[diff truncated — PR is too large to review in full]` appended |
-| File > 8,000 characters | Truncated with character count notice |
-| Private repo without token | HTML login page detected → `BadRequestException` with clear message |
-| Missing head SHA | `fetchPRHeadRef` returns `null`; file fetched from default branch instead |
-| Paginated file lists (>100 files) | All pages consumed via `Link` header iteration |
-
----
-
-## Related Files
+## Main Files
 
 | File | Role |
 |---|---|
-| [`apps/server/src/github/github.service.ts`](../apps/server/src/github/github.service.ts) | Main service — all API calls |
-| [`apps/server/src/github/github.utils.ts`](../apps/server/src/github/github.utils.ts) | `parsePRUrl`, `decodeGitHubFileBase64` |
-| [`apps/server/src/github/github-cache.service.ts`](../apps/server/src/github/github-cache.service.ts) | In-memory PR head SHA cache |
-| [`packages/ai/src/tools/github.tool.ts`](../packages/ai/src/tools/github.tool.ts) | `PRFile` type, `PRFileSchema` Zod schema, tool definitions |
+| `apps/server/src/github/github.service.ts` | HTTP, fallback, retry, byte limit and token health |
+| `apps/server/src/github/github.types.ts` | `PRSnapshot` and normalized file types |
+| `apps/server/src/github/unified-diff.parser.ts` | Application-owned parser adapter |
+| `apps/server/src/github/github.utils.ts` | URL validation and base64 helpers |
+| `packages/ai/src/tools/github.tool.ts` | Base GitHub file schema |

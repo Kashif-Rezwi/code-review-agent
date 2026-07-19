@@ -39,7 +39,7 @@ export class HistoryController {
         return new Observable((subscriber) => {
             const stream = this.historyService.chatGenerator(id, req.user!.userId, dto.message)
 
-            ;(async () => {
+            void (async () => {
                 try {
                     for await (const chunk of stream) {
                         subscriber.next({ data: { type: 'delta', text: chunk } })

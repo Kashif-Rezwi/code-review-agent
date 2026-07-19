@@ -3,6 +3,7 @@ import { BullModule } from '@nestjs/bullmq'
 import { ConfigService } from '@nestjs/config'
 import { QueueService } from './queue.service'
 import { RedisService } from './redis.service'
+import { ReviewCancellationService } from './review-cancellation.service'
 
 @Module({
     imports: [
@@ -14,7 +15,7 @@ import { RedisService } from './redis.service'
         }),
         BullModule.registerQueue({ name: 'review-jobs' }),
     ],
-    providers: [QueueService, RedisService],
-    exports: [QueueService, RedisService, BullModule],
+    providers: [QueueService, RedisService, ReviewCancellationService],
+    exports: [QueueService, RedisService, ReviewCancellationService, BullModule],
 })
 export class QueueModule {}

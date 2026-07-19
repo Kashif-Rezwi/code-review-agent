@@ -1,5 +1,5 @@
 import { memo, useMemo, useState } from 'react'
-import { CheckCircle2, X } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { ClusterState } from '@/lib/use-review-stream'
 import { groupEntries } from '@/lib/group-entries'
@@ -37,7 +37,9 @@ const WorkerCard = memo(function WorkerCard({
         >
             <div className="flex items-center gap-2 mb-2.5">
                 {cluster.done
-                    ? <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0" />
+                    ? cluster.failed
+                        ? <AlertTriangle className="h-3.5 w-3.5 text-amber-400 shrink-0" />
+                        : <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0" />
                     : <AgentIcon className="h-2.5 ml-0.5 mr-0.5" />
                 }
                 <span className="text-xs font-medium text-gray-200 truncate leading-none">
@@ -49,10 +51,16 @@ const WorkerCard = memo(function WorkerCard({
                 {!cluster.done && (
                     <span className="text-xs text-blue-400/70">Analyzing…</span>
                 )}
-                {cluster.done && cluster.issueCount !== undefined && (
+                {cluster.failed && (
+                    <Badge variant="amber" className="font-medium">Failed after retry</Badge>
+                )}
+                {cluster.done && !cluster.failed && cluster.issueCount !== undefined && (
                     <Badge variant={cluster.issueCount > 0 ? 'amber' : 'green'} className="font-medium">
                         {cluster.issueCount === 0 ? 'Clean' : `${cluster.issueCount} issue${cluster.issueCount !== 1 ? 's' : ''}`}
                     </Badge>
+                )}
+                {cluster.done && !cluster.failed && (cluster.attempts ?? 1) > 1 && (
+                    <Badge variant="amber" className="font-medium">Succeeded on retry</Badge>
                 )}
                 {cluster.durationMs != null && (
                     <span className="text-xs text-gray-600 tabular-nums">
@@ -81,6 +89,7 @@ export function WorkersGrid({ clusterMap }: { clusterMap: Map<string, ClusterSta
     const total = clusterMap.size
     const running = [...clusterMap.values()].filter(c => !c.done).length
     const done = total - running
+    const failed = [...clusterMap.values()].filter(c => c.failed).length
 
     const cols = total <= 2 ? total : total === 3 ? 3 : 4
 
@@ -90,7 +99,7 @@ export function WorkersGrid({ clusterMap }: { clusterMap: Map<string, ClusterSta
                 Parallel Analysis
                 {running > 0
                     ? ` · ${running} agent${running !== 1 ? 's' : ''} running`
-                    : ` · ${done} completed`
+                    : ` · ${done} settled${failed > 0 ? ` · ${failed} failed` : ''}`
                 }
             </PipelineStepLabel>
 

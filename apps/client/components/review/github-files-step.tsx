@@ -13,11 +13,17 @@ function DiffStats({ detail }: { detail: string }) {
     if (!m) return <span className="text-xs text-gray-600 tabular-nums shrink-0">{detail}</span>
     const add = parseInt(m[1])
     const del = parseInt(m[2])
+    const contextState = detail.match(/\b(full|truncated|metadata_only|binary)\b/)?.[1]
     return (
         <div className="flex items-center gap-1 shrink-0">
             {add > 0 && <span className="text-xs tabular-nums font-mono text-green-600">+{add}</span>}
             {del > 0 && <span className="text-xs tabular-nums font-mono text-red-500/70">-{del}</span>}
             {add === 0 && del === 0 && <span className="text-xs text-gray-700 font-mono">±0</span>}
+            {contextState && contextState !== 'full' && (
+                <span className="ml-1 rounded border border-amber-500/20 bg-amber-950/20 px-1.5 py-0.5 text-[10px] text-amber-300/70">
+                    {contextState === 'metadata_only' ? 'metadata only' : contextState}
+                </span>
+            )}
         </div>
     )
 }
