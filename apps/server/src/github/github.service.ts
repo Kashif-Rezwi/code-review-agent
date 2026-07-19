@@ -11,8 +11,7 @@ export interface GithubUserResponse {
     email: string | null
     avatar_url: string
 }
-import { parsePRUrl, decodeGitHubFileBase64 } from './github.utils'
-import { GithubCacheService } from './github-cache.service'
+import { parsePRUrl } from './github.utils'
 import { parseUnifiedDiff } from './unified-diff.parser'
 import type { GithubTokenHealth, NormalizedPRFile, PRSnapshot } from './github.types'
 
@@ -26,10 +25,7 @@ export class GithubService implements OnModuleInit {
     private readonly token?: string
     private tokenHealth: GithubTokenHealth
 
-    constructor(
-        config: ConfigService,
-        private readonly cache: GithubCacheService,
-    ) {
+    constructor(config: ConfigService) {
         // Render and other hosting dashboards preserve whitespace literally. An empty
         // or padded token should never produce a malformed Authorization header.
         this.token = config.get<string>('GITHUB_TOKEN')?.trim() || undefined
@@ -210,7 +206,7 @@ export class GithubService implements OnModuleInit {
             // succeeds, keep the remaining pagination requests unauthenticated.
             if (usedPublicFallback) preferAuthenticatedRequest = false
 
-            const raw = await res.json()
+            const raw: unknown = await res.json()
             let page: PRFile[]
             try {
                 page = z.array(PRFileSchema).parse(raw)
@@ -228,71 +224,7 @@ export class GithubService implements OnModuleInit {
         return allFiles
     }
 
-    /**
-     * Fetch the full source of any file in the repository.
-     * Used by the autonomous review agent to investigate imports, called
-     * functions, or base classes when the diff alone is not enough.
-     * Response content from GitHub Contents API is base64-encoded.
-     */
-    async fetchFileContent(prUrl: string, filePath: string): Promise<string> {
-        const { owner, repo, number } = parsePRUrl(prUrl)
-
-        // Fetch from the PR's head branch (not the default branch) so we get
-        // the actual version of the file as it exists in the PR.
-        const ref = await this.fetchPRHeadRef(owner, repo, number)
-        const qsRef = ref ? `?ref=${encodeURIComponent(ref)}` : ''
-
-        const res = await this.fetchWithPolicy(`https://api.github.com/repos/${owner}/${repo}/contents/${filePath}${qsRef}`, {
-            headers: this.buildHeaders('application/vnd.github.v3+json'),
-        })
-
-        if (res.status === 404) {
-            throw new BadRequestException(`File not found in repository: ${filePath}`)
-        }
-        this.assertOk(res, prUrl)
-
-        const data = await res.json()
-
-        if (data.encoding !== 'base64' || typeof data.content !== 'string') {
-            throw new BadRequestException(`Unexpected GitHub API response for file: ${filePath}`)
-        }
-
-        // GitHub embeds newlines in the base64 string — strip before decoding
-        const content = decodeGitHubFileBase64(data.content)
-
-        const MAX_FILE_CHARS = 8_000
-        if (content.length > MAX_FILE_CHARS) {
-            return (
-                content.slice(0, MAX_FILE_CHARS) +
-                `\n\n[file truncated — ${content.length} chars total, showing first ${MAX_FILE_CHARS}]`
-            )
-        }
-
-        return content || `(empty file: ${filePath})`
-    }
-
     // ── Private helpers ────────────────────────────────────────────────────────
-
-    /** Get the head commit SHA of a PR so fetchFileContent reads the PR's version. */
-    private async fetchPRHeadRef(owner: string, repo: string, number: number): Promise<string | null> {
-        const key = `${owner}/${repo}/${number}`
-        const cached = this.cache.getHeadRef(key)
-        if (cached) return cached
-        try {
-            const res = await this.fetchWithPolicy(`https://api.github.com/repos/${owner}/${repo}/pulls/${number}`, {
-                headers: this.buildHeaders('application/vnd.github.v3+json'),
-            })
-            if (!res.ok) return null
-            const data = await res.json()
-            const sha = data?.head?.sha as string | undefined
-            if (sha) {
-                this.cache.setHeadRef(key, sha)
-            }
-            return sha ?? null
-        } catch {
-            return null
-        }
-    }
 
     /** Build GitHub API request headers. `accept` varies per endpoint. */
     private buildHeaders(accept: string, includeToken = true): Record<string, string> {
@@ -332,6 +264,7 @@ export class GithubService implements OnModuleInit {
             `Authenticated GitHub request failed (${response.status}); ` +
                 `retrying without credentials for public repository access`,
         )
+        await response.body?.cancel().catch(() => undefined)
 
         const publicResponse = await this.fetchWithPolicy(url, {
             headers: this.buildHeaders(accept, false),
@@ -360,10 +293,12 @@ export class GithubService implements OnModuleInit {
 
     private responseError(res: Response, prUrl: string): BadRequestException {
         const requestId = res.headers.get('x-github-request-id')
-        const context = requestId ? ` GitHub request ID: ${requestId}.` : ''
         const remaining = res.headers.get('x-ratelimit-remaining')
         const retryAfter = res.headers.get('retry-after')
         const reset = res.headers.get('x-ratelimit-reset')
+        const context = ` GitHub diagnostics: status=${res.status}; requestId=${requestId ?? 'unavailable'}; ` +
+            `remaining=${remaining ?? 'unavailable'}; reset=${reset ?? 'unavailable'}; ` +
+            `retryAfter=${retryAfter ?? 'unavailable'}.`
 
         if (res.status === 401) {
             return new BadRequestException(
@@ -492,6 +427,7 @@ export class GithubService implements OnModuleInit {
             })
             this.tokenHealth = response.ok ? 'valid' : 'invalid'
             if (!response.ok) this.logger.warn(`Configured GITHUB_TOKEN validation returned ${response.status}`)
+            await response.body?.cancel().catch(() => undefined)
         } catch (error) {
             this.tokenHealth = 'unchecked'
             this.logger.warn(`Could not validate configured GITHUB_TOKEN: ${this.errorMessage(error)}`)
@@ -544,6 +480,7 @@ export class GithubService implements OnModuleInit {
                     signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
                 })
                 if (attempt === 0 && this.isRetryableStatus(response)) {
+                    await response.body?.cancel().catch(() => undefined)
                     await this.waitBeforeRetry(response)
                     continue
                 }

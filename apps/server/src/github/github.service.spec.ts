@@ -1,7 +1,6 @@
 import { BadRequestException, Logger } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 
-import { GithubCacheService } from './github-cache.service'
 import { GithubService } from './github.service'
 
 const PR_URL = 'https://github.com/vercel/next.js/pull/91191'
@@ -29,7 +28,7 @@ function createService(token?: string): GithubService {
     const config = {
         get: jest.fn((key: string) => (key === 'GITHUB_TOKEN' ? token : undefined)),
     } as unknown as ConfigService
-    return new GithubService(config, new GithubCacheService())
+    return new GithubService(config)
 }
 
 function response(body: string, status: number, headers: Record<string, string> = {}): Response {

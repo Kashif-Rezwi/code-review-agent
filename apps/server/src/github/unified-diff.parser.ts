@@ -15,12 +15,12 @@ export interface ParsedUnifiedDiff {
  */
 export function parseUnifiedDiff(input: string): ParsedUnifiedDiff {
     const parsed = parseDiff(input)
-    const sections = splitFileSections(input)
+    const sections = indexFileSections(input)
     const warnings: string[] = []
 
-    if (sections.length !== parsed.length) {
+    if (sections.size < parsed.length) {
         warnings.push(
-            `Unified diff contained ${sections.length} file sections but ${parsed.length} could be parsed.`,
+            `Unified diff contained ${sections.size} uniquely indexed file sections but ${parsed.length} could be parsed.`,
         )
     }
 
@@ -34,7 +34,7 @@ export function parseUnifiedDiff(input: string): ParsedUnifiedDiff {
                 return null
             }
 
-            const section = sections[index] ?? ''
+            const section = sections.get(filename) ?? (from ? sections.get(from) : undefined) ?? ''
             const binary = BINARY_MARKERS.some((marker) => section.includes(marker))
             const renamed = !!from && !!to && from !== to
             const patch = binary ? undefined : buildPatch(file.chunks)
@@ -67,11 +67,21 @@ function buildPatch(chunks: parseDiff.Chunk[]): string {
         .trimEnd()
 }
 
-function splitFileSections(input: string): string[] {
+function indexFileSections(input: string): Map<string, string> {
     const starts: number[] = []
     const pattern = /^diff --git /gm
     let match: RegExpExecArray | null
     while ((match = pattern.exec(input)) !== null) starts.push(match.index)
 
-    return starts.map((start, index) => input.slice(start, starts[index + 1] ?? input.length))
+    const sections = new Map<string, string>()
+    for (const [index, start] of starts.entries()) {
+        const section = input.slice(start, starts[index + 1] ?? input.length)
+        const parsed = parseDiff(section)[0]
+        if (!parsed) continue
+        const from = normalizePath(parsed.from)
+        const to = normalizePath(parsed.to)
+        if (from) sections.set(from, section)
+        if (to) sections.set(to, section)
+    }
+    return sections
 }

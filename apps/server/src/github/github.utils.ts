@@ -13,11 +13,3 @@ export function parsePRUrl(url: string): { owner: string; repo: string; number: 
     }
     return { owner: match[1], repo: match[2], number: parseInt(match[3], 10) }
 }
-
-/**
- * Decodes base64 content received from the GitHub API.
- * Safely strips injected newlines from the base64 string before decoding.
- */
-export function decodeGitHubFileBase64(content: string): string {
-    return Buffer.from(content.replace(/\n/g, ''), 'base64').toString('utf-8')
-}
