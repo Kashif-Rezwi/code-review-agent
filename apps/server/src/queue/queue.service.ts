@@ -19,6 +19,8 @@ export class QueueService {
      * Enqueues a review job.
      */
     async enqueue(payload: ReviewJobPayload): Promise<void> {
+        const existing = await this.reviewQueue.getJob(payload.reviewId)
+        if (existing) return
         await this.reviewQueue.add('run-pipeline', payload, {
             jobId: payload.reviewId, // Map BullMQ Job ID directly to our DB reviewId
             attempts: 1,             // LLM pipelines are expensive and non-idempotent; do not auto-retry
