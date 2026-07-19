@@ -3,10 +3,10 @@ import { z } from 'zod'
 export const ReviewIssueSchema = z.object({
     type: z.enum(['bug', 'security', 'performance', 'style', 'suggestion']),
     severity: z.enum(['critical', 'warning', 'info']),
-    title: z.string(),
-    location: z.string(),
-    description: z.string(),
-    recommendation: z.string(),
+    title: z.string().max(200),
+    location: z.string().max(500),
+    description: z.string().max(4_000),
+    recommendation: z.string().max(4_000),
 })
 
 export const ReviewAcquisitionSourceSchema = z.enum(['github_files_api', 'public_diff'])
@@ -23,10 +23,10 @@ export const ReviewCoverageSchema = z.object({
 })
 
 export const ReviewDataSchema = z.object({
-    summary: z.string(),
+    summary: z.string().max(2_000),
     score: z.coerce.number().min(1).max(10).transform(n => Math.round(n)),
-    issues: z.array(ReviewIssueSchema),
-    positives: z.array(z.string()),
+    issues: z.array(ReviewIssueSchema).max(100),
+    positives: z.array(z.string().max(1_000)).max(50),
     // Populated server-side after RAG retrieval — never emitted by the LLM.
     appliedStandards: z.array(z.string()).optional(),
     // Populated server-side after DB save — never emitted by the LLM.
@@ -49,6 +49,7 @@ export type ReviewAcquisitionSource = z.infer<typeof ReviewAcquisitionSourceSche
  */
 export type ReviewStreamEvent =
     | { type: 'start' }
+    | { type: 'heartbeat' }
     | {
         type: 'acquisition'
         source: ReviewAcquisitionSource
