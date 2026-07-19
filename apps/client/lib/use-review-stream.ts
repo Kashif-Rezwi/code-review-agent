@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useReducer } from 'react'
-import { API_URL, reviewService } from './api'
+import { API_URL, apiErrorMessage, reviewService } from './api'
 import { consumeSSEStream } from './sse'
 import type { ReviewData, ReviewStreamEvent } from '@/types/review.types'
 import {
@@ -94,34 +94,44 @@ export function useReviewStream(initialReviewId?: string | null, githubToken?: s
 
         const startStream = async () => {
             let terminalReceived = false
+            let lastEventId: string | undefined
+            const seenEventIds = new Set<string>()
+            const reconnectDelays = [500, 1_000, 2_000]
             try {
-                const res = await fetch(`${API_URL}/review/${initialReviewId}/stream`, {
-                    headers,
-                    signal: abortController.signal
-                })
+                for (let attempt = 0; attempt <= reconnectDelays.length; attempt++) {
+                    const requestHeaders = { ...headers }
+                    if (lastEventId) requestHeaders['Last-Event-ID'] = lastEventId
+                    try {
+                        const res = await fetch(`${API_URL}/review/${initialReviewId}/stream`, {
+                            headers: requestHeaders,
+                            signal: abortController.signal,
+                        })
 
-                if (!res.ok || !res.body) {
-                    throw new Error(`Connection failed with status ${res.status}`)
-                }
+                        if (!res.ok || !res.body) throw new Error(await apiErrorMessage(res))
 
-                const reader = res.body.getReader()
-                await consumeSSEStream<ReviewStreamEvent>(reader, (event) => {
-                    let thinkingSeqId: number | undefined
-                    if (event.type === 'thinking') {
-                        thinkingSeqId = ++thinkingSeqRef.current
+                        const reader = res.body.getReader()
+                        await consumeSSEStream<ReviewStreamEvent>(reader, ({ id, event }) => {
+                            if (id) {
+                                lastEventId = id
+                                if (seenEventIds.has(id)) return
+                                seenEventIds.add(id)
+                            }
+                            if (event.type === 'heartbeat') return
+
+                            let thinkingSeqId: number | undefined
+                            if (event.type === 'thinking') thinkingSeqId = ++thinkingSeqRef.current
+                            dispatch({ type: 'EVENT', event, thinkingSeqId })
+
+                            if (event.type === 'complete' || event.type === 'error') terminalReceived = true
+                        })
+
+                        if (terminalReceived || abortController.signal.aborted) return
+                        throw new Error('Review stream disconnected before a final result was received.')
+                    } catch (error) {
+                        if (abortController.signal.aborted) return
+                        if (attempt >= reconnectDelays.length) throw error
+                        await abortableDelay(reconnectDelays[attempt], abortController.signal)
                     }
-
-                    dispatch({ type: 'EVENT', event, thinkingSeqId })
-
-                    if (event.type === 'complete' || event.type === 'error') {
-                        terminalReceived = true
-                    }
-
-                    // Notice: server will just close the connection on 'complete' / 'error'
-                    // consumeSSEStream will return cleanly.
-                })
-                if (!terminalReceived && !abortController.signal.aborted) {
-                    throw new Error('Review stream disconnected before a final result was received.')
                 }
             } catch (err: unknown) {
                 if (err instanceof Error && err.name === 'AbortError') return
@@ -158,4 +168,19 @@ export function useReviewStream(initialReviewId?: string | null, githubToken?: s
         submit,
         reset
     }
+}
+
+function abortableDelay(milliseconds: number, signal: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+        const abort = () => {
+            clearTimeout(timer)
+            reject(new DOMException('Aborted', 'AbortError'))
+        }
+        const timer = setTimeout(() => {
+            signal.removeEventListener('abort', abort)
+            resolve()
+        }, milliseconds)
+        if (signal.aborted) return abort()
+        signal.addEventListener('abort', abort, { once: true })
+    })
 }

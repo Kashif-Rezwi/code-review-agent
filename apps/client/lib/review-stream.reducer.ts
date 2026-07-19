@@ -97,6 +97,9 @@ export function reviewStreamReducer(state: ReviewStreamState, action: Action): R
         case 'EVENT': {
             const { event } = action
             switch (event.type) {
+                case 'heartbeat':
+                    return state
+
                 case 'start':
                     return { ...state, phase: 'streaming' }
 

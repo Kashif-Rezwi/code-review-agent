@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { API_URL } from '@/lib/api'
+import { API_URL, apiErrorMessage } from '@/lib/api'
 import { consumeSSEStream } from '@/lib/sse'
 import type { ChatMessage } from '@/types/review.types'
 
@@ -76,13 +76,12 @@ export function useChatMessages(
             })
 
             if (!res.ok || !res.body) {
-                const errText = await res.text().catch(() => `HTTP ${res.status}`)
-                throw new Error(errText)
+                throw new Error(await apiErrorMessage(res))
             }
 
             const reader = res.body.getReader()
             let streamError: string | null = null
-            await consumeSSEStream<ChatStreamEvent>(reader, event => {
+            await consumeSSEStream<ChatStreamEvent>(reader, ({ event }) => {
                 if (event.type === 'delta') {
                     accumulated += event.text
                     setStreamingContent(accumulated)
