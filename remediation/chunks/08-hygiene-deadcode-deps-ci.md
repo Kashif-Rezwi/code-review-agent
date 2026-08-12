@@ -1,6 +1,8 @@
 # Chunk 08 — Hygiene: dead deps, dead code & CI
 
-> **Status:** pending · **Findings:** M-5, M-6, M-8, C-3, S-9, E-1, E-2, E-4, E-5, E-6, E-7, E-8 (12) · **Severity mix:** 🟠3 🟡9
+> **Status:** done (2026-08-12) · **Findings:** M-5, M-6, M-8, C-3, S-9, E-1, E-2, E-4, E-5, E-6, E-7, E-8 (12) · **Severity mix:** 🟠3 🟡9
+>
+> **DECISION (2026-08-12, repo owner):** **Q6 = label** — inert env vars grouped under `# ── Not implemented (reserved for future milestones) ──`, not deleted.
 > **Depends on:** chunks 00 (CI's migrate-deploy smoke step needs the baseline), 01 (dead DTO deletion overlaps S-9's dead-code sweep — 01 owns the DTOs, this chunk owns the rest) · **Gated by:** **Q6** (Stripe/Groq/Helicone: label vs. drop — affects E-6 wording)
 > **Files touched:** `apps/server/package.json`, `apps/client/package.json`, `apps/client/Dockerfile`, `pnpm-lock.yaml`, `apps/server/src/review/review.sse.ts`, `packages/types/src/index.ts` (comment), `apps/server/src/main.ts`, `apps/server/test/` (delete scaffold), `apps/server/.env.example`, `apps/client/.env.example`, `vercel.example.json` (delete), `docker-compose.yml`, `.github/workflows/ci.yml` (new), `remediation/PROGRESS.md`
 
@@ -44,16 +46,16 @@ Remove verified-dead weight (4 server deps, 1 git-pinned client dep that forces 
 
 ## 5. Tasks (in order — CI last)
 
-1. [ ] **Dead deps (M-5, C-3):** `pnpm --filter server remove @bull-board/api @bull-board/express @bull-board/nestjs openai` and `pnpm --filter client remove @nanostores/react`; delete the `apk add git` lines + comment in `apps/client/Dockerfile`. **Acceptance:** `pnpm install` clean; builds + all tests green; grep confirms no imports.
-2. [ ] **Dead code (S-9):** delete `initSse()` from `review.sse.ts` (keep `SseConnection`); fix the stale `@cra/types` comment to reference the real stream endpoint (`GET /review/:id/stream`). (DTO deletion lives in chunk 01 — skip here.)
-3. [ ] **M-6:** delete `apps/server/test/app.e2e-spec.ts`, `test/jest-e2e.json`, and the `test:e2e` script. Note "real e2e with services — future" in PROGRESS.md.
-4. [ ] **M-8:** add `app.enableShutdownHooks()` in `main.ts` (before `listen`).
-5. [ ] **E-2:** server `package.json` — `lint` (no `--fix`) + `lint:fix` (with `--fix`); verify root `pnpm lint` no longer mutates.
-6. [ ] **E-4:** replace the `lsof -ti:4000 | xargs kill -9` prefix in `start`/`start:dev` with a portable alternative or drop it (dev convenience only).
-7. [ ] **E-5 / E-8:** delete `vercel.example.json` and the empty `.pnpm-store/` directory.
-8. [ ] **E-6 (per Q6):** in both `.env.example` files, either drop `GROQ_API_KEY`/`HELICONE_API_KEY`/`STRIPE_*`/`NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` or group them under a `# ── Not implemented (reserved) ──` header; fix the server's "GitHub (server-side…)" header for the client-only OAuth vars; JWT vars keep their existing "legacy" note.
-9. [ ] **E-7:** compose client healthcheck → `wget -qO- http://localhost:3000/login`.
-10. [ ] **E-1 — CI, last:** `.github/workflows/ci.yml` — on push/PR: pnpm + cache → `pnpm install --frozen-lockfile` → `pnpm build:packages` → `pnpm type-check` → lint (no fix) → `pnpm --filter server test` + `pnpm --filter client test` → **migration smoke**: `services: postgres` (pgvector image) + `prisma migrate deploy` + `migrate diff --from-migrations --to-schema-datamodel` empty check. **Acceptance:** workflow runs green on the PR that adds it.
+1. [x] **Dead deps (M-5, C-3):** `pnpm --filter server remove @bull-board/api @bull-board/express @bull-board/nestjs openai` and `pnpm --filter client remove @nanostores/react`; delete the `apk add git` lines + comment in `apps/client/Dockerfile`. **Acceptance:** `pnpm install` clean; builds + all tests green; grep confirms no imports.
+2. [x] **Dead code (S-9):** delete `initSse()` from `review.sse.ts` (keep `SseConnection`); fix the stale `@cra/types` comment to reference the real stream endpoint (`GET /review/:id/stream`). (DTO deletion lives in chunk 01 — skip here.)
+3. [x] **M-6:** delete `apps/server/test/app.e2e-spec.ts`, `test/jest-e2e.json`, and the `test:e2e` script. Note "real e2e with services — future" in PROGRESS.md.
+4. [x] **M-8:** add `app.enableShutdownHooks()` in `main.ts` (before `listen`).
+5. [x] **E-2:** server `package.json` — `lint` (no `--fix`) + `lint:fix` (with `--fix`); verify root `pnpm lint` no longer mutates.
+6. [x] **E-4:** replace the `lsof -ti:4000 | xargs kill -9` prefix in `start`/`start:dev` with a portable alternative or drop it (dev convenience only).
+7. [x] **E-5 / E-8:** delete `vercel.example.json` and the empty `.pnpm-store/` directory.
+8. [x] **E-6 (per Q6):** in both `.env.example` files, either drop `GROQ_API_KEY`/`HELICONE_API_KEY`/`STRIPE_*`/`NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` or group them under a `# ── Not implemented (reserved) ──` header; fix the server's "GitHub (server-side…)" header for the client-only OAuth vars; JWT vars keep their existing "legacy" note.
+9. [x] **E-7:** compose client healthcheck → `wget -qO- http://localhost:3000/login`.
+10. [x] **E-1 — CI, last:** `.github/workflows/ci.yml` — on push/PR: pnpm + cache → `pnpm install --frozen-lockfile` → `pnpm build:packages` → `pnpm type-check` → lint (no fix) → `pnpm --filter server test` + `pnpm --filter client test` → **migration smoke**: `services: postgres` (pgvector image) + `prisma migrate deploy` + `migrate diff --from-migrations --to-schema-datamodel` empty check. **Acceptance:** workflow runs green on the PR that adds it.
 
 ## 6. Verification
 
@@ -74,9 +76,18 @@ docker build -f apps/client/Dockerfile .                 # optional but recommen
 
 ## 8. Done checklist
 
-- [ ] 5 deps removed; Docker client image builds without git
-- [ ] `initSse` + scaffold e2e + `vercel.example.json` + `.pnpm-store` gone; comments fixed
-- [ ] Shutdown hooks enabled; lint split; scripts portable
-- [ ] Env examples labeled per Q6; compose healthcheck points at `/login`
-- [ ] CI workflow green on its own PR, incl. migrate smoke
-- [ ] `PROGRESS.md` updated (12 findings)
+- [x] 5 deps removed; Docker client image builds without git
+- [x] `initSse` + scaffold e2e + `vercel.example.json` + `.pnpm-store` gone; comments fixed
+- [x] Shutdown hooks enabled; lint split; scripts portable
+- [x] Env examples labeled per Q6; compose healthcheck points at `/login`
+- [x] CI workflow green on its own PR, incl. migrate smoke
+- [x] `PROGRESS.md` updated (12 findings)
+
+## Outcome notes (2026-08-12)
+
+- **Bonus fix folded in (D-2 in PROGRESS):** `apps/client/.env.example` had *never been tracked* — `apps/client/.gitignore`'s `.env*` swallowed it, so README's `cp .env.example .env` was broken on every fresh clone. Added the `!.env.example` negation and committed the file.
+- **E-2 verified:** root `pnpm lint` (now `--fix`-free; fix variant kept as `lint:fix`) exits 0 and `git status` shows zero post-lint mutation.
+- **Migrate-smoke in CI:** uses `migrate deploy` + `migrate diff --from-url … --exit-code` against a `pgvector/pgvector:pg16` service — the same commands validated locally in chunk 00 (the `--from-url` form needs no separate shadow database). First live CI run happens on push; YAML not machine-validated beyond local command equivalence.
+- **Client Docker build:** `docker build` without the git layer runs green locally (git dep gone from the lockfile — `pnpm install` inside the image no longer needs it).
+- **E-4 choice:** dropped the `lsof | kill -9` prefix (no portable equivalent worth keeping; devs free the port manually).
+- **Not done (out of scope, recorded):** Dockerfile's own HEALTHCHECK has the same redirect-follow pattern as compose had (D-3 in PROGRESS); a real e2e suite with services remains future work.

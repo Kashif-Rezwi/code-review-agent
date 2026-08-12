@@ -14,9 +14,9 @@ Master status for the 80 findings in `AUDIT-REPORT.md`. Update this file at chun
 | 05 docs-datamodel-rag | pending | A-17…A-20 (4) | 0/4 | — | Owns data-model.md exclusively |
 | 06 docs-frontend-history-deploy-misc | pending | A-21…A-30, A-33, A-34, A-38, B-5, C-4, C-5, C-6 (17) | 0/17 | — | Shares README with 03 — run sequentially |
 | 07 client-reliability-ux | done | C-2, C-7 (2) | 2/2 | 2026-08-12 | Build-time guard in `next.config.ts` + runtime guard in `apiFetch`; chat bubbles now surface real server messages. Client 9 files / 14 tests, lint 0, build ✅ with env / clear failure without. |
-| 08 hygiene-deadcode-deps-ci | pending | M-5, M-6, M-8, C-3, S-9, E-1, E-2, E-4…E-8 (12) | 0/12 | — | CI last; Q6 gates E-6 wording |
+| 08 hygiene-deadcode-deps-ci | done | M-5, M-6, M-8, C-3, S-9, E-1, E-2, E-4…E-8 (12) | 12/12 | 2026-08-12 | Q6=label (env examples grouped under "Not implemented (reserved)"). 5 dead deps out; e2e landmine defused (real e2e w/ services = future); shutdown hooks on; lint split (`lint` non-mutating, `lint:fix`); portable scripts; CI with migrate-smoke (first live run on push). Bonus: D-2 (.env.example was never tracked). |
 | 09 deferred-decision-records | pending | S-2, M-4, S-6, S-10, S-11, M-10 (6) | 0/6 | — | ADRs only; Q4, Q7 |
-| **Total** | | **80** | **17/80** | | |
+| **Total** | | **80** | **29/80** | | |
 
 ## Session log
 
@@ -27,6 +27,7 @@ Append one line per work session: `YYYY-MM-DD · chunk NN · what happened · ve
 - 2026-08-12 · chunk 01 · `CreateSessionDto` (+ dead DTOs deleted), `LintResult` contract (`output` to model, counts to SSE labeler via code-keyed map), ESLint flat-config fix, `deleteDocument` 404 via `deleteMany`, honest port log · 17 suites / 65 tests, type-check, lint (no `--fix`) all green
 - 2026-08-12 · chunk 07 · `NEXT_PUBLIC_API_URL` build-time guard (next.config.ts) + runtime guard (apiFetch); chat catch surfaces real server messages with generic fallback · client 9 files / 14 tests, lint exit 0, build passes with env / fails clearly without
 - 2026-08-12 · chunk 02 · OAuth scope → `read:user user:email`; `?token=` deprecation warn-log + docs warning; token cache hard-bounded at 500 (expired sweep → oldest-inserted eviction, refresh-on-set); `@nestjs/throttler` on the 2 paid endpoints (10/h reviews, 60/h chat, userId-keyed via route-level guard after AuthGuard); prod CORS = frontendUrl only · 20 suites / 72 tests, type-check + both lints green. Note: `pnpm add` temporarily broke `eslint-plugin-import` resolution for client lint — fixed by root `pnpm install` relink
+- 2026-08-12 · chunk 08 · removed `@bull-board/*`×3 + `openai` + git-pinned `@nanostores/react` (Docker git layer dropped); deleted scaffold e2e (M-6) + `vercel.example.json` + `.pnpm-store` + `initSse`; `enableShutdownHooks`; lint split; portable start scripts; env examples labeled (Q6); compose healthcheck → `/login`; `.github/workflows/ci.yml` (quality + migration-smoke) · full build, type-check, root lint (non-mutating, git-clean), 20 server suites / 72 tests, 9 client files / 14 tests green. Bonus D-2 fixed: client `.env.example` now tracked (gitignore negation)
 
 ## Discovered during remediation
 
@@ -35,3 +36,5 @@ New issues found while executing chunks land here (do NOT fix mid-chunk). Triage
 | # | Found in | Description | Severity suggestion |
 |---|---|---|---|
 | D-1 | chunk 01 (S-3) | **Linter never ran at all:** `linter.verify()` received an eslintrc-style config (`parserOptions` top-level); ESLint 9's flat-config `Linter` throws on it for *every* call, so the catch fallback was the only output ever produced (the audit assumed linting worked and only the label lied). **Fixed minimally in chunk 01** (config moved to `languageOptions`; rules/wording untouched). Related: S-6 (TS-aware linting) still open for chunk 09. | 🟠 (was latent) |
+| D-2 | chunk 08 (E-6) | **`apps/client/.env.example` was never tracked in git** — `apps/client/.gitignore`'s `.env*` pattern swallowed it, so README's `cp apps/client/.env.example apps/client/.env` was broken on every fresh clone. **Fixed in chunk 08** (`!.env.example` negation + file committed). | 🟠 |
+| D-3 | chunk 08 (E-7) | `apps/client/Dockerfile`'s own `HEALTHCHECK` uses the same redirect-following `wget http://localhost:3000` the compose one had — works (wget follows the 307) but is dishonest. Out of chunk scope (E-7 named compose only); align with `/login` in a future hygiene pass. | 🟡 |

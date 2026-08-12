@@ -21,6 +21,9 @@ async function bootstrap() {
     credentials: true,
   })
 
+  // Drain Prisma/Redis/BullMQ cleanly on SIGTERM (every Render deploy sends one)
+  app.enableShutdownHooks()
+
   const port = process.env.PORT ?? 4000
   await app.listen(port)
   console.log(`Server running on port ${port}`)

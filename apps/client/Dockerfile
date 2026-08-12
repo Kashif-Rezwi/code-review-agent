@@ -15,10 +15,6 @@ WORKDIR /app
 # ─────────────────────────────────────────────────────────────────────────────
 FROM base AS deps
 
-# git is required because @nanostores/react is a git+https:// dependency.
-# Installed here (not in base) so it doesn't pollute unrelated stages.
-RUN apk add --no-cache git
-
 # Copy manifests for all workspace members so pnpm can resolve the full graph
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json .npmrc ./
 COPY apps/client/package.json ./apps/client/
