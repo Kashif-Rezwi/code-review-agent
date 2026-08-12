@@ -54,18 +54,21 @@ Reviews are saved to your history and you can follow up with a chat interface to
 │  │  RAG Retrieval ──► AI Pipeline ──► emit events      │  │     │
 │  │       ▲                │                  │         │  │     │
 │  │  pgvector         streamText()        Redis Streams │  │     │
-│  │  (Neon DB)    (OpenAI gpt-4o-mini)  event log      │  │     │
+│  │  (Neon DB)    (OpenAI gpt-4o-mini)  event log       │  │     │
 │  └──────────────────────────────────────┬──────────────┘  │     │
 │                                         │                 │     │
-│                                    Redis ◄────────────────┘     │
+│                                   Redis ◄─────────────────┘     │
 │                                         │                       │
 │  ReviewStreamerService ◄────────────────┘                       │
-│  (tails the Streams event log)                            │
-└─────────────────────────────────────────────────────────────────┘
+│  (tails the Streams event log)                                  │
+└────────────────────────┴────────────────────────────────────────┘
                          │
               ┌──────────┴──────────┐
-         Neon PostgreSQL        Redis (Upstash / Render)
-         (pgvector)             (BullMQ + Streams + cancel)
+              │                     │
+     ┌────────▼────────┐   ┌────────▼─────────┐
+     │ Neon PostgreSQL │   │ Redis            │
+     │ (pgvector)      │   │ BullMQ + Streams │
+     └─────────────────┘   └──────────────────┘
 ```
 
 **Flow in plain English:**

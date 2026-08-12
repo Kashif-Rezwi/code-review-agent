@@ -919,20 +919,20 @@ More professional tone than Twitter but still personal
 ## Architecture Overview
 
 ```
-                    ┌─────────────────────────┐
-                    │     User's Browser      │
-                    └────────────┬────────────┘
+                    ┌──────────────────────────┐
+                    │      User's Browser      │
+                    └────────────┬─────────────┘
                                  │ HTTPS
-                    ┌────────────▼────────────┐
+                    ┌────────────▼─────────────┐
                     │   Next.js Frontend       │
                     │   (Vercel)               │
                     │                          │
                     │  - UI only               │
                     │  - NextAuth session      │
                     │  - Calls NestJS via JWT  │
-                    └────────────┬────────────┘
+                    └────────────┬─────────────┘
                                  │ REST + SSE (JWT in header)
-                    ┌────────────▼────────────┐
+                    ┌────────────▼─────────────┐
                     │   NestJS Backend API     │
                     │   (Railway)              │
                     │                          │
@@ -940,15 +940,15 @@ More professional tone than Twitter but still personal
                     │  - All AI calls          │
                     │  - Auth guards           │
                     │  - Stripe webhooks       │
-                    └──┬──────────────────┬───┘
-                       │                  │
-          ┌────────────▼───┐    ┌─────────▼──────────┐
-          │ Supabase        │    │  External APIs      │
-          │ PostgreSQL +    │    │  - OpenAI / Groq    │
-          │ pgvector        │    │  - GitHub API       │
-          └─────────────────┘    │  - Stripe           │
-                                 │  - Helicone         │
-                                 └─────────────────────┘
+                    └──┬───────────────────┬───┘
+                       │                   │
+          ┌────────────▼────┐   ┌──────────▼───────────┐
+          │ Supabase        │   │  External APIs       │
+          │ PostgreSQL +    │   │  - OpenAI / Groq     │
+          │ pgvector        │   │  - GitHub API        │
+          └─────────────────┘   │  - Stripe            │
+                                │  - Helicone          │
+                                └──────────────────────┘
 ```
 
 **Key architectural rule:** Next.js has zero business logic. It renders UI and proxies user actions to NestJS. All AI, all database access, all auth validation happens in NestJS.
@@ -1434,7 +1434,7 @@ push to main
      │
      ├── GitHub Actions checks changed paths
      │
-     ├── apps/server/** or packages/ai/** changed?   ──→  deploy-api job  ──→  Railway
+     ├── apps/server/** or packages/ai/** changed?    ──→  deploy-api job  ──→  Railway
      ├── apps/client/** or packages/types/** changed? ──→  deploy-web job  ──→  Vercel
      └── packages/types/** changed? → both jobs run
 ```

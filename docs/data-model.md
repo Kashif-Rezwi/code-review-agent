@@ -109,10 +109,10 @@ The dispatch **outbox** — one row per review, written in the same transaction 
 
 ```
 PENDING  ──► PROCESSING  (claimed by the dispatcher, 30s lease)
-               ├─► DISPATCHED  (BullMQ enqueue succeeded)
-               ├─► PENDING     (enqueue failed — backoff then retry, up to 6 attempts)
-               ├─► FAILED      (attempts exhausted, or the review left PENDING)
-               └─► CANCELLED   (review was cancelled before dispatch)
+         ├─► DISPATCHED  (BullMQ enqueue succeeded)
+         ├─► PENDING     (enqueue failed — backoff then retry, up to 6 attempts)
+         ├─► FAILED      (attempts exhausted, or the review left PENDING)
+         └─► CANCELLED   (review was cancelled before dispatch)
 ```
 
 Indexes: unique on `reviewId`; `@@index([status, availableAt])` backs the poll query. See the Indexes section below.

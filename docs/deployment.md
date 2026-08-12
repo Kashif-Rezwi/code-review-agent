@@ -21,7 +21,7 @@ Vercel CDN / Edge
 Render.com (Web Service)
   NestJS API — PORT 10000
         │
-        ├── Redis (Render managed)    ← BullMQ queue + pub/sub + replay lists
+        ├── Redis (Render managed)    ← BullMQ queue + Streams event log + cancel channel
         └── Neon PostgreSQL           ← Users, Reviews, RAG vectors
               (external — shared across envs)
 ```
@@ -59,7 +59,7 @@ A managed Redis instance. The `REDIS_URL` environment variable is automatically 
 **Build steps:**
 1. `pnpm install` — installs all workspace dependencies
 2. `pnpm build:packages` — compiles `@cra/types` then `@cra/ai`
-3. `pnpm --filter server build` — runs `tsc` on the NestJS app
+3. `pnpm --filter server build` — `prisma generate` + `nest build` (swc transpile) for the NestJS app
 
 **Start:** `pnpm --filter server start:prod` — runs the compiled `dist/main.js` via `node`.
 

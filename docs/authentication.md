@@ -13,17 +13,17 @@ There are no server-issued JWTs or sessions — the GitHub token **is** the cred
 ```
 Browser                  Next.js (NextAuth)          NestJS Server                GitHub API
    │                           │                           │                           │
-   │── Sign in with GitHub ──► │                           │                           │
-   │                           │── OAuth redirect ───────────────────────────────────► │
-   │                           │◄─ access_token ────────────────────────────────────── │
-   │◄── Session cookie ─────── │                           │                           │
+   │── Sign in with GitHub ───►│                           │                           │
+   │                           │── OAuth redirect ────────────────────────────────────►│
+   │                           │◄─ access_token ───────────────────────────────────────│
+   │◄── Session cookie ────────│                           │                           │
    │                           │                           │                           │
-   │── API request ──────────────────────────────────────► │                           │
+   │── API request ───────────────────────────────────────►│                           │
    │   Authorization: Bearer <github_token>                │                           │
    │                           │                   AuthGuard intercepts                │
    │                           │                   AuthService.resolve()               │
-   │                           │                           │── GET /user ───────────►  │
-   │                           │                           │◄─ { id, login, ... } ──── │
+   │                           │                           │── GET /user ─────────────►│
+   │                           │                           │◄─ { id, login, ... } ─────│
    │                           │                    cache entry + DB upsert            │
    │                           │                    req.user = { userId, login }       │
    │◄── API response ──────────────────────────────────────│                           │

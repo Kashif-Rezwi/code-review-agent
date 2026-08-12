@@ -19,7 +19,7 @@ Redis Streams — not pub/sub — carry review events. The stream **is** the rep
 HTTP layer                Dispatch / queue layer                 Stream layer
 ────────────              ──────────────────────────             ─────────────────────
 POST /review/session
-  └─ tx: Review(PENDING) + ReviewDispatch(PENDING)
+  ├─ tx: Review(PENDING) + ReviewDispatch(PENDING)
   └─ 201 { reviewId }
                           ReviewDispatcherService
                             poll every 2s, batch 20
