@@ -11,12 +11,12 @@ Master status for the 80 findings in `AUDIT-REPORT.md`. Update this file at chun
 | 02 security-cost-posture | done | C-1, S-4, S-5, M-3, A-31, A-32 (6) | 6/6 | 2026-08-12 | Q2=no (scope dropped — existing tokens keep `repo` until re-auth), Q3=public (@nestjs/throttler: 10 reviews/h + 60 chat/h per userId; in-memory storage — single-instance only), Q5=no consumers (`?token=` deprecation warn-log; removal later). Prod CORS no longer trusts localhost. |
 | 03 docs-streaming-architecture | done | A-1…A-10, B-1…B-4, B-6, A-37 (16) | 16/16 | 2026-08-12 | queue-streaming.md fully rewritten (outbox dispatcher, Redis Streams XADD/XREAD, 24h/MAXLEN~5000, heartbeats, Last-Event-ID resume, terminal reconstruction, cancellation, /health). architecture.md data-stores + lifecycle + outbox as design decision. README diagram/stack/module rows. Stale-term greps clean. |
 | 04 docs-packages-types-reviewcode | done | A-11…A-16, A-35, A-36 (8) | 8/8 | 2026-08-12 | packages.md tools section rewritten (runLinter only + LintResult contract + server-side acquisition note); heartbeat in event table; build/CI claim corrected; architecture.md tools list; pr-file.schema pointers; review-code.md parser + JS-only linter sections. |
-| 05 docs-datamodel-rag | pending | A-17…A-20 (4) | 0/4 | — | Owns data-model.md exclusively |
+| 05 docs-datamodel-rag | done | A-17…A-20 (4) | 4/4 | 2026-08-12 | data-model.md: 7 models, ReviewDispatch section + lifecycle, DispatchStatus enum, full index list, baseline-migration note. rag.md: real chunking (2,000/200 sliding window), UUID chunk ids, `$executeRaw`, M-9 fixed-query known-limitation line. |
 | 06 docs-frontend-history-deploy-misc | pending | A-21…A-30, A-33, A-34, A-38, B-5, C-4, C-5, C-6 (17) | 0/17 | — | Shares README with 03 — run sequentially |
 | 07 client-reliability-ux | done | C-2, C-7 (2) | 2/2 | 2026-08-12 | Build-time guard in `next.config.ts` + runtime guard in `apiFetch`; chat bubbles now surface real server messages. Client 9 files / 14 tests, lint 0, build ✅ with env / clear failure without. |
 | 08 hygiene-deadcode-deps-ci | done | M-5, M-6, M-8, C-3, S-9, E-1, E-2, E-4…E-8 (12) | 12/12 | 2026-08-12 | Q6=label (env examples grouped under "Not implemented (reserved)"). 5 dead deps out; e2e landmine defused (real e2e w/ services = future); shutdown hooks on; lint split (`lint` non-mutating, `lint:fix`); portable scripts; CI with migrate-smoke (first live run on push). Bonus: D-2 (.env.example was never tracked). |
 | 09 deferred-decision-records | pending | S-2, M-4, S-6, S-10, S-11, M-10 (6) | 0/6 | — | ADRs only; Q4, Q7 |
-| **Total** | | **80** | **53/80** | | |
+| **Total** | | **80** | **57/80** | | |
 
 ## Session log
 
@@ -30,6 +30,7 @@ Append one line per work session: `YYYY-MM-DD · chunk NN · what happened · ve
 - 2026-08-12 · chunk 08 · removed `@bull-board/*`×3 + `openai` + git-pinned `@nanostores/react` (Docker git layer dropped); deleted scaffold e2e (M-6) + `vercel.example.json` + `.pnpm-store` + `initSse`; `enableShutdownHooks`; lint split; portable start scripts; env examples labeled (Q6); compose healthcheck → `/login`; `.github/workflows/ci.yml` (quality + migration-smoke) · full build, type-check, root lint (non-mutating, git-clean), 20 server suites / 72 tests, 9 client files / 14 tests green. Bonus D-2 fixed: client `.env.example` now tracked (gitignore negation)
 - 2026-08-12 · chunk 03 · rewrote `docs/queue-streaming.md` around the real design (dispatch outbox, Redis Streams, heartbeats, Last-Event-ID resume, Postgres terminal reconstruction, cancellation, `/health`); fixed architecture.md data-stores/lifecycle/decisions + README diagram/stack/module rows · stale-term greps pass, docs-only
 - 2026-08-12 · chunk 04 · packages.md tools section (phantom GitHub factories removed; `runLinter` schema incl. `filename` + `LintResult` contract), heartbeat event row, build/CI claim, architecture.md tools list, `pr-file.schema` pointers (packages.md + github-integration.md), review-code.md parser (balanced-brace multi-candidate) + JS-only linter limitation · greps pass, docs-only
+- 2026-08-12 · chunk 05 · data-model.md brought to 7 models/3 enums (ReviewDispatch section + DispatchStatus + indexes + baseline note); rag.md/data-model.md chunking corrected to the 2,000-char/200-overlap window; UUID chunk IDs; RAG PR-path fixed-query known limitation · greps pass, docs-only
 
 ## Discovered during remediation
 

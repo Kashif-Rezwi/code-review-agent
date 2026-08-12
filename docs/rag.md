@@ -20,7 +20,7 @@ Upload path
         ▼
   RagService.ingest()
     ├── extractText()       — PDF or plain text → raw string
-    ├── chunkText()         — split into ~500-char paragraphs
+    ├── chunkText()         — fixed 2,000-char windows, 200-char overlap
     ├── embedMany()         — single batched OpenAI embeddings call
     └── RagRepository.insertDocumentWithEmbeddings()
           └── Postgres: INSERT Document + n DocumentChunk rows with vector embeddings
@@ -66,7 +66,7 @@ Orchestrates ingestion and retrieval. Two primary methods:
 
 **`ingest(buffer, mimeType, fileName, userId)`**
 1. Calls `extractText()` to convert buffer to a string. For PDFs, this uses `pdf-parse` via a **dynamic `import()`** (not a static import) — `pdf-parse` has module-level side-effects that break Jest at initialisation time; dynamic import isolates them. Plain text files are decoded directly from the buffer.
-2. Calls `chunkText()` from `@cra/ai` to split into paragraph-level segments (approximately 500 characters each, split on double newlines).
+2. Calls `chunkText()` from `@cra/ai` to split the text with a fixed sliding window — 2,000 characters per chunk with a 200-character overlap (no paragraph/newline awareness); whitespace-only tail chunks are dropped.
 3. Calls `embedMany()` with all chunks in a single API call — far fewer round-trips than a per-chunk loop.
 4. Delegates persistence to `RagRepository`.
 
@@ -83,7 +83,7 @@ Orchestrates ingestion and retrieval. Two primary methods:
 
 **`insertDocumentWithEmbeddings`** — runs in a transaction:
 1. Inserts the `Document` record.
-2. Batch-inserts all `DocumentChunk` rows with their `embedding` vectors via raw SQL (`$queryRaw`) using `pgvector`'s `::vector` cast.
+2. Batch-inserts all `DocumentChunk` rows with their `embedding` vectors via raw SQL (`$executeRaw` with `pgvector`'s `::vector` cast); each chunk `id` is generated with `randomUUID()` — the schema's `@default(cuid())` never fires on this raw-insert path.
 
 **`querySimilarChunks`** — raw SQL query:
 ```sql
@@ -98,10 +98,10 @@ The `<=>` operator is pgvector's cosine distance.
 
 ### `@cra/ai` — `chunkText()`
 
-The `embeddings.ts` module in `@cra/ai` exports `chunkText(text: string): string[]`. The algorithm:
-1. Splits on double newlines (paragraph boundaries).
-2. Filters out segments shorter than 50 characters.
-3. Returns the surviving segments as the chunk array.
+The `embeddings.ts` module in `@cra/ai` exports `chunkText(text, chunkSize = 2000, overlap = 200): string[]`. The algorithm:
+1. Walks the text with a fixed sliding window: `text.slice(start, start + 2000)`, advancing `2000 - 200 = 1800` chars per step — so consecutive chunks overlap by 200 characters. There is no paragraph, newline, or sentence awareness.
+2. Drops any chunks that are purely whitespace (possible at the tail).
+3. Returns the surviving windows as the chunk array (~500 tokens per chunk at ~4 chars/token).
 
 ### AI Models Used
 
@@ -120,7 +120,7 @@ Both are accessed via `AiService.embeddingModel`.
 2. `RagController` receives the multipart form data.
 3. `RagService.ingest(buffer, "application/pdf", "eslint-standards.pdf", userId)` fires.
 4. `extractText` uses `pdf-parse` to extract raw text from the PDF.
-5. `chunkText` produces, e.g., 12 paragraph-length chunks.
+5. `chunkText` produces, e.g., 12 overlapping 2,000-char chunks.
 6. `embedMany` makes one API call to OpenAI, returns 12 embedding vectors.
 7. `RagRepository.insertDocumentWithEmbeddings` writes one `Document` row and 12 `DocumentChunk` rows.
 8. The controller returns `{ id, name, createdAt }`.
@@ -134,6 +134,8 @@ Both are accessed via `AiService.embeddingModel`.
 5. The chunks are concatenated into a `content` string.
 6. `buildSystemPrompt("CODE")` is augmented: `"${systemPrompt}\n\nYour team's coding standards:\n\n${standards.content}"`.
 7. The augmented system prompt is passed to `streamText`.
+
+> **Known limitation (PR path):** PR reviews embed a fixed query (`'code review standards best practices'`) instead of PR-derived content, so the retrieved standards may be less relevant to the actual diff. Only the pasted-code path embeds the code itself.
 
 ---
 

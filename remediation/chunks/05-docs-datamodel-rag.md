@@ -1,6 +1,6 @@
 # Chunk 05 — Docs: data model & RAG
 
-> **Status:** pending · **Findings:** A-17, A-18, A-19, A-20 (4) · **Severity mix:** 🔴2 🟠1 🟡1
+> **Status:** done (2026-08-12) · **Findings:** A-17, A-18, A-19, A-20 (4) · **Severity mix:** 🔴2 🟠1 🟡1
 > **Depends on:** chunk 00 (document the schema *with* its new indexes and baseline story) · **Gated by:** nothing
 > **Files touched:** `docs/data-model.md`, `docs/rag.md`, `remediation/PROGRESS.md`. **Owns `data-model.md` exclusively — no other chunk edits it.**
 
@@ -35,10 +35,10 @@
 
 ## 5. Tasks
 
-1. [ ] **A-18 + A-19:** update `docs/data-model.md` — 7 models, full `ReviewDispatch` table section (columns, indexes, lifecycle), `Review.dispatch` relation, all 3 enums, and the post-chunk-00 index list + baseline-migration note. **Acceptance:** every model/enum in `schema.prisma` appears in the doc; "five models" is gone.
-2. [ ] **A-17:** fix chunking in both docs — 2,000-char sliding window, 200-char overlap, no paragraph splitting, ~500 tokens, whitespace-tail drop. Remove all "paragraph"/"double newline" language. **Acceptance:** grep `rag.md` + `data-model.md` for `500`/`paragraph`/`double newline` → only correct usages remain.
-3. [ ] **A-20:** document UUID (not CUID) chunk IDs and *why* (raw SQL insert bypasses the Prisma default).
-4. [ ] **M-9 line:** add the fixed-query known-limitation note to `docs/rag.md`'s retrieval section.
+1. [x] **A-18 + A-19:** update `docs/data-model.md` — 7 models, full `ReviewDispatch` table section (columns, indexes, lifecycle), `Review.dispatch` relation, all 3 enums, and the post-chunk-00 index list + baseline-migration note. **Acceptance:** every model/enum in `schema.prisma` appears in the doc; "five models" is gone.
+2. [x] **A-17:** fix chunking in both docs — 2,000-char sliding window, 200-char overlap, no paragraph splitting, ~500 tokens, whitespace-tail drop. Remove all "paragraph"/"double newline" language. **Acceptance:** grep `rag.md` + `data-model.md` for `500`/`paragraph`/`double newline` → only correct usages remain.
+3. [x] **A-20:** document UUID (not CUID) chunk IDs and *why* (raw SQL insert bypasses the Prisma default).
+4. [x] **M-9 line:** add the fixed-query known-limitation note to `docs/rag.md`'s retrieval section.
 
 ## 6. Verification
 
@@ -56,7 +56,7 @@ grep -n 'ReviewDispatch\|DispatchStatus' docs/data-model.md                     
 
 ## 8. Done checklist
 
-- [ ] data-model.md: 7 models + 3 enums + ReviewDispatch + indexes
-- [ ] rag.md + data-model.md chunking corrected
-- [ ] UUID note + RAG known-limitation note added
-- [ ] Grep checks pass; `PROGRESS.md` updated (4 findings)
+- [x] data-model.md: 7 models + 3 enums + ReviewDispatch + indexes
+- [x] rag.md + data-model.md chunking corrected
+- [x] UUID note + RAG known-limitation note added
+- [x] Grep checks pass; `PROGRESS.md` updated (4 findings)
