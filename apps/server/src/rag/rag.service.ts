@@ -4,7 +4,7 @@ import { embed, embedMany } from 'ai'
 import { chunkText } from '@cra/ai'
 import { RagRepository, RetrievedStandards } from './rag.repository'
 import { extractText } from './document-parser.util'
-import { AiService } from '../ai/ai.service'
+import { AiService, EMBEDDING_DIMENSIONS } from '../ai/ai.service'
 
 @Injectable()
 export class RagService {
@@ -36,6 +36,10 @@ export class RagService {
         const { embeddings } = await embedMany({
             model: this.aiService.embeddingModel,
             values: chunks,
+            // Truncate to the pgvector column width and tag chunks as documents
+            providerOptions: {
+                google: { outputDimensionality: EMBEDDING_DIMENSIONS, taskType: 'RETRIEVAL_DOCUMENT' },
+            },
         })
 
         // Delegate persistence and SQL vectors to Repository
@@ -57,10 +61,19 @@ export class RagService {
         }
 
         try {
-            this.logger.log(`[RAG Retrieve] Encoding context query: \n\n"${queryText}"\n\n...`)
+            // For pasted-code reviews the query IS the user's source code — never
+            // log it verbatim (proprietary code and hardcoded secrets would persist
+            // in log pipelines, and multi-KB multi-line entries bury real signals).
+            // Length + a short single-line preview is enough to correlate requests.
+            const preview = queryText.replace(/\s+/g, ' ').trim()
+            const excerpt = preview.length > 120 ? `${preview.slice(0, 120)}…` : preview
+            this.logger.log(`[RAG Retrieve] Encoding context query (${queryText.length} chars): "${excerpt}"`)
             const { embedding } = await embed({
                 model: this.aiService.embeddingModel,
                 value: queryText,
+                providerOptions: {
+                    google: { outputDimensionality: EMBEDDING_DIMENSIONS, taskType: 'RETRIEVAL_QUERY' },
+                },
             })
 
             const standards = await this.ragRepository.querySimilarChunks(embedding, userId)

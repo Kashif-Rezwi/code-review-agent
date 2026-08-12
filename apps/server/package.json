@@ -22,7 +22,7 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand"
   },
   "dependencies": {
-    "@ai-sdk/openai": "^3.0.37",
+    "@ai-sdk/google": "^3.0.107",
     "@cra/ai": "workspace:*",
     "@cra/types": "workspace:*",
     "@nestjs/bullmq": "^11.0.4",

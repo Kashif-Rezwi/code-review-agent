@@ -814,7 +814,7 @@ export class ReviewService {
             // the error; the caller throws it once the stream has settled.
             onError: ({ error }: { error: unknown }) => {
                 const providerRecord = asRecord(error)
-                const inner = asRecord(providerRecord.error) // OpenAI nests the real error one level down
+                const inner = asRecord(providerRecord.error) // providers nest the real error one level down
                 const code = stringValue(inner.code) ?? stringValue(inner.type)
                     ?? stringValue(providerRecord.code) ?? stringValue(providerRecord.type)
                 const detail = stringValue(inner.message) ?? stringValue(providerRecord.message)

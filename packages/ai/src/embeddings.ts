@@ -5,7 +5,7 @@
  * Default sizing: ~2 000 chars per chunk ≈ 500 tokens at 4 chars/token.
  *                  200 char overlap         ≈  50 tokens.
  *
- * Used by RagService (NestJS) before calling the OpenAI embedding model.
+ * Used by RagService (NestJS) before calling the Gemini embedding model.
  */
 export function chunkText(
     text: string,
