@@ -33,7 +33,7 @@ ReviewService.streamAnalyzeCode(code, userId, conn, reviewId)
         │
         ▼
 Vercel AI SDK streamText()
-  ├── Model: gpt-4o-mini (temperature 0.2)
+  ├── Model: gemini-3.5-flash (temperature 0.2)
   ├── System: expert code reviewer prompt + optional RAG standards
   ├── Tool: runLinter (ESLint in-process)
   ├── stopWhen: parseReviewText() succeeds OR step limit reached

@@ -21,7 +21,7 @@ Upload path
   RagService.ingest()
     ├── extractText()       — PDF or plain text → raw string
     ├── chunkText()         — fixed 2,000-char windows, 200-char overlap
-    ├── embedMany()         — single batched OpenAI embeddings call
+    ├── embedMany()         — single batched Gemini embeddings call
     └── RagRepository.insertDocumentWithEmbeddings()
           └── Postgres: INSERT Document + n DocumentChunk rows with vector embeddings
 
@@ -107,10 +107,10 @@ The `embeddings.ts` module in `@cra/ai` exports `chunkText(text, chunkSize = 200
 
 | Operation | Model | API call |
 |---|---|---|
-| Document embedding | `text-embedding-3-small` | `embedMany()` |
-| Query embedding | `text-embedding-3-small` | `embed()` |
+| Document embedding | `gemini-embedding-001` | `embedMany()` |
+| Query embedding | `gemini-embedding-001` | `embed()` |
 
-Both are accessed via `AiService.embeddingModel`.
+Both are accessed via `AiService.embeddingModel`. Every call passes `providerOptions.google.outputDimensionality = 1536` (the model natively emits 3,072) to match the `vector(1536)` column, plus the matching `taskType` (`RETRIEVAL_DOCUMENT` for chunks, `RETRIEVAL_QUERY` for queries). Since retrieval uses cosine distance (`<=>`), the truncated vectors need no extra normalization. Embeddings from a different provider/model are not comparable — re-upload documents after switching models.
 
 ---
 
@@ -121,7 +121,7 @@ Both are accessed via `AiService.embeddingModel`.
 3. `RagService.ingest(buffer, "application/pdf", "eslint-standards.pdf", userId)` fires.
 4. `extractText` uses `pdf-parse` to extract raw text from the PDF.
 5. `chunkText` produces, e.g., 12 overlapping 2,000-char chunks.
-6. `embedMany` makes one API call to OpenAI, returns 12 embedding vectors.
+6. `embedMany` makes one API call to Google (Gemini API), returns 12 embedding vectors.
 7. `RagRepository.insertDocumentWithEmbeddings` writes one `Document` row and 12 `DocumentChunk` rows.
 8. The controller returns `{ id, name, createdAt }`.
 

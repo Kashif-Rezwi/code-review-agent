@@ -41,7 +41,7 @@ Code Review Agent is a monorepo containing two applications (`client` and `serve
 └─────────────────────────────────────────────────────────────────────────────┘
 
 External dependencies
-  ├── OpenAI API        (AI model + embeddings)
+  ├── Google Gemini API    (AI model + embeddings)
   ├── GitHub API        (OAuth, user profile, PR diffs)
   ├── PostgreSQL/Neon   (pgvector — reviews, users, RAG chunks)
   └── Redis             (BullMQ jobs + Streams event log + cancellation channel)
@@ -95,7 +95,7 @@ External dependencies
 AppModule
   ├── ConfigModule (global)
   ├── PrismaModule          ◄── used by all repos
-  ├── AiModule              ◄── provides OpenAI provider + models
+  ├── AiModule              ◄── provides Google Gemini provider + models
   ├── AuthModule
   │     └── GithubModule (for /user validation)
   ├── RagModule
