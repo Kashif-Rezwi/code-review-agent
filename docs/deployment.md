@@ -75,7 +75,7 @@ A managed Redis instance. The `REDIS_URL` environment variable is automatically 
 | `PORT` | Set to `10000` in `render.yaml` |
 | `REDIS_URL` | Auto-injected from the managed Redis service |
 | `FRONTEND_URL` | The Vercel deployment URL (for CORS) |
-| `OPENAI_API_KEY` | Required — all AI calls fail without this |
+| `GOOGLE_GENERATIVE_AI_API_KEY` | Required — all AI calls fail without this |
 | `DATABASE_URL` | Neon pooled connection string |
 | `DIRECT_URL` | Neon direct connection string (for Prisma) |
 | `GITHUB_TOKEN` | *(Optional)* For private repo PR reviews; declared as a secret in `render.yaml` |
@@ -239,7 +239,7 @@ Both apps have multi-stage Dockerfiles for minimal production images.
 | `PORT` | No | API port (default `4000`) |
 | `DATABASE_URL` | Yes | Neon pooled PostgreSQL URL |
 | `DIRECT_URL` | Yes | Neon direct PostgreSQL URL |
-| `OPENAI_API_KEY` | Yes | OpenAI API key |
+| `GOOGLE_GENERATIVE_AI_API_KEY` | Yes | Google AI Studio key — the free tier works (no billing); free-tier content may be used by Google to improve products |
 | `REDIS_URL` | Yes | Redis connection string |
 | `GITHUB_CLIENT_ID` | No — client-only | Read by NextAuth in `apps/client`, never by the server |
 | `GITHUB_CLIENT_SECRET` | No — client-only | Same as above |
