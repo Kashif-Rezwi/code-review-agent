@@ -75,8 +75,10 @@ services:
       server:
         condition: service_started
     healthcheck:
-      # / redirects to /login behind auth — probe /login directly (returns 200)
-      test: ["CMD", "wget", "-qO-", "http://localhost:3000/login"]
+      # / redirects to /login behind auth — probe /login directly (returns 200).
+      # Use 127.0.0.1, not localhost: busybox wget tries ::1 first and never falls
+      # back, while the Next standalone server binds IPv4-only (0.0.0.0).
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/login"]
       interval: 15s
       timeout: 5s
       start_period: 30s

@@ -75,7 +75,9 @@ USER node
 EXPOSE 3000
 
 # Next.js standalone entrypoint
+# Probe 127.0.0.1/login: / redirects (307) behind auth, and busybox wget does not
+# fall back from ::1 to IPv4 when given "localhost" (server binds 0.0.0.0 only).
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
-  CMD wget -qO- http://localhost:3000 || exit 1
+  CMD wget -qO- http://127.0.0.1:3000/login || exit 1
 
 CMD ["node", "apps/client/server.js"]
