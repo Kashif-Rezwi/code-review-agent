@@ -159,13 +159,13 @@ cp apps/server/.env.example apps/server/.env
 | `DIRECT_URL` | Neon direct connection string (for Prisma migrations) |
 | `OPENAI_API_KEY` | OpenAI API key (required) |
 | `REDIS_URL` | Redis connection string, e.g. `redis://localhost:6379` |
-| `GITHUB_CLIENT_ID` | GitHub OAuth App client ID |
-| `GITHUB_CLIENT_SECRET` | GitHub OAuth App client secret |
 | `FRONTEND_URL` | Frontend origin for CORS, e.g. `http://localhost:3000` |
 | `PORT` | Server port (default `4000`) |
 | `GITHUB_TOKEN` | *(Optional)* Personal access token for private repo PR reviews |
-| `HELICONE_API_KEY` | *(Optional)* Observability via Helicone |
-| `GROQ_API_KEY` | *(Optional)* Alternative AI provider |
+| `HELICONE_API_KEY` | *(Not implemented — reserved)* |
+| `GROQ_API_KEY` | *(Not implemented — reserved)* |
+
+(`GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET` are client-only — the server never reads them; see the frontend table below.)
 
 **Frontend** — copy and fill in `apps/client/.env`:
 

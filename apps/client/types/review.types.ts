@@ -4,7 +4,7 @@
 
 export type { ReviewIssue, ReviewData, ReviewStreamEvent } from '@cra/types'
 
-/** A single chat turn: user question or assistant reply. Shared by ChatPanel + history pages. */
+/** A single chat turn: user question or assistant reply. Shared by ChatThread + history pages. */
 export interface ChatMessage {
     role: 'user' | 'assistant'
     content: string

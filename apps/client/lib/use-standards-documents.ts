@@ -55,7 +55,7 @@ export function useStandardsDocuments(githubToken?: string): UseStandardsDocumen
 
     const uploadFile = useCallback(async (file: File) => {
         if (!ALLOWED_TYPES.includes(file.type)) {
-            setUploadError('Only .txt and .pdf files are supported.')
+            setUploadError('Only .txt, .md, and .pdf files are supported.')
             return
         }
         if (file.size > MAX_SIZE_BYTES) {

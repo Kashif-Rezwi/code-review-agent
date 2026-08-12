@@ -1,6 +1,6 @@
 # Chunk 06 — Docs: frontend, history, deployment & misc
 
-> **Status:** pending · **Findings:** A-21…A-30, A-33, A-34, A-38, B-5, C-4, C-5, C-6 (17) · **Severity mix:** 🟠9 🟡8
+> **Status:** done (2026-08-12) · **Findings:** A-21…A-30, A-33, A-34, A-38, B-5, C-4, C-5, C-6 (17) · **Severity mix:** 🟠9 🟡8
 > **Depends on:** chunks 01, 02, 07 (document fixed behavior) · **Gated by:** nothing
 > **Files touched:** `docs/frontend.md`, `docs/deployment.md`, `docs/history-chat.md`, `docs/github-integration.md`, `README.md` (env table only — **shared with chunk 03; never run concurrently**), `Clustered-PR-Review-Spec.md` (banner), `apps/client/.env`, `apps/client/.env.example`, `apps/client/lib/use-standards-documents.ts`, `apps/server/src/rag/rag.controller.ts` (error copy), `apps/client/types/review.types.ts` (comment), `remediation/PROGRESS.md`
 
@@ -45,13 +45,13 @@ A broad but shallow sweep: bring the remaining 🟠/🟡 docs to code-truth (fro
 
 ## 5. Tasks
 
-1. [ ] **frontend.md (A-25…A-30, B-5):** fix the route structure (`/` → `/review`; review page renders directly); add `proxy.ts` + its matcher; add the server-wakeup subsystem; expand the API-client section (`historyService` incl. `deleteReview`, `reviewService.cancelSession`, `uploadDocument(FormData)`); rewrite the `sse.ts` description (frame parser) and the `useReviewStream` section (reconnect/resume/dedupe/heartbeat skipping). **Acceptance:** every file named in §2's frontend paragraph is represented accurately.
-2. [ ] **deployment.md (A-21, A-22):** correct the client Dockerfile walkthrough (standalone output, `node apps/client/server.js`); state the Vercel Root Directory is `apps/client` and document the `ignoreCommand` gating (main-branch + path diff).
-3. [ ] **env tables (A-23, A-24):** in `deployment.md` and `README.md` — move `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET` out of the server's required list (client-only, NextAuth); mark `GROQ_API_KEY`, `HELICONE_API_KEY`, `STRIPE_*` as "not implemented — reserved". **Acceptance:** no server env table lists client-only or inert vars as usable/required.
-4. [ ] **history-chat.md (A-33):** add `DELETE /history/:id` (204; ownership-checked) and note the list endpoint returns only `COMPLETE`/`PARTIAL` reviews.
-5. [ ] **github-integration.md (A-34):** full `/health` response shape + degraded rule.
-6. [ ] **A-38 — spec banner:** prepend to `Clustered-PR-Review-Spec.md`: `> ⚠️ HISTORICAL — superseded by docs/review-pr.md and the implementation. Kept for design history; do not implement against this file.` (Adjust the "single source of truth" line accordingly.)
-7. [ ] **C-4/C-5/C-6:** dedupe `NEXT_PUBLIC_API_URL` in `apps/client/.env`; Railway→Render in `.env.example`; add `.md` to both upload error messages; `ChatPanel`→`ChatThread` in `types/review.types.ts:7`.
+1. [x] **frontend.md (A-25…A-30, B-5):** fix the route structure (`/` → `/review`; review page renders directly); add `proxy.ts` + its matcher; add the server-wakeup subsystem; expand the API-client section (`historyService` incl. `deleteReview`, `reviewService.cancelSession`, `uploadDocument(FormData)`); rewrite the `sse.ts` description (frame parser) and the `useReviewStream` section (reconnect/resume/dedupe/heartbeat skipping). **Acceptance:** every file named in §2's frontend paragraph is represented accurately.
+2. [x] **deployment.md (A-21, A-22):** correct the client Dockerfile walkthrough (standalone output, `node apps/client/server.js`); state the Vercel Root Directory is `apps/client` and document the `ignoreCommand` gating (main-branch + path diff).
+3. [x] **env tables (A-23, A-24):** in `deployment.md` and `README.md` — move `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET` out of the server's required list (client-only, NextAuth); mark `GROQ_API_KEY`, `HELICONE_API_KEY`, `STRIPE_*` as "not implemented — reserved". **Acceptance:** no server env table lists client-only or inert vars as usable/required.
+4. [x] **history-chat.md (A-33):** add `DELETE /history/:id` (204; ownership-checked) and note the list endpoint returns only `COMPLETE`/`PARTIAL` reviews.
+5. [x] **github-integration.md (A-34):** full `/health` response shape + degraded rule.
+6. [x] **A-38 — spec banner:** prepend to `Clustered-PR-Review-Spec.md`: `> ⚠️ HISTORICAL — superseded by docs/review-pr.md and the implementation. Kept for design history; do not implement against this file.` (Adjust the "single source of truth" line accordingly.)
+7. [x] **C-4/C-5/C-6:** dedupe `NEXT_PUBLIC_API_URL` in `apps/client/.env`; Railway→Render in `.env.example`; add `.md` to both upload error messages; `ChatPanel`→`ChatThread` in `types/review.types.ts:7`.
 
 ## 6. Verification
 
@@ -70,7 +70,7 @@ pnpm --filter server test && pnpm --filter client test                          
 
 ## 8. Done checklist
 
-- [ ] frontend.md / deployment.md / history-chat.md / github-integration.md match code
-- [ ] Env tables corrected (both files); spec banner added
-- [ ] C-4/C-5/C-6 applied
-- [ ] Tests green; `PROGRESS.md` updated (16 findings)
+- [x] frontend.md / deployment.md / history-chat.md / github-integration.md match code
+- [x] Env tables corrected (both files); spec banner added
+- [x] C-4/C-5/C-6 applied
+- [x] Tests green; `PROGRESS.md` updated (17 findings)

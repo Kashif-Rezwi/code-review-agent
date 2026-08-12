@@ -40,7 +40,7 @@ export class RagController {
 
         if (!ALLOWED_MIME_TYPES.includes(file.mimetype)) {
             throw new BadRequestException(
-                `Unsupported file type "${file.mimetype}". Upload a .txt or .pdf file.`,
+                `Unsupported file type "${file.mimetype}". Upload a .txt, .md, or .pdf file.`,
             )
         }
 
