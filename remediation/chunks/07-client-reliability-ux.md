@@ -1,6 +1,6 @@
 # Chunk 07 — Client reliability & UX
 
-> **Status:** pending · **Findings:** C-2, C-7 (2) · **Severity mix:** 🟠1 🟡1
+> **Status:** done (2026-08-12) · **Findings:** C-2, C-7 (2) · **Severity mix:** 🟠1 🟡1
 > **Depends on:** none · **Gated by:** nothing — executable now
 > **Files touched:** `apps/client/next.config.ts`, `apps/client/lib/api.ts`, `apps/client/lib/use-chat-messages.ts`, `apps/client/lib/api.spec.ts` (or new spec), `remediation/PROGRESS.md`
 
@@ -29,8 +29,8 @@ Two client failure modes that confuse users and developers: a missing `NEXT_PUBL
 
 ## 5. Tasks
 
-1. [ ] **C-2 — fail fast.** In `next.config.ts`, throw a descriptive error at build time when `NEXT_PUBLIC_API_URL` is empty (message should name the var and where to set it). Also make `lib/api.ts`'s fallback explicit for non-build contexts: keep `?? ''` but have `apiFetch` throw `new Error('NEXT_PUBLIC_API_URL is not configured…')` when `API_URL` is empty instead of issuing a same-origin request. **Acceptance:** `pnpm --filter client build` with the var unset fails with the clear message; with it set, build passes; a unit test covers the `apiFetch` guard.
-2. [ ] **C-7 — surface real errors.** In the `use-chat-messages` catch, use the caught error's message (prefix with a friendly lead-in, e.g. `Something went wrong: <message>`), falling back to the generic text only when no message exists. **Acceptance:** a mocked 401 (`apiFetch` throwing `Error('GitHub token is invalid or expired.')`) renders that text in the assistant bubble; existing tests updated/passing.
+1. [x] **C-2 — fail fast.** In `next.config.ts`, throw a descriptive error at build time when `NEXT_PUBLIC_API_URL` is empty (message should name the var and where to set it). Also make `lib/api.ts`'s fallback explicit for non-build contexts: keep `?? ''` but have `apiFetch` throw `new Error('NEXT_PUBLIC_API_URL is not configured…')` when `API_URL` is empty instead of issuing a same-origin request. **Acceptance:** `pnpm --filter client build` with the var unset fails with the clear message; with it set, build passes; a unit test covers the `apiFetch` guard.
+2. [x] **C-7 — surface real errors.** In the `use-chat-messages` catch, use the caught error's message (prefix with a friendly lead-in, e.g. `Something went wrong: <message>`), falling back to the generic text only when no message exists. **Acceptance:** a mocked 401 (`apiFetch` throwing `Error('GitHub token is invalid or expired.')`) renders that text in the assistant bubble; existing tests updated/passing.
 
 ## 6. Verification
 
@@ -48,6 +48,6 @@ pnpm --filter client lint          # exit 0
 
 ## 8. Done checklist
 
-- [ ] Build-time + runtime guards for `NEXT_PUBLIC_API_URL`
-- [ ] Chat surfaces real server error messages
-- [ ] Tests/lint/build green; `PROGRESS.md` updated (2 findings)
+- [x] Build-time + runtime guards for `NEXT_PUBLIC_API_URL`
+- [x] Chat surfaces real server error messages
+- [x] Tests/lint/build green; `PROGRESS.md` updated (2 findings)
