@@ -124,7 +124,7 @@ AppModule
 The AI package is the single source of truth for all LLM-facing abstractions:
 
 - **Prompts** — system prompt builders for code review, worker agents, and synthesis
-- **Tools** — Vercel AI SDK tool definitions: `fetchGithubPR`, `listPRFiles`, `fetchFileContent`, `runLinter`
+- **Tools** — one Vercel AI SDK tool definition: `runLinter` (pasted-code path only; GitHub PR acquisition is orchestrated server-side before any model call, so no model-facing GitHub tools exist)
 - **Cluster planner** — `planClusters()` — groups PR files with the centrally configured model, then enforces exact-once coverage
 - **Embeddings** — `chunkText()` — text chunking utility for RAG ingestion
 

@@ -25,6 +25,7 @@ The complete set of SSE event shapes. Each event has a `type` discriminant:
 | `type` | Direction | Carries |
 |---|---|---|
 | `start` | server → client | *(nothing — signals pipeline began)* |
+| `heartbeat` | server → client | *(nothing — keeps idle SSE connections alive; emitted on empty 15s blocking reads and intentionally **not** persisted to the stream — see [queue-streaming.md](./queue-streaming.md))* |
 | `acquisition` | server → client | `source`, `fileCount`, `complete`, sanitized `warnings` |
 | `thinking` | server → client | `text: string`, `clusterId?: string` |
 | `task_plan` | server → client | `tasks: { id, label }[]` |
@@ -116,23 +117,15 @@ Builds the user message for the synthesis agent by serialising all worker review
 
 #### Tools
 
-**`createRunLinterTool(impl)`**
+**`createRunLinterTool(execute)`**
 
-Creates a Vercel AI SDK tool that calls the provided `impl` function (which wires to `LinterService.lint`). Input schema: `{ code: string, language: "javascript" | "typescript" }`.
+Creates the Vercel AI SDK `runLinter` tool. Input schema `linterToolSchema`: `{ code: string, language: "javascript" | "typescript", filename?: string }`. The tool description tells the model to call it only for pasted source code — never on a git/PR diff.
 
-**`createFetchGithubPRTool(impl)`**
+The server's `execute` wiring returns a structured `LintResult { output, errors, warnings, parseError }` from `LinterService.lint`; the runtime adapter (`apps/server/src/ai/ai-runtime.adapter.ts`) forwards only `output` to the model — the model surface stays plain text — while the structured counts drive the user-visible `tool_done` label.
 
-Tool for fetching the full PR unified diff. Input: `{ prUrl: string }`.
+GitHub PR acquisition is deliberately **not** model-facing: it runs server-side via `GithubService.fetchPRSnapshot` (see [github-integration.md](./github-integration.md)) before any model call, and PR worker agents run with `tools: {}`. No model-facing GitHub tools remain in this package.
 
-**`createListPRFilesTool(impl)`**
-
-Tool for listing PR changed files with patches. Input: `{ prUrl: string }`. Returns `PRFile[]`.
-
-**`createFetchFileContentTool(impl)`**
-
-Tool for fetching a specific file's full source from the PR's head branch. Input: `{ prUrl: string, filePath: string }`.
-
-All tool factories follow the same pattern: they accept an `impl` function and return a Zod-typed Vercel AI SDK tool object. The tool definition lives here; the implementation lives in the server's service layer. This separation means the `@cra/ai` package never depends on NestJS or ioredis.
+The tool definition lives here; the implementation lives in the server's service layer. This separation means the `@cra/ai` package never depends on NestJS or ioredis.
 
 #### `planClusters(files, model): ClusterPlan[]`
 
@@ -160,7 +153,7 @@ Both packages must be compiled before the apps:
 pnpm build:packages   # runs tsc for @cra/types then @cra/ai (order matters)
 ```
 
-This is a prerequisite baked into all `dev`, `build`, and CI scripts. The compiled output lands in each package's `dist/` directory, which is what the apps import via workspace resolution.
+This is a prerequisite baked into the root `dev` and `build` scripts, and the CI workflow (`.github/workflows/ci.yml`) runs it before type-check, lint, and tests. Note the server's own `build` script (`prisma generate && nest build`) does **not** build the packages — use the root scripts. The compiled output lands in each package's `dist/` directory, which is what the apps import via workspace resolution.
 
 ---
 
@@ -174,7 +167,7 @@ This is a prerequisite baked into all `dev`, `build`, and CI scripts. The compil
 | [`packages/ai/src/prompts/worker.prompt.ts`](../packages/ai/src/prompts/worker.prompt.ts) | Cluster worker system prompt |
 | [`packages/ai/src/prompts/synthesis.prompt.ts`](../packages/ai/src/prompts/synthesis.prompt.ts) | Synthesis system prompt + user message |
 | [`packages/ai/src/tools/index.ts`](../packages/ai/src/tools/index.ts) | Tool definition re-exports |
-| [`packages/ai/src/tools/github.tool.ts`](../packages/ai/src/tools/github.tool.ts) | GitHub API tool definitions + `PRFile` schema |
+| [`packages/ai/src/schemas/pr-file.schema.ts`](../packages/ai/src/schemas/pr-file.schema.ts) | `PRFileSchema` / `PRFile` — GitHub PR file validation |
 | [`packages/ai/src/tools/linter.tool.ts`](../packages/ai/src/tools/linter.tool.ts) | `runLinter` tool definition |
 | [`packages/ai/src/clustering.ts`](../packages/ai/src/clustering.ts) | `planClusters` implementation |
 | [`packages/ai/src/embeddings.ts`](../packages/ai/src/embeddings.ts) | `chunkText` implementation |

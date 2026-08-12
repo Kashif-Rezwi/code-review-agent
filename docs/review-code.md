@@ -108,9 +108,9 @@ This avoids infinite loops while still allowing the model to call the linter mul
 
 ## The `runLinter` Tool
 
-Defined in `@cra/ai/tools/linter.tool.ts`. Input: `{ code: string, language: "javascript" | "typescript" }`. The tool implementation calls `LinterService.lint(code, language)`.
+Defined in `@cra/ai/tools/linter.tool.ts`. Input: `{ code: string, language: "javascript" | "typescript", filename?: string }`. The tool implementation calls `LinterService.lint(code, language)`.
 
-`LinterService` uses ESLint's programmatic API (`new Linter()`) in-process — no subprocess, no config file. Rules checked:
+`LinterService` uses ESLint's programmatic API (`new Linter()`, flat-config `languageOptions`) in-process — no subprocess, no config file. Rules checked:
 
 | Rule | Level |
 |---|---|
@@ -122,17 +122,24 @@ Defined in `@cra/ai/tools/linter.tool.ts`. Input: `{ code: string, language: "ja
 | `prefer-const` | warn |
 | `no-duplicate-imports` | error |
 
-Output is capped at 20 messages to avoid blowing the context window. If ESLint cannot parse the code at all, a safe string is returned rather than throwing — the agent gracefully continues the review.
+Output is capped at 20 messages to avoid blowing the context window.
+
+Return contract: `lint()` resolves to a structured `LintResult { output, errors, warnings, parseError }`. The model receives only `output` (plain text); the counts drive the user-visible `tool_done` label (`N issues` / `clean` / `could not parse`).
+
+**JavaScript only today:** ESLint's default parser (espree) cannot parse TypeScript syntax — the `language` argument is accepted but not yet wired to a TS-aware parser. TypeScript input produces a fatal parse message, reported as `parseError` with zero counts, and the agent gracefully continues the review without lint findings.
 
 ---
 
 ## Review Parsing
 
-`parseReviewText(text)` in `review-parser.util.ts`:
-1. Looks for a bare `{` on its own line followed eventually by a bare `}` on its own line.
-2. Extracts that JSON block.
-3. Validates it against `ReviewDataSchema` (Zod) from `@cra/types`.
-4. Throws if validation fails — the caller (`stopWhen`) treats a throw as "not done yet."
+`parseReviewText(text)` in `review-parser.util.ts` builds several candidates and validates each against `ReviewDataSchema` (Zod) until one parses:
+
+1. The trimmed text as-is (clean JSON — the common case).
+2. The contents of a ` ```json ` markdown fence, if present.
+3. Balanced-brace extraction from every line-boundary `{`, tried last-to-first — handles analysis prose before **and** after the JSON (the brace matcher skips `{`/`}` characters inside JSON string values).
+4. First `{` to its balanced `}` — a final net for JSON that is not at a line boundary.
+
+It throws only when every candidate fails validation — the caller (`stopWhen`) treats a throw as "not done yet."
 
 After the stream ends, if parsing fails on the final step text, all previous step texts are tried in reverse order. This guards against the model briefly producing valid JSON in an intermediate step before revising it.
 

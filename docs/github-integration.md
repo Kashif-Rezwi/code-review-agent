@@ -90,4 +90,4 @@ At server startup, a status-only request to GitHub `/rate_limit` validates the c
 | `apps/server/src/github/github.types.ts` | `PRSnapshot` and normalized file types |
 | `apps/server/src/github/unified-diff.parser.ts` | Application-owned parser adapter |
 | `apps/server/src/github/github.utils.ts` | URL validation and base64 helpers |
-| `packages/ai/src/tools/github.tool.ts` | Base GitHub file schema |
+| `packages/ai/src/schemas/pr-file.schema.ts` | `PRFileSchema` / `PRFile` — PR file validation |
