@@ -167,6 +167,28 @@ describe('ReviewService coverage-safe PR orchestration', () => {
         expect(harness.operations.indexOf('save')).toBeLessThan(harness.operations.indexOf('send:complete'))
     })
 
+    it('surfaces provider stream errors instead of misreporting unparseable model output', async () => {
+        const harness = createHarness()
+        streamTextMock.mockImplementation((options: { onError?: (arg: { error: unknown }) => void }) => {
+            options.onError?.({
+                error: { error: { code: 'billing_not_active', message: 'Your account is not active' } },
+            })
+            return workerResult('')
+        })
+
+        await harness.service.runForQueue(REVIEW_ID, 'CODE', 'const a = 1', USER_ID, harness.conn)
+
+        const errorEvent = harness.events.find((event) => event.type === 'error')
+        expect(errorEvent).toMatchObject({
+            message: 'The AI provider returned an error. Please try again later.',
+        })
+        expect(harness.reviewRepository.markFailed).toHaveBeenCalledWith(
+            REVIEW_ID,
+            'The AI provider returned an error. Please try again later.',
+            expect.any(Array),
+        )
+    })
+
     it('uses the same clustered path for a public-diff snapshot and never invokes the generic PR agent', async () => {
         const harness = createHarness()
         harness.githubService.fetchPRSnapshot.mockResolvedValue(snapshot(7, 'public_diff'))

@@ -8,6 +8,21 @@ export type MinimalStreamResult = {
     steps: PromiseLike<MinimalAiStep[]>
 }
 
+/**
+ * A provider-side failure delivered as a stream `error` chunk (billing, quota,
+ * auth, …). The AI SDK resolves the stream with empty text instead of throwing,
+ * so without explicit handling these surface as misleading parse failures.
+ */
+export class ProviderStreamError extends Error {
+    constructor(
+        public readonly code: string | undefined,
+        detail: string | undefined,
+    ) {
+        super(`AI provider stream error${code ? ` [${code}]` : ''}${detail ? `: ${detail}` : ''}`)
+        this.name = 'ProviderStreamError'
+    }
+}
+
 type RuntimeOptions = Record<string, unknown> & {
     abortSignal?: AbortSignal
     maxOutputTokens: number

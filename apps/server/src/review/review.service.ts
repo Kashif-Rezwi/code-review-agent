@@ -25,7 +25,7 @@ import {
     operationDeadline,
     throwSignalReason,
 } from '../queue/review-cancellation.service'
-import { createLinterRuntimeTool, runReviewGenerate, runReviewStream, type MinimalAiStep } from '../ai/ai-runtime.adapter'
+import { createLinterRuntimeTool, runReviewGenerate, runReviewStream, ProviderStreamError, type MinimalAiStep } from '../ai/ai-runtime.adapter'
 import type { SseConnection } from './review.sse'
 import { parseReviewText } from './review-parser.util'
 import { parseArgs, pickArgs, toolStartLabel, toolStartDetail, toolDoneLabel, toolDoneDetail } from './review.formatter'
@@ -341,7 +341,7 @@ export class ReviewService {
         // Structured lint outcomes keyed by the exact code string: the model receives
         // only the plain-text `output`, while the SSE labeler reads real counts from here.
         const lintOutcomes = new Map<string, LintResult>()
-        const { onChunk, onStepFinish, getToolCallCount } = this.buildStreamCallbacks(_send, pending, thinking, lintOutcomes)
+        const { onChunk, onStepFinish, getToolCallCount, onError, getProviderError } = this.buildStreamCallbacks(_send, pending, thinking, lintOutcomes)
 
         try {
             const callDeadline = operationDeadline(signal, 'Pasted-code review', 120_000)
@@ -375,6 +375,7 @@ export class ReviewService {
 
                 onChunk,
                 onStepFinish,
+                onError,
             })
 
             let finalText: string
@@ -387,6 +388,11 @@ export class ReviewService {
             } finally {
                 callDeadline.dispose()
             }
+
+            // A provider-side stream error (billing, quota, auth, …) resolves with
+            // empty text — fail truthfully instead of misreporting unparseable output.
+            const providerFailure = getProviderError()
+            if (providerFailure) throw providerFailure
 
             const allTexts = [finalText, ...steps.map((s) => s.text).reverse()].filter((t) => t.trim())
             let review: ReviewData | undefined
@@ -534,7 +540,7 @@ export class ReviewService {
         const thinking = new ThinkingStream((event) => send({ ...event, clusterId: cluster.id }))
         const clusterSend = (event: ReviewStreamEvent) => send({ ...event, clusterId: cluster.id } as ReviewStreamEvent)
 
-        const { onChunk, onStepFinish } = this.buildStreamCallbacks(clusterSend, pending, thinking)
+        const { onChunk, onStepFinish, onError, getProviderError } = this.buildStreamCallbacks(clusterSend, pending, thinking)
 
         const result = runReviewStream({
             model: this.aiService.defaultModel,
@@ -559,6 +565,7 @@ export class ReviewService {
             },
             onChunk,
             onStepFinish,
+            onError,
         })
 
         let finalText: string
@@ -569,6 +576,9 @@ export class ReviewService {
             if (signal.aborted) throwSignalReason(signal)
             throw error
         }
+
+        const providerFailure = getProviderError()
+        if (providerFailure) throw providerFailure
 
         const allTexts = [finalText, ...steps.map((s) => s.text).reverse()].filter((t) => t.trim())
         let review: ReviewData | undefined
@@ -737,6 +747,7 @@ export class ReviewService {
         lintOutcomes?: Map<string, LintResult>,
     ) {
         let toolCallCount = 0
+        let providerError: ProviderStreamError | undefined
 
         return {
             onChunk: ({ chunk: rawChunk }: { chunk: unknown }) => {
@@ -797,6 +808,20 @@ export class ReviewService {
             },
 
             getToolCallCount: () => toolCallCount,
+
+            // The AI SDK never routes stream `error` parts to onChunk — they arrive
+            // via onError while the stream still resolves with empty text. Capture
+            // the error; the caller throws it once the stream has settled.
+            onError: ({ error }: { error: unknown }) => {
+                const providerRecord = asRecord(error)
+                const inner = asRecord(providerRecord.error) // OpenAI nests the real error one level down
+                const code = stringValue(inner.code) ?? stringValue(inner.type)
+                    ?? stringValue(providerRecord.code) ?? stringValue(providerRecord.type)
+                const detail = stringValue(inner.message) ?? stringValue(providerRecord.message)
+                providerError = new ProviderStreamError(code, detail)
+            },
+
+            getProviderError: () => providerError,
         }
     }
 
@@ -929,6 +954,12 @@ export class ReviewService {
         }
         if (err instanceof OperationDeadlineError) {
             return `${err.operation} timed out. Please try again.`
+        }
+        if (err instanceof ProviderStreamError) {
+            // The detail (billing/quota/auth) stays in the server log; the public
+            // message stays generic but correctly blames the provider, not the model.
+            this.logger.error(`Review pipeline failed: ${this.errMsg(err)}`)
+            return 'The AI provider returned an error. Please try again later.'
         }
         if (err instanceof HttpException) return err.message
 
