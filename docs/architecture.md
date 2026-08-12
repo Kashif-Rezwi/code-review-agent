@@ -2,7 +2,7 @@
 
 ## Overview
 
-Code Review Agent is a monorepo containing two applications (`client` and `server`) and two shared packages (`@cra/ai` and `@cra/types`). The system is designed around a **queue-backed, event-streaming** model: HTTP requests create jobs, background workers execute them, and results are pushed to clients in real time via SSE backed by Redis pub/sub.
+Code Review Agent is a monorepo containing two applications (`client` and `server`) and two shared packages (`@cra/ai` and `@cra/types`). The system is designed around a **queue-backed, event-streaming** model: HTTP requests atomically write a review plus a dispatch-outbox row, a polling dispatcher enqueues jobs, background workers execute them, and results are pushed to clients in real time via SSE backed by Redis Streams.
 
 ---
 
@@ -22,7 +22,8 @@ Code Review Agent is a monorepo containing two applications (`client` and `serve
 │  │  │  /history           │◄├────┤  │  github/  │  │  ├ service       │  │  │
 │  │  │  /standards         │ │    │  │           │  │  ├ processor     │  │  │
 │  │  │  /login             │ │    │  │  rag/     │  │  ├ streamer      │  │  │
-│  │  └─────────────────────┘ │    │  │           │  │  └ repository    │  │  │
+│  │  └─────────────────────┘ │    │  │           │  │  ├ repository    │  │  │
+│  │                          │    │  │           │  │  └ dispatcher    │  │  │
 │  │                          │    │  │ history/  │  └──────────────────┘  │  │
 │  │  ┌─────────────────────┐ │    │  │           │                        │  │
 │  │  │  lib/               │ │    │  │ queue/    │  ┌──────────────────┐  │  │
@@ -43,7 +44,7 @@ External dependencies
   ├── OpenAI API        (AI model + embeddings)
   ├── GitHub API        (OAuth, user profile, PR diffs)
   ├── PostgreSQL/Neon   (pgvector — reviews, users, RAG chunks)
-  └── Redis             (BullMQ jobs + pub/sub channels + replay lists)
+  └── Redis             (BullMQ jobs + Streams event log + cancellation channel)
 ```
 
 ---
@@ -57,15 +58,14 @@ External dependencies
 
 2. AuthGuard            Validates token → resolves userId
 
-3. ReviewController     Creates Review row (status=PENDING, id=<cuid>)
-                        Enqueues BullMQ job { reviewId, type, input, userId }
-                        Returns { reviewId }
+3. ReviewController     One tx: Review row (PENDING) + ReviewDispatch outbox row
+                        Returns { reviewId } — the dispatcher enqueues asynchronously
 
 4. Browser              Navigates to /review/github_pr/<reviewId>
                         Opens SSE: GET /review/<reviewId>/stream
 
-5. ReviewStreamerService Replays Redis history (empty at this point)
-                        Checks DB status: PENDING → subscribe to Redis channel re:<reviewId>
+5. ReviewStreamerService XREAD from 0-0 (or Last-Event-ID when resuming)
+                        Empty stream → blocking 15s reads + heartbeats until events arrive
 
 6. BullMQ Worker        Picks up job from review-jobs queue
                         ReviewProcessor.process(job) fires
@@ -76,11 +76,11 @@ External dependencies
                                → worker events → synthesis → complete/partial
 
 8. Redis                Each event is:
-                        - Appended to replay list  rl:<reviewId>  (TTL 1 hour)
-                        - Published on channel     re:<reviewId>
+                        - XADD-appended to stream  review:events:<reviewId>
+                          (MAXLEN ~ 5000, TTL 24 hours)
 
-9. ReviewStreamerService Receives each publish, forwards to SSE subscriber.next()
-                        On complete or error event → subscriber.complete()
+9. ReviewStreamerService Forwards each stream entry to SSE (id: <stream-id>)
+                        On complete/error (or a terminal DB row) → subscriber.complete()
 
 10. Browser             consumeSSEStream dispatcher fires for each event
                         reviewStreamReducer updates state
@@ -145,10 +145,10 @@ Both packages are built before the apps (`pnpm build:packages`) and consumed as 
 
 | Store | Purpose | TTL / Retention |
 |---|---|---|
-| **PostgreSQL** | Users, reviews, issues, conversations, RAG chunks + embeddings | Permanent |
+| **PostgreSQL** | Users, reviews, issues, conversations, review-dispatch outbox, RAG chunks + embeddings | Permanent |
 | **Redis — BullMQ** | Job queue (`review-jobs` queue) | Cleaned up: success after 1h, failure after 3d |
-| **Redis — replay list** | `rl:<reviewId>` — ordered list of all emitted events | 1 hour TTL |
-| **Redis — pub/sub** | `re:<reviewId>` channel — live event broadcast | Ephemeral (no persistence) |
+| **Redis — event stream** | `review:events:<reviewId>` — Redis Stream of all emitted events (the replay log) | 24h TTL, MAXLEN ~ 5000 |
+| **Redis — cancellation** | `review:cancel:<reviewId>` — TTL key + pub/sub channel for abort signals | 600s TTL |
 
 ---
 
@@ -178,7 +178,8 @@ Vercel (CDN + serverless)         Render.com
 | Decision | Rationale |
 |---|---|
 | Queue-backed reviews | Decouples HTTP from long AI pipelines and keeps pending work addressable by review ID; expensive LLM jobs are not auto-retried |
-| Redis as both queue broker and SSE relay | Single infrastructure dependency; pub/sub with replay list makes late-joining SSE safe |
+| Redis as both queue broker and SSE relay | Single infrastructure dependency; the Redis Stream doubles as the replay log, so late-joining SSE has no subscribe gap |
+| Postgres dispatch outbox | HTTP never blocks on Redis; a crash between review-write and enqueue can never strand work — the dispatcher reconciles |
 | Shared `@cra/types` package | Ensures client and server always agree on the SSE event contract at compile time |
 | `@cra/ai` as a standalone package | Prompts and tools can be tested/updated independently of the NestJS runtime |
 | No server-issued JWTs | Reduces complexity; the GitHub token is a sufficient credential and avoids token refresh machinery |

@@ -2,160 +2,188 @@
 
 ## Overview
 
-Reviews are long-running, expensive AI operations that cannot be executed synchronously within an HTTP request. The system uses a **BullMQ job queue** backed by Redis to decouple the HTTP layer from the AI pipeline. Results are delivered to the browser via **Server-Sent Events (SSE)**, routed through **Redis pub/sub** with a **replay list** for connection resilience.
+Reviews are long-running, expensive AI operations that cannot run inside an HTTP request. The pipeline is fully decoupled from HTTP:
+
+1. `POST /review/session` writes a `Review` row **and** a `ReviewDispatch` outbox row in **one transaction**, then returns `201 { reviewId }`. The controller never talks to BullMQ directly.
+2. `ReviewDispatcherService` polls the outbox every **2 seconds**, claims rows with short leases, and enqueues BullMQ jobs.
+3. `ReviewProcessor` runs the AI pipeline under a **5-minute execution deadline**, emitting progress events to a **Redis Stream** (`XADD`).
+4. `ReviewStreamerService` tails the stream with a blocking `XREAD` loop and forwards entries over SSE (`@Sse` Observable), resumable via the `Last-Event-ID` header.
+
+Redis Streams — not pub/sub — carry review events. The stream **is** the replay log, so there is no history-read/subscribe gap and no separate replay storage to keep consistent. The only remaining pub/sub use is the cancellation channel.
 
 ---
 
 ## High-Level Design
 
 ```
-HTTP Layer                 Queue Layer                  Client Layer
-─────────────              ────────────                 ────────────
-POST /review/session       BullMQ Worker                SSE Consumer
-  │                          │                            │
-  │── enqueue job ──────────►│                            │
-  │◄── { reviewId } ─────────│                            │
-                             │── run AI pipeline          │
-                             │      │                     │
-                             │  emit event ──►Redis──────►│
-                             │      │         pub/sub     │
-                             │      │         + replay    │
-                             │◄─────┘                     │
-                             │ pipeline done              │
-                                                          │
-GET /review/:id/stream ──────────────────────────────────►│
-                                  replay history          │
-                                  + subscribe live        │
+HTTP layer                Dispatch / queue layer                 Stream layer
+────────────              ──────────────────────────             ─────────────────────
+POST /review/session
+  └─ tx: Review(PENDING) + ReviewDispatch(PENDING)
+  └─ 201 { reviewId }
+                          ReviewDispatcherService
+                            poll every 2s, batch 20
+                            claim: PROCESSING + 30s lease
+                            retry backoff 1s→16s, 6 attempts
+                                  │ QueueService.enqueue
+                                  ▼   (jobId = reviewId, attempts: 1)
+                          BullMQ review-jobs queue
+                                  │
+                                  ▼
+                          ReviewProcessor.process(job)
+                            createExecution(5-min deadline)
+                            conn = createRedisEmitter(...)    XADD review:events:<id>
+                            reviewService.runForQueue(...)    MAXLEN ~ 5000, EXPIRE 24h
+                                                                   │
+                                                                   ▼
+                                              GET /review/:id/stream (SSE)
+                                                ReviewStreamerService
+                                                blocking XREAD (15s) loop
+                                                  · SSE `id:` per stream entry
+                                                  · heartbeat on every empty read
+                                                  · terminal state reconstructed from Postgres
 ```
 
 ---
 
 ## Components
 
-### `QueueService` + BullMQ
+### `ReviewRepository.createSession` (outbox write)
 
-`src/queue/queue.service.ts` injects the BullMQ `Queue` instance (named `review-jobs`) and exposes a single `enqueue(payload)` method.
+`src/review/review.repository.ts` — one Prisma transaction creates the `Review` (status `PENDING`) and its `ReviewDispatch` outbox row (`PENDING`, `availableAt: now`). Because intent commits atomically with the review, a crash between "write review" and "enqueue job" can never strand work: the dispatcher picks up any committed outbox row.
 
-Job options are deliberately conservative:
-- `jobId: reviewId` — the BullMQ job ID maps directly to the database Review ID, enabling O(1) lookups
-- `attempts: 1` — LLM pipelines are expensive and non-idempotent; no automatic retries
-- `removeOnComplete: { age: 3600 }` — successful jobs cleaned up from Redis after 1 hour
-- `removeOnFail: { age: 86400 * 3 }` — failed jobs retained for 3 days for debugging
+### `ReviewDispatcherService` (outbox → BullMQ)
 
-### `ReviewProcessor`
+`src/review/review-dispatcher.service.ts`:
 
-`src/review/review.processor.ts` is the BullMQ worker. It extends `WorkerHost` and is bound to the `review-jobs` queue via `@Processor('review-jobs')`.
+- **Poll loop** — `setInterval` every 2s (`POLL_INTERVAL_MS`), re-entrancy-guarded; `kick()` is also invoked right after each session creation for low latency.
+- **Claim** — batches of 20 rows (`BATCH_SIZE`) that are `PENDING` and due, or `PROCESSING` with an expired lease. Claiming is a conditional `updateMany` (status + time predicate) that sets `PROCESSING`, increments `attempts`, and takes a **30-second lease** (`lockedUntil`) — a crashed dispatcher's rows are re-claimed after the lease expires.
+- **Dispatch** — on a successful claim, loads the review and calls `QueueService.enqueue`, then marks the dispatch `DISPATCHED` (`dispatchedAt`). If the review is no longer `PENDING` (e.g. cancelled while queued), the dispatch is closed out instead (`CANCELLED`/`FAILED`).
 
-**On job receipt (`process` method):**
-1. Calls `createRedisEmitter(this.redisService, reviewId)` — creates an `SseConnection`-compatible object that routes all events to Redis instead of directly to an HTTP response.
-2. Calls `ReviewService.runForQueue(reviewId, type, input, userId, conn)` — runs the full AI pipeline.
-3. All errors are caught internally by `runForQueue`; the processor does **not** throw to BullMQ (preventing unwanted retries).
+### `QueueService` (BullMQ wrapper)
 
-**On worker failure (`@OnWorkerEvent('failed')`):**
-If BullMQ itself terminates the job (e.g. Node process stall), the handler:
-1. Forces `FAILED` status in Postgres.
-2. Emits a `{ type: "error" }` event to Redis so any waiting SSE clients receive a terminal signal.
+`src/queue/queue.service.ts` — queue name `review-jobs`.
 
-### `RedisService`
+- `enqueue(payload)` — `jobId = reviewId` (O(1) lookup + natural dedupe via `getJob` before `add`), `attempts: 1` (LLM pipelines are expensive and non-idempotent — **no automatic retries**), `removeOnComplete: { age: 3600 }`, `removeOnFail: { age: 3 days }`.
+- `removeJob(reviewId)` — used by cancellation to drop a job that hasn't started yet; silently no-ops if the job already started or is gone.
 
-`src/queue/redis.service.ts` manages two ioredis connections:
-- `publisher` — a persistent connection used for all write operations (append to list, set TTL, publish)
-- Subscribers — created on demand via `createSubscriber()` and used by `ReviewStreamerService`
+### `ReviewProcessor` (worker)
 
-The `emitEvent(reviewId, message)` method is the core primitive. It uses a Redis pipeline (atomic batch) to:
-1. `RPUSH rl:<reviewId> <message>` — append to the replay list
-2. `EXPIRE rl:<reviewId> 3600` — reset TTL to 1 hour
-3. `PUBLISH re:<reviewId> <message>` — broadcast to live subscribers
+`src/review/review.processor.ts` — `@Processor('review-jobs')`:
 
-This is done in a single round-trip.
+1. `ReviewCancellationService.createExecution(reviewId, 5 * 60_000)` — an `AbortSignal` that fires on cancellation **or** the 5-minute review deadline.
+2. `createRedisEmitter(redis, reviewId)` — the stream-backed emitter (below).
+3. `reviewService.runForQueue(...)` — runs the pipeline. Errors are caught inside `runForQueue` (it emits `error` and marks the review); the processor deliberately does **not** rethrow to BullMQ, so expensive LLM work is never auto-retried.
+4. `finally`: `await conn.flush()` before the job completes — a BullMQ completion must never race the terminal stream append — then `execution.dispose()`.
+5. `@OnWorkerEvent('failed')` — if BullMQ itself kills the job (process stall/eviction), the handler forces the review `FAILED` in Postgres and appends a terminal `error` event — unless another terminal transition (e.g. cancellation) already won.
 
-### `createRedisEmitter`
+### `RedisService` (Streams primitives)
 
-`src/queue/review.emitter.ts` is a factory that creates an object conforming to the `SseConnection` interface but backed by Redis instead of an HTTP response:
+`src/queue/redis.service.ts`:
 
-```
-SseConnection interface:
-  send(event)  → pushes to Redis replay list + pub/sub channel
-  getTrace()   → returns in-memory array of all emitted events
-  startedAt    → timestamp for duration calculation
-```
+- `publisher` — one shared ioredis connection for all non-blocking operations.
+- `createConnection()` — isolated connections for blocking operations (a blocking `XREAD` would stall every other command on a shared connection).
+- `emitEvent(reviewId, json)` — pipeline: `XADD review:events:<id> MAXLEN ~ 5000 * event <json>` + `EXPIRE 86400` (**24-hour** replay window; the approximate MAXLEN caps memory at ~5,000 events per review).
+- `readEvents(conn, reviewId, afterId, blockMs = 15000, count = 100)` — blocking `XREAD … STREAMS review:events:<id> <afterId>`; returns ordered `{ id, message }` entries.
 
-This abstraction means `ReviewService` is completely agnostic to whether it is streaming directly to an HTTP client or via Redis — the same pipeline code runs in both paths.
+### `createRedisEmitter` (worker-side event factory)
 
-### `ReviewStreamerService`
+`src/queue/review.emitter.ts` → `{ send, flush, getTrace, startedAt }` — the `SseConnection` interface from `review.sse.ts`.
 
-`src/review/review-streamer.service.ts` handles the client-facing SSE stream for `GET /review/:id/stream`.
+`send(event)` is synchronous for orchestration ergonomics, but appends are serialized through an internal promise queue; a failure is captured and rethrown by `flush()`. `getTrace()` returns the in-memory copy that `runForQueue` persists as `Review.traceLog`.
 
-**Initialization sequence:**
-1. Validates the review belongs to the requesting user (`HistoryService.getReview`).
-2. Fetches all events from the Redis replay list (`RedisService.getLog`).
-3. Replays them synchronously to the SSE subscriber.
-4. Checks the DB `status` field:
-   - If `COMPLETE` or `FAILED` and the **replay list was empty** (TTL expired): synthesises one terminal event and closes.
-     - `COMPLETE` → `{ type: 'complete', review: { id: review.id } }`
-     - `FAILED` → `{ type: 'error', message: review.summary || 'Review failed' }`
-   - If `COMPLETE` or `FAILED` and the **replay list was non-empty**: replay is sufficient; stream closes without a synthesised event.
-   - If `PENDING`: create a fresh Redis subscriber and subscribe to `re:<reviewId>`.
-5. Forwards each incoming pub/sub message to the SSE subscriber.
-6. On `complete` or `error` event, tears down the Redis subscriber and completes the Observable.
+### `ReviewStreamerService` (SSE endpoint)
 
-**Teardown:** On client disconnect (browser closes tab, navigates away), the Observable teardown callback quits the Redis subscriber connection immediately.
+`src/review/review-streamer.service.ts` — `createStream(reviewId, userId, suppliedLastId?)`:
 
----
+1. Loads the review (ownership enforced via `HistoryService.getReview`).
+2. `lastId = suppliedLastId` when it matches the `N-N` stream-id shape (`isStreamId`), else `0-0` (full replay).
+3. Loop: `XREAD` after `lastId`; `blockMs = 15s` while the review is live, `0` once the row is terminal (immediate drain — no needless 15-second wait).
+4. Each entry is forwarded as an SSE frame with `id: <stream-id>` — the client stores it for resume.
+5. After every read the review row is re-loaded; when it reaches a terminal status (`COMPLETE`/`PARTIAL`/`FAILED`/`CANCELLED`) the streamer emits a **reconstructed terminal event** from Postgres (below) and completes the Observable. A streamed `complete`/`error` event also closes the stream.
+6. On an **empty** read it emits `{ type: 'heartbeat' }` — keeps proxies/browsers from killing idle connections. Heartbeats are deliberately **not** persisted to the stream (they would pad the replay log with noise).
+7. Teardown: unsubscribe sets `stopped` and calls `reader.disconnect()`, interrupting the blocking `XREAD` immediately.
 
-## `SseConnection` Interface
+**Postgres is the authority for terminal state.** `reconstructTerminal` builds the final frame from the database, not Redis: `FAILED`/`CANCELLED` → `{ type: 'error', message }`; `COMPLETE`/`PARTIAL` → `{ type: 'complete', review, outcome, … }` with the review parsed through `ReviewDataSchema`. A client that connects even after the 24h stream window expired still receives a correct terminal event.
 
-```typescript
-interface SseConnection {
-  send: (event: ReviewStreamEvent) => void
-  startedAt: number
-  getTrace: () => ReviewStreamEvent[]
-}
-```
+### `ReviewCancellationService` (cancel + deadlines)
 
-Two concrete implementations:
-- `initSse(res)` — writes directly to an Express HTTP response (retained but not used in the current queue-first path)
-- `createRedisEmitter(redis, reviewId)` — routes through Redis (the active path)
+`src/queue/review-cancellation.service.ts`:
+
+- `requestCancellation(reviewId)` (via `DELETE /review/:reviewId` → `ReviewService.cancelReview`) — pipeline `SET review:cancel:<id> 1 EX 600` + `PUBLISH review:cancel:<id> cancel`. The TTL key makes cancellation durable for 10 minutes (a review cancelled before its job starts still aborts); the pub/sub message aborts a running review in milliseconds.
+- `createExecution(reviewId, totalMs)` — builds the `AbortSignal`: checks the TTL key, subscribes the channel on an isolated connection, then **double-checks the key** (closing the check/subscribe race), and starts the review-wide deadline timer (`ReviewDeadlineError` after `totalMs`).
+- `operationDeadline(parent, operation, timeoutMs)` — per-operation deadlines (e.g. 120s for a model call) composed with the parent signal via `AbortSignal.any`.
+- Error taxonomy: `ReviewCancelledError`, `ReviewDeadlineError`, `OperationDeadlineError`; `throwSignalReason` unwraps the abort reason.
+
+- **Retries** — a failed enqueue returns the row to `PENDING` with `availableAt = now + backoff`, delays `[1s, 2s, 4s, 8s, 16s]` — 6 attempts max (`MAX_DISPATCH_ATTEMPTS`).
+- **Exhaustion** — after the final attempt, `failExhausted` transitions the dispatch to `FAILED` and (transactionally) the review to `FAILED` with a public message, then appends a terminal `error` event to the stream so any listening client finishes.
+- **Boot reconciliation** — `reconcileLegacyPending()` runs at startup: recent (< 5 min) `PENDING` reviews missing a dispatch row get one (`skipDuplicates`); stale ones transition to `FAILED` + terminal event. This rescues rows written before the outbox existed or orphaned by a crash between the two writes' era.
 
 ---
 
-## Event Flow Detail
+## System Flow
 
 ```
-ReviewProcessor.process(job)
-  │
-  └─► createRedisEmitter(reviewId) → conn
-  └─► ReviewService.runForQueue(reviewId, type, input, userId, conn)
-          │
-          ├── conn.send({ type: "start" })
-          │      └─► Redis: RPUSH rl:<id> {...}, PUBLISH re:<id> {...}
-          │
-          ├── [pipeline runs...]
-          │
-          ├── conn.send({ type: "thinking", text: "..." })
-          ├── conn.send({ type: "tool_start", ... })
-          ├── conn.send({ type: "tool_done", ... })
-          │
-          └── conn.send({ type: "complete", review: {...} })
-                 └─► Redis: appended to replay list + published
+1. Browser          POST /review/session  { type, input }   (Authorization: Bearer …)
+2. ReviewController → ReviewService.createSession
+                    tx: INSERT Review(PENDING) + ReviewDispatch(PENDING)
+                    → 201 { reviewId }        (+ dispatcher.kick())
 
-ReviewStreamerService (SSE endpoint)
-  │
-  ├── replay: getLog(reviewId) → send all historical events → subscriber.next()
-  │
-  └── subscribe: redisSub.on("message") → subscriber.next()
-                   on "complete" or "error" → subscriber.complete()
+3. Browser          GET /review/:id/stream   (Last-Event-ID when resuming)
+                    ReviewStreamerService: XREAD from 0-0 (or the supplied id)
+                    → replays anything already emitted, then tails live
+
+4. Dispatcher       claims the outbox row (PROCESSING, 30s lease)
+                    → QueueService.enqueue({ reviewId, type, input, userId })
+                    → dispatch DISPATCHED
+
+5. ReviewProcessor  createExecution(5-min deadline) → createRedisEmitter
+                    ReviewService.runForQueue:
+                      start → acquisition → task/cluster plans → thinking/tool events
+                      → cluster_done / synthesis → complete (or error)
+                    every send() → XADD review:events:<id> (MAXLEN ~ 5000, EXPIRE 24h)
+                    finally: flush() → dispose()
+
+6. Streamer         forwards each entry as SSE (id: <stream-id>)
+                    on streamed complete/error → close
+                    when the DB row turns terminal → reconstructed terminal → close
+
+7. Persist          runForQueue persists summary/score/issues/positives/coverage/traceLog
+                    to Postgres before the terminal event is emitted
 ```
 
 ---
 
 ## Redis Key Schema
 
-| Key pattern | Type | Purpose | TTL |
+| Key | Type | Purpose | TTL / bounds |
 |---|---|---|---|
-| `rl:<reviewId>` | List | Ordered SSE event replay log | 1 hour |
-| `re:<reviewId>` | Pub/sub channel | Live event broadcast | Ephemeral |
-| BullMQ internal keys | Various | Job queue management | Managed by BullMQ |
+| `review:events:<reviewId>` | Stream | Ordered review events (`event` field = JSON `ReviewStreamEvent`) | `EXPIRE` 24h, refreshed on every append; `MAXLEN ~ 5000` |
+| `review:cancel:<reviewId>` | String **and** pub/sub channel | Cancellation: TTL key (durable cancel) + channel (live abort) | 600s |
+| `bull:review-jobs:*` | Various | BullMQ queue internals | Managed by BullMQ (completed jobs 1h, failed 3d) |
+
+---
+
+## SSE Protocol (client contract)
+
+- Frames carry `id: <stream-entry-id>`, `event: <event.type>`, and `data: <json>` (the `@Sse` Observable emits `{ id, type, data }` per stream entry).
+- **Resume** — the client sends `Last-Event-ID: <last received id>`; the server validates the `N-N` shape (`isStreamId`) and resumes after it; an absent/invalid value starts at `0-0` (full replay). Client reconnect backoff is 500ms → 1000ms → 2000ms with event-id dedupe (`apps/client/lib/use-review-stream.ts`).
+- **Heartbeats** — `{ type: 'heartbeat' }` frames keep the connection alive during idle 15s blocking reads; the client skips them (no state change) and they are never persisted to the stream.
+- **Terminal guarantee** — exactly one terminal frame (`complete` or `error`) is delivered before the server closes the stream, either streamed from the pipeline or reconstructed from Postgres.
+
+---
+
+## Health & Operations
+
+`GET /health` (unauthenticated) reports dependency status with a **30-second in-memory cache** (`health.controller.ts`):
+
+| Field | Check |
+|---|---|
+| `status` | `ok` or `degraded` (degraded when any dependency is not `valid`) |
+| `database` | `SELECT 1` via Prisma |
+| `databaseSchema` | migration-presence probe (`ReviewDispatch` table + `Review.coverage` column) |
+| `redis` | `PING` |
+| `redisStreams` | `COMMAND INFO XADD` — Redis Streams support |
 
 ---
 
@@ -163,11 +191,14 @@ ReviewStreamerService (SSE endpoint)
 
 | Component | Owns |
 |---|---|
-| `QueueService` | Job enqueueing, job options |
-| `ReviewProcessor` | Job lifecycle, BullMQ worker binding, failure recovery |
-| `RedisService` | Redis connections, atomic emit, replay log |
-| `createRedisEmitter` | `SseConnection` adapter for the queue path |
-| `ReviewStreamerService` | Client-facing SSE Observable, replay + live subscription |
+| `ReviewRepository` | Atomic Review + ReviewDispatch write |
+| `ReviewDispatcherService` | Outbox polling, claiming, leases, backoff, exhaustion, boot reconciliation |
+| `QueueService` | BullMQ enqueue/remove, job options |
+| `ReviewProcessor` | Worker lifecycle, deadline wiring, flush-before-complete, `onFailed` rescue |
+| `RedisService` | Connections, `XADD`/`XREAD` primitives, stream TTL/caps |
+| `createRedisEmitter` | `SseConnection`-shaped, serialized stream appends |
+| `ReviewStreamerService` | SSE Observable, replay + live tail, heartbeats, terminal reconstruction |
+| `ReviewCancellationService` | Cancel key/channel, execution `AbortSignal`, deadlines |
 
 ---
 
@@ -175,14 +206,19 @@ ReviewStreamerService (SSE endpoint)
 
 | Scenario | Behaviour |
 |---|---|
-| Client connects after review completes | Replay list replayed synchronously; DB status checked; `complete` sent; stream closed |
-| Client connects before pipeline starts | Replay list is empty; subscribes live; receives all events as they arrive |
-| Redis goes down mid-review | `emitEvent` calls fail silently (`.catch(console.error)`); DB save still attempted at pipeline end |
-| Node process restarts mid-job | `@OnWorkerEvent("failed")` fires; Postgres marked FAILED; error event emitted to Redis |
-| Two clients for the same review | Both subscribe to `re:<reviewId>`; both receive every event independently |
-| SSE client disconnects | Observable teardown quits the Redis subscriber; no memory leak |
-| Late replay with empty list but COMPLETE DB status | `ReviewStreamerService` synthesises `{ type: 'complete', review: { id } }` so the client transitions to the completed state without hanging |
-| Late replay with empty list but FAILED DB status | `ReviewStreamerService` synthesises `{ type: 'error', message: review.summary }` so the client shows an error instead of hanging |
+| Client connects after the review completed | Stream drains with `blockMs = 0`; terminal event **reconstructed from Postgres** — works even after the 24h stream TTL |
+| Client connects before the job starts | Stream is empty; blocking reads hold the connection; heartbeats every 15s until events arrive |
+| Browser drops mid-review | Next connect sends `Last-Event-ID`; replay resumes after that id (client dedupes by id) |
+| Redis down mid-review | Emitter captures the append failure; `flush()` rethrows before job completion → job fails → `onFailed` forces `FAILED` + best-effort terminal event |
+| Node process restarts mid-job | BullMQ `failed` event → review forced `FAILED` + terminal error event appended |
+| Dispatch keeps failing (e.g. Redis down at enqueue) | Backoff 1s→16s across 6 attempts → review `FAILED` + terminal error event |
+| Cancel while queued | `removeJob` drops the pending BullMQ job; review → `CANCELLED`; terminal event emitted |
+| Cancel mid-run | `review:cancel` key+channel → `AbortSignal` aborts the model call; terminal event emitted; DB marked `CANCELLED` |
+| Review exceeds 5 minutes | Deadline abort → `ReviewDeadlineError` → review `FAILED` with a public message |
+| Cancel arrives between the existence check and the subscribe | Closed by the post-subscribe double-check of the TTL key |
+| Multiple SSE clients for one review | Each gets an independent `XREAD` connection via `createConnection()` — no shared-state coupling |
+| SSE client disconnects | Teardown sets `stopped` + `reader.disconnect()` interrupts the blocking read — no leaked connections |
+| Server restarts with legacy PENDING rows (pre-outbox) | Boot reconciliation creates dispatch rows for recent ones, fails stale ones with a terminal event |
 
 ---
 
@@ -190,11 +226,21 @@ ReviewStreamerService (SSE endpoint)
 
 | File | Role |
 |---|---|
-| [`apps/server/src/queue/queue.service.ts`](../apps/server/src/queue/queue.service.ts) | BullMQ enqueue |
+| [`apps/server/src/queue/queue.service.ts`](../apps/server/src/queue/queue.service.ts) | BullMQ enqueue/remove |
 | [`apps/server/src/queue/queue.module.ts`](../apps/server/src/queue/queue.module.ts) | BullMQ + Redis module wiring |
-| [`apps/server/src/queue/redis.service.ts`](../apps/server/src/queue/redis.service.ts) | ioredis connections, `emitEvent`, `getLog` |
-| [`apps/server/src/queue/review.emitter.ts`](../apps/server/src/queue/review.emitter.ts) | Redis-backed `SseConnection` factory |
+| [`apps/server/src/queue/redis.service.ts`](../apps/server/src/queue/redis.service.ts) | ioredis connections, `emitEvent` (`XADD`), `readEvents` (`XREAD`) |
+| [`apps/server/src/queue/review.emitter.ts`](../apps/server/src/queue/review.emitter.ts) | Stream-backed `SseConnection` factory |
+| [`apps/server/src/queue/review-cancellation.service.ts`](../apps/server/src/queue/review-cancellation.service.ts) | Cancellation + deadlines |
+| [`apps/server/src/review/review-dispatcher.service.ts`](../apps/server/src/review/review-dispatcher.service.ts) | Outbox dispatcher |
 | [`apps/server/src/review/review.processor.ts`](../apps/server/src/review/review.processor.ts) | BullMQ worker |
-| [`apps/server/src/review/review-streamer.service.ts`](../apps/server/src/review/review-streamer.service.ts) | Client SSE Observable |
-| [`apps/server/src/review/review.sse.ts`](../apps/server/src/review/review.sse.ts) | `SseConnection` interface + `initSse` |
-| [`apps/server/src/review/review.controller.ts`](../apps/server/src/review/review.controller.ts) | `POST /review/session`, `GET /review/:id/stream` |
+| [`apps/server/src/review/review-streamer.service.ts`](../apps/server/src/review/review-streamer.service.ts) | Client SSE Observable (replay + tail + terminal reconstruction) |
+| [`apps/server/src/review/review.sse.ts`](../apps/server/src/review/review.sse.ts) | `SseConnection` interface |
+| [`apps/server/src/review/review.controller.ts`](../apps/server/src/review/review.controller.ts) | `POST /review/session`, `GET /review/:id/stream`, `DELETE /review/:id` |
+| [`apps/server/src/health.controller.ts`](../apps/server/src/health.controller.ts) | `/health` dependency probes |
+| [`apps/client/lib/use-review-stream.ts`](../apps/client/lib/use-review-stream.ts) | Client SSE consumer (resume, backoff, dedupe, heartbeat skip) |
+| [`apps/client/lib/sse.ts`](../apps/client/lib/sse.ts) | SSE frame parser (multiline `data:`, `id:` capture, CRLF, comments) |
+
+| `githubToken` | server PAT validity (`GithubService.getTokenHealth()`) |
+
+Each dependency reads `valid` / `invalid` / `unchecked`. The client also polls `/health` for its server-wakeup UX (Render free-tier cold starts).
+

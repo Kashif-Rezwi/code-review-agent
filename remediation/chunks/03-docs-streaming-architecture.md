@@ -1,6 +1,6 @@
 # Chunk 03 — Docs: streaming & architecture rewrite
 
-> **Status:** pending · **Findings:** A-1…A-9, A-10, B-1, B-2, B-3, B-4, B-6, A-37 (16) · **Severity mix:** 🔴6 🟠8 🟡2
+> **Status:** done (2026-08-12) · **Findings:** A-1…A-9, A-10, B-1, B-2, B-3, B-4, B-6, A-37 (16) · **Severity mix:** 🔴6 🟠8 🟡2
 > **Depends on:** chunks 01, 02, 07, 08 (docs must describe the fixed code) · **Gated by:** nothing
 > **Files touched:** `docs/queue-streaming.md` (full rewrite), `docs/architecture.md`, `README.md` (diagram + tech-stack + module list), `remediation/PROGRESS.md`. **Shares `README.md` with chunk 06 — never run 03 and 06 concurrently.**
 
@@ -52,10 +52,10 @@
 
 ## 5. Tasks
 
-1. [ ] **Rewrite `docs/queue-streaming.md`** around the real design: session creation → outbox row → dispatcher poll/claim/lease/backoff/reconcile/exhaustion → BullMQ enqueue (jobId = reviewId, attempts 1) → processor + 5-min execution → Redis Streams emission (`XADD`/`MAXLEN ~5000`/24h TTL) → streamer `XREAD` loop → SSE. Include: Redis key table (`review:events:<id>` stream 24h; `review:cancel:<id>` TTL 600s + channel), heartbeats (not persisted, why), `Last-Event-ID` resume (server `isStreamId` validation + client backoff `[500,1000,2000]` + id dedupe), terminal-state reconstruction from Postgres (authoritative over Redis), cancellation flow (TTL key + pub/sub + AbortSignal + race-closing double-check), and the edge-case table (Redis down mid-review, browser reconnect, cancel-during-run, worker crash → `onFailed` rescue, dispatch exhaustion). **Acceptance:** every mechanism named in this brief appears in the doc; zero references to `rl:`/`re:`/`RPUSH`/`PUBLISH`/`createSubscriber`/`getLog` remain.
-2. [ ] **Fix `docs/architecture.md`** data-stores table (A-10) and any streaming-sequence description to match; note the outbox + cancellation as first-class components.
-3. [ ] **Fix `README.md`** (A-37): tech-stack Redis line ("BullMQ jobs + Redis Streams event log + cancellation channel"), the ASCII diagram ("Redis pub/sub │ replay list" → Streams), the streamer caption, and the github-module description ("diff, files, file content" → snapshot acquisition; the file-content API is gone). **Acceptance:** grep README for `pub/sub`/`replay list` → no stale hits (the cancellation channel mention is fine).
-4. [ ] **B-6:** document `/health` dependency fields + 30s cache (fits naturally in the new queue-streaming.md ops section or architecture.md).
+1. [x] **Rewrite `docs/queue-streaming.md`** around the real design: session creation → outbox row → dispatcher poll/claim/lease/backoff/reconcile/exhaustion → BullMQ enqueue (jobId = reviewId, attempts 1) → processor + 5-min execution → Redis Streams emission (`XADD`/`MAXLEN ~5000`/24h TTL) → streamer `XREAD` loop → SSE. Include: Redis key table (`review:events:<id>` stream 24h; `review:cancel:<id>` TTL 600s + channel), heartbeats (not persisted, why), `Last-Event-ID` resume (server `isStreamId` validation + client backoff `[500,1000,2000]` + id dedupe), terminal-state reconstruction from Postgres (authoritative over Redis), cancellation flow (TTL key + pub/sub + AbortSignal + race-closing double-check), and the edge-case table (Redis down mid-review, browser reconnect, cancel-during-run, worker crash → `onFailed` rescue, dispatch exhaustion). **Acceptance:** every mechanism named in this brief appears in the doc; zero references to `rl:`/`re:`/`RPUSH`/`PUBLISH`/`createSubscriber`/`getLog` remain.
+2. [x] **Fix `docs/architecture.md`** data-stores table (A-10) and any streaming-sequence description to match; note the outbox + cancellation as first-class components.
+3. [x] **Fix `README.md`** (A-37): tech-stack Redis line ("BullMQ jobs + Redis Streams event log + cancellation channel"), the ASCII diagram ("Redis pub/sub │ replay list" → Streams), the streamer caption, and the github-module description ("diff, files, file content" → snapshot acquisition; the file-content API is gone). **Acceptance:** grep README for `pub/sub`/`replay list` → no stale hits (the cancellation channel mention is fine).
+4. [x] **B-6:** document `/health` dependency fields + 30s cache (fits naturally in the new queue-streaming.md ops section or architecture.md).
 
 ## 6. Verification
 
@@ -73,8 +73,8 @@ grep -n 'review:events\|Last-Event-ID\|heartbeat\|ReviewDispatch\|MAXLEN\|86400\
 
 ## 8. Done checklist
 
-- [ ] queue-streaming.md rewritten (Streams + outbox + cancellation + resume + heartbeats)
-- [ ] architecture.md data-stores + components fixed
-- [ ] README diagram/stack/module list fixed
-- [ ] `/health` documented
-- [ ] Grep checks pass; `PROGRESS.md` updated (16 findings)
+- [x] queue-streaming.md rewritten (Streams + outbox + cancellation + resume + heartbeats)
+- [x] architecture.md data-stores + components fixed
+- [x] README diagram/stack/module list fixed
+- [x] `/health` documented
+- [x] Grep checks pass; `PROGRESS.md` updated (16 findings)
