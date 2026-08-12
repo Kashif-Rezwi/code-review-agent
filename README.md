@@ -201,7 +201,7 @@ The frontend runs at `http://localhost:3000` and the API at `http://localhost:40
 
 ## Running with Docker Compose
 
-Docker Compose runs Redis, the NestJS server, and the Next.js client together. Make sure both `.env` files are filled in first.
+Docker Compose runs Redis, the NestJS server, and the Next.js client together. Make sure both `.env` files are filled in first. Compose intentionally has no Postgres service — the API uses your external PostgreSQL (with pgvector, e.g. Neon) via `DATABASE_URL`/`DIRECT_URL`; run `cd apps/server && npx prisma migrate deploy` against it before starting the stack.
 
 ```bash
 # Build and start all services

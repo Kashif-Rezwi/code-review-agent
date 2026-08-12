@@ -32,6 +32,8 @@ model Document {
   name      String
   chunks    DocumentChunk[]
   createdAt DateTime        @default(now())
+
+  @@index([userId])
 }
 
 model DocumentChunk {
@@ -41,6 +43,8 @@ model DocumentChunk {
   content    String
   embedding  Unsupported("vector(1536)")?
   metadata   Json?
+
+  @@index([documentId])
 }
 
 // ── Memory: Review History ───────────────────────────────────────────────────
@@ -82,6 +86,8 @@ model Review {
   conversations    Conversation[]
   dispatch         ReviewDispatch?
   createdAt        DateTime       @default(now())
+
+  @@index([userId])
 }
 
 model ReviewDispatch {
@@ -110,6 +116,8 @@ model Issue {
   location       String
   description    String  @db.Text
   recommendation String  @db.Text
+
+  @@index([reviewId])
 }
 
 model Conversation {
@@ -119,4 +127,6 @@ model Conversation {
   role      String   // "user" | "assistant"
   content   String   @db.Text
   createdAt DateTime @default(now())
+
+  @@index([reviewId])
 }

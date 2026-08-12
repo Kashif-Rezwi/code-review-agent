@@ -8,6 +8,7 @@ services:
   - type: web
     name: code-review-agent-api
     env: node
+    # Deploys happen only from main — pushes to develop do NOT auto-deploy.
     branch: main
     rootDir: ""
     buildFilter:
@@ -31,6 +32,12 @@ services:
       - key: OPENAI_API_KEY
         sync: false
       - key: GITHUB_TOKEN
+        sync: false
+      # Neon PostgreSQL (external) — set both in the Render dashboard.
+      # The API crash-loops at boot without a reachable DATABASE_URL.
+      - key: DATABASE_URL
+        sync: false
+      - key: DIRECT_URL
         sync: false
       - key: REDIS_URL
         fromService:

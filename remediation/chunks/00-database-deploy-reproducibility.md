@@ -1,6 +1,6 @@
 # Chunk 00 — Database & deploy reproducibility
 
-> **Status:** pending · **Findings:** M-1, M-2, M-7, E-3, M-9 (5) · **Severity mix:** 🔴1 🟠1 🟡3
+> **Status:** done (2026-08-12) · **Findings:** M-1, M-2, M-7, E-3, M-9 (5) · **Severity mix:** 🔴1 🟠1 🟡3
 > **Depends on:** none · **Gated by:** **Q1** (baseline-reconciliation strategy for the live Neon DB — get the human's answer before touching migrations)
 > **Files touched:** `apps/server/prisma/migrations/**`, `apps/server/prisma/schema.prisma` (indexes only), `render.yaml`, `docker-compose.yml`, `README.md` (one note), `docs/deployment.md` (one note), `remediation/PROGRESS.md`
 
@@ -37,13 +37,13 @@ Make the project provisionable from scratch. Today `prisma migrate deploy` **fai
 
 ## 5. Tasks
 
-1. [ ] **Q1 decision — record it.** Ask the human: reconcile the live Neon DB via (A) **prepend baseline** (new earlier-timestamp migration creating the missing tables/enums as they existed pre-`20260417`; existing envs run `prisma migrate resolve --applied <baseline>` once) or (B) **squash** (delete all 4 migrations, one baseline from empty→current schema; existing envs resolve/marked). Recommended: **A** — preserves history, standard Prisma baselining. Record the choice here: **DECISION: ____**
-2. [ ] **Create the baseline migration** per the chosen option. For A: DDL for `User`, `Review` (pre-`coverage`; enum `ReviewStatus` with only `PENDING`/`COMPLETE`/`FAILED`), `Issue`, `Conversation`, `ReviewType` — via `prisma migrate diff --from-empty --to-schema-datamodel` against a reconstructed intermediate schema, or hand-written DDL. Timestamp must precede `20260312092706` (e.g. `20260301000000_baseline_core`). **Acceptance:** `migrate deploy` on a **completely empty** Postgres (docker `pgvector/pgvector:pg16`) runs all 5 migrations to completion, and `migrate diff --from-migrations --to-schema-datamodel` shows no diff.
-3. [ ] **Reconcile existing databases.** Execute/document `prisma migrate resolve --applied 20260301000000_baseline_core` on the live Neon DB. **Acceptance:** `prisma migrate status` on the live DB = up to date, no failed/pending entries.
-4. [ ] **M-7 indexes — separate NEW migration** (must also reach existing DBs, so it cannot live inside the baseline): add `@@index([userId])` to `Review` and `Document`; add indexes on `Issue.reviewId`, `Conversation.reviewId`, `DocumentChunk.documentId`; generate via `migrate dev`. **Acceptance:** applies cleanly on the reconciled live DB.
-5. [ ] **M-2: `render.yaml`** — add `DATABASE_URL` and `DIRECT_URL` as `sync: false` env vars. **Acceptance:** both keys present in the blueprint.
-6. [ ] **E-3: branch note** — switch `branch:` to the human's intended deploy branch, or keep `main` and add a code comment + one line in `docs/deployment.md` stating deploys happen only from `main`.
-7. [ ] **M-9 compose note** — add a comment in `docker-compose.yml` + one line in `README.md` §Docker Compose: compose expects an external Postgres (`DATABASE_URL` in `apps/server/.env`); run migrations manually (`npx prisma migrate deploy`). Do **not** add a Postgres service (pgvector requirement makes it heavier than the fix is worth — note that trade-off in the comment).
+1. [x] **Q1 decision — record it.** Ask the human: reconcile the live Neon DB via (A) **prepend baseline** (new earlier-timestamp migration creating the missing tables/enums as they existed pre-`20260417`; existing envs run `prisma migrate resolve --applied <baseline>` once) or (B) **squash** (delete all 4 migrations, one baseline from empty→current schema; existing envs resolve/marked). Recommended: **A** — preserves history, standard Prisma baselining. Record the choice here: **DECISION: A (prepend baseline)** — chosen by repo owner on 2026-08-12, including running the live-Neon reconcile (`migrate resolve` + `migrate deploy`) from this machine.
+2. [x] **Create the baseline migration** per the chosen option. For A: DDL for `User`, `Review` (pre-`coverage`; enum `ReviewStatus` with only `PENDING`/`COMPLETE`/`FAILED`), `Issue`, `Conversation`, `ReviewType` — via `prisma migrate diff --from-empty --to-schema-datamodel` against a reconstructed intermediate schema, or hand-written DDL. Timestamp must precede `20260312092706` (e.g. `20260301000000_baseline_core`). **Acceptance:** `migrate deploy` on a **completely empty** Postgres (docker `pgvector/pgvector:pg16`) runs all 5 migrations to completion, and `migrate diff --from-migrations --to-schema-datamodel` shows no diff.
+3. [x] **Reconcile existing databases.** Execute/document `prisma migrate resolve --applied 20260301000000_baseline_core` on the live Neon DB. **Acceptance:** `prisma migrate status` on the live DB = up to date, no failed/pending entries.
+4. [x] **M-7 indexes — separate NEW migration** (must also reach existing DBs, so it cannot live inside the baseline): add `@@index([userId])` to `Review` and `Document`; add indexes on `Issue.reviewId`, `Conversation.reviewId`, `DocumentChunk.documentId`; generate via `migrate dev`. **Acceptance:** applies cleanly on the reconciled live DB.
+5. [x] **M-2: `render.yaml`** — add `DATABASE_URL` and `DIRECT_URL` as `sync: false` env vars. **Acceptance:** both keys present in the blueprint.
+6. [x] **E-3: branch note** — switch `branch:` to the human's intended deploy branch, or keep `main` and add a code comment + one line in `docs/deployment.md` stating deploys happen only from `main`.
+7. [x] **M-9 compose note** — add a comment in `docker-compose.yml` + one line in `README.md` §Docker Compose: compose expects an external Postgres (`DATABASE_URL` in `apps/server/.env`); run migrations manually (`npx prisma migrate deploy`). Do **not** add a Postgres service (pgvector requirement makes it heavier than the fix is worth — note that trade-off in the comment).
 
 ## 6. Verification
 
@@ -68,10 +68,10 @@ pnpm build:packages && pnpm type-check && pnpm --filter server test   # still gr
 
 ## 8. Done checklist
 
-- [ ] Q1 decision recorded in this file
-- [ ] Fresh-DB `migrate deploy` passes; schema diff empty
-- [ ] Live DB reconciled; `migrate status` clean
-- [ ] Index migration created + applied
-- [ ] `render.yaml` has `DATABASE_URL`/`DIRECT_URL`; branch note resolved
-- [ ] Compose/README note added
-- [ ] `PROGRESS.md` updated (5 findings)
+- [x] Q1 decision recorded in this file
+- [x] Fresh-DB `migrate deploy` passes; schema diff empty
+- [x] Live DB reconciled; `migrate status` clean
+- [x] Index migration created + applied
+- [x] `render.yaml` has `DATABASE_URL`/`DIRECT_URL`; branch note resolved
+- [x] Compose/README note added
+- [x] `PROGRESS.md` updated (5 findings)

@@ -65,6 +65,8 @@ A managed Redis instance. The `REDIS_URL` environment variable is automatically 
 
 **Port:** `10000` (Render's default for web services).
 
+**Deploy branch:** the blueprint pins `branch: main`, so only pushes to `main` auto-deploy the API. Day-to-day development happens on `develop` and never triggers a deploy — merge `develop` → `main` to ship.
+
 ### Required Environment Variables (Render Dashboard)
 
 | Variable | Notes |
