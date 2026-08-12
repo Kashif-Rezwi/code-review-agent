@@ -92,7 +92,8 @@ export class RagRepository {
         })
     }
 
-    deleteDocument(id: string, userId: string) {
-        return this.prisma.document.delete({ where: { id, userId } })
+    async deleteDocument(id: string, userId: string): Promise<boolean> {
+        const { count } = await this.prisma.document.deleteMany({ where: { id, userId } })
+        return count > 0
     }
 }

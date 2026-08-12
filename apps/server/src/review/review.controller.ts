@@ -5,6 +5,7 @@ import { ReviewService } from './review.service'
 import { ReviewStreamerService } from './review-streamer.service'
 import { AuthGuard } from '../auth/auth.guard'
 import { HistoryService } from '../history/history.service'
+import { CreateSessionDto } from './dto/create-session.dto'
 
 @UseGuards(AuthGuard)
 @Controller('review')
@@ -17,7 +18,7 @@ export class ReviewController {
 
     @Post('session')
     @HttpCode(201)
-    async createSession(@Body() dto: { type: 'CODE' | 'PR'; input: string }, @Req() req: Request) {
+    async createSession(@Body() dto: CreateSessionDto, @Req() req: Request) {
         const review = await this.reviewService.createSession(dto.type, dto.input, req.user!.userId)
         return { reviewId: review.id }
     }

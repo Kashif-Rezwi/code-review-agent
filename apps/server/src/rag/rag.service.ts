@@ -1,4 +1,4 @@
-import { Injectable, Logger, BadRequestException } from '@nestjs/common'
+import { Injectable, Logger, BadRequestException, NotFoundException } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { embed, embedMany } from 'ai'
 import { chunkText } from '@cra/ai'
@@ -86,7 +86,8 @@ export class RagService {
         return this.ragRepository.listDocuments(userId)
     }
 
-    deleteDocument(id: string, userId: string) {
-        return this.ragRepository.deleteDocument(id, userId)
+    async deleteDocument(id: string, userId: string): Promise<void> {
+        const deleted = await this.ragRepository.deleteDocument(id, userId)
+        if (!deleted) throw new NotFoundException(`Document ${id} not found.`)
     }
 }

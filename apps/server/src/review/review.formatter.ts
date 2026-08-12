@@ -1,3 +1,5 @@
+import type { LintResult } from '../linter/linter.service'
+
 // ── Arg parsing helpers ───────────────────────────────────────────────────────
 // The AI SDK may deliver args as a parsed object, a JSON string, or undefined
 // depending on the SDK version and callback (onChunk vs onStepFinish).
@@ -45,21 +47,24 @@ export function toolStartDetail(_toolName: string, _args: Record<string, unknown
 export function toolDoneLabel(
     toolName: string,
     args: Record<string, unknown>,
-    result: unknown,
+    _result: unknown,
+    lintOutcomes?: Map<string, LintResult>,
 ): string {
+    void _result
     switch (toolName) {
         case 'runLinter': {
             const name = (args.filename as string | undefined)?.split('/').pop()
             const lang = (args.language as string | undefined) ?? 'unknown'
             const chars = typeof args.code === 'string' ? args.code.length : 0
-            const r = result as { errors?: unknown[]; warnings?: unknown[] } | null | undefined
-            const errs = r?.errors?.length ?? 0
-            const warns = r?.warnings?.length ?? 0
-            const outcome = errs === 0 && warns === 0
-                ? 'clean'
-                : `${errs + warns} issue${errs + warns !== 1 ? 's' : ''}`
+            const outcome = typeof args.code === 'string' ? lintOutcomes?.get(args.code) : undefined
+            const total = (outcome?.errors ?? 0) + (outcome?.warnings ?? 0)
+            const status = outcome?.parseError
+                ? 'could not parse'
+                : !outcome || total === 0
+                  ? 'clean'
+                  : `${total} issue${total !== 1 ? 's' : ''}`
             const file = name ?? lang
-            return `${file} — ${outcome} · ${chars} chars`
+            return `${file} — ${status} · ${chars} chars`
         }
         default: return `${toolName} complete`
     }

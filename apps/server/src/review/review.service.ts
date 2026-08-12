@@ -11,7 +11,7 @@ import {
 import type { ReviewData, PRFile, ClusterPlan } from '@cra/ai'
 import type { ReviewCoverage, ReviewStreamEvent } from '@cra/types'
 import { GithubService } from '../github/github.service'
-import { LinterService } from '../linter/linter.service'
+import { LinterService, type LintResult } from '../linter/linter.service'
 import { RagService } from '../rag/rag.service'
 import { ReviewRepository } from './review.repository'
 import { QueueService } from '../queue/queue.service'
@@ -338,7 +338,10 @@ export class ReviewService {
 
         const pending = new Map<string, { toolName: string; args: Record<string, unknown>; startedAt: number }>()
         const thinking = new ThinkingStream(_send)
-        const { onChunk, onStepFinish, getToolCallCount } = this.buildStreamCallbacks(_send, pending, thinking)
+        // Structured lint outcomes keyed by the exact code string: the model receives
+        // only the plain-text `output`, while the SSE labeler reads real counts from here.
+        const lintOutcomes = new Map<string, LintResult>()
+        const { onChunk, onStepFinish, getToolCallCount } = this.buildStreamCallbacks(_send, pending, thinking, lintOutcomes)
 
         try {
             const callDeadline = operationDeadline(signal, 'Pasted-code review', 120_000)
@@ -349,7 +352,7 @@ export class ReviewService {
                 // PR path: NO tools — context is fully pre-built from diffs. Giving the
                 // model tools in this path causes it to run runLinter on every file.
                 // Code path: linter only.
-                tools: this.buildCodeAgentTools(),
+                tools: this.buildCodeAgentTools(lintOutcomes),
                 temperature: 0.2,
                 abortSignal: callDeadline.signal,
                 maxOutputTokens: 8_192,
@@ -731,6 +734,7 @@ export class ReviewService {
         _send: (event: ReviewStreamEvent) => void,
         pending: Map<string, { toolName: string; args: Record<string, unknown>; startedAt: number }>,
         thinking: ThinkingStream,
+        lintOutcomes?: Map<string, LintResult>,
     ) {
         let toolCallCount = 0
 
@@ -785,7 +789,7 @@ export class ReviewService {
                     _send({
                         type: 'tool_done' as const,
                         callId: toolCallId,
-                        label: toolDoneLabel(toolName, args, output),
+                        label: toolDoneLabel(toolName, args, output, lintOutcomes),
                         detail: toolDoneDetail(toolName, args, output),
                         durationMs: Date.now() - startedAt,
                     })
@@ -905,9 +909,12 @@ export class ReviewService {
     }
 
     /** Pasted-code reviews keep the linter tool; PR acquisition is orchestrated before any model call. */
-    private buildCodeAgentTools(): Record<string, unknown> {
+    private buildCodeAgentTools(lintOutcomes: Map<string, LintResult>): Record<string, unknown> {
         return {
-            runLinter: createLinterRuntimeTool(({ code, language }) => this.linterService.lint(code, language)),
+            runLinter: createLinterRuntimeTool(
+                ({ code, language }) => this.linterService.lint(code, language),
+                lintOutcomes,
+            ),
         }
     }
 

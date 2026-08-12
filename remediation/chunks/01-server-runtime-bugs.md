@@ -1,6 +1,6 @@
 # Chunk 01 — Server runtime bugs
 
-> **Status:** pending · **Findings:** S-1, S-3, S-7, S-8 (4) · **Severity mix:** 🟠2 🟡2
+> **Status:** done (2026-08-12) · **Findings:** S-1, S-3, S-7, S-8 (4) · **Severity mix:** 🟠2 🟡2
 > **Depends on:** none · **Gated by:** nothing — executable now (recommended first code chunk)
 > **Files touched:** `apps/server/src/review/review.controller.ts`, `apps/server/src/review/dto/` (new `create-session.dto.ts`; delete `create-review.dto.ts`, `create-pr-review.dto.ts`), `apps/server/src/linter/linter.service.ts`, `apps/server/src/ai/ai-runtime.adapter.ts`, `apps/server/src/review/review.formatter.ts`, `apps/server/src/rag/rag.repository.ts`, `apps/server/src/rag/rag.service.ts`, `apps/server/src/main.ts`, + specs
 
@@ -37,12 +37,12 @@ Fix the four confirmed server runtime bugs. Two are user-facing: an invalid revi
 
 ## 5. Tasks
 
-1. [ ] **S-1 — real DTO.** Create `dto/create-session.dto.ts`: `type` with `@IsIn(['CODE','PR'])`; `input` with `@IsString() @IsNotEmpty() @MaxLength(100_000)` (aligned with Express's default body limit; PR URLs and pastes both fit). Use it in `createSession`. Delete the two dead DTO files. **Acceptance:** `POST /review/session {"type":"FOO","input":"x"}` → **400** with a clear message; missing `input` → 400; valid payload still creates a session.
-2. [ ] **S-1 test.** Add a spec asserting invalid `type` is rejected before the repository is called (mock repo). **Acceptance:** suite stays green with the new spec.
-3. [ ] **S-3 — structured linter result.** Change `LinterService.lint` to return `{ output: string; errors: number; warnings: number; parseError: boolean }` (`output` = the current strings, **wording unchanged** — the model surface stays identical; parse-failure fallback sets `parseError: true`, counts 0). Update the `ai-runtime.adapter.ts` execute type; in `review.service.ts` pass `result.output` onward as the tool result so the model still receives plain text. Update `toolDoneLabel` to use the real counts: "`N issues`" when `errors+warnings > 0`; "clean" only when 0 and not `parseError`; "could not parse" when `parseError`. **Acceptance:** code with violations renders "`<file>` — N issues · M chars"; clean code renders "clean".
-4. [ ] **S-3 tests.** Specs for `LinterService` counts (clean / violations / unparsable input) and `toolDoneLabel` outcomes.
-5. [ ] **S-8 — 404 semantics.** `deleteDocument` → `deleteMany({ where: { id, userId } })`; `RagService` throws `NotFoundException` when `count === 0`. **Acceptance:** deleting a missing/foreign document → 404, not 500; happy path unchanged.
-6. [ ] **S-7 — honest port log.** `const port = process.env.PORT ?? 4000; await app.listen(port); console.log(\`Server running on port ${port}\`)`.
+1. [x] **S-1 — real DTO.** Create `dto/create-session.dto.ts`: `type` with `@IsIn(['CODE','PR'])`; `input` with `@IsString() @IsNotEmpty() @MaxLength(100_000)` (aligned with Express's default body limit; PR URLs and pastes both fit). Use it in `createSession`. Delete the two dead DTO files. **Acceptance:** `POST /review/session {"type":"FOO","input":"x"}` → **400** with a clear message; missing `input` → 400; valid payload still creates a session.
+2. [x] **S-1 test.** Add a spec asserting invalid `type` is rejected before the repository is called (mock repo). **Acceptance:** suite stays green with the new spec.
+3. [x] **S-3 — structured linter result.** Change `LinterService.lint` to return `{ output: string; errors: number; warnings: number; parseError: boolean }` (`output` = the current strings, **wording unchanged** — the model surface stays identical; parse-failure fallback sets `parseError: true`, counts 0). Update the `ai-runtime.adapter.ts` execute type; in `review.service.ts` pass `result.output` onward as the tool result so the model still receives plain text. Update `toolDoneLabel` to use the real counts: "`N issues`" when `errors+warnings > 0`; "clean" only when 0 and not `parseError`; "could not parse" when `parseError`. **Acceptance:** code with violations renders "`<file>` — N issues · M chars"; clean code renders "clean".
+4. [x] **S-3 tests.** Specs for `LinterService` counts (clean / violations / unparsable input) and `toolDoneLabel` outcomes.
+5. [x] **S-8 — 404 semantics.** `deleteDocument` → `deleteMany({ where: { id, userId } })`; `RagService` throws `NotFoundException` when `count === 0`. **Acceptance:** deleting a missing/foreign document → 404, not 500; happy path unchanged.
+6. [x] **S-7 — honest port log.** `const port = process.env.PORT ?? 4000; await app.listen(port); console.log(\`Server running on port ${port}\`)`.
 
 ## 6. Verification
 
@@ -64,8 +64,14 @@ cd apps/server && npx eslint "{src,apps,libs,test}/**/*.ts" # exit 0
 
 ## 8. Done checklist
 
-- [ ] 400 (not 500) on invalid session payload; dead DTOs deleted
-- [ ] Linter label reflects the real ESLint outcome
-- [ ] Delete-missing-document → 404
-- [ ] Port log uses actual `PORT`
-- [ ] Tests + type-check + lint green; `PROGRESS.md` updated (4 findings)
+- [x] 400 (not 500) on invalid session payload; dead DTOs deleted
+- [x] Linter label reflects the real ESLint outcome
+- [x] Delete-missing-document → 404
+- [x] Port log uses actual `PORT`
+- [x] Tests + type-check + lint green; `PROGRESS.md` updated (4 findings)
+
+## Outcome notes (2026-08-12)
+
+- **Discovery folded into S-3:** the linter was *fully* dead — `linter.verify()` was passed an eslintrc-style config (`parserOptions` top-level), which ESLint 9's flat-config `Linter` rejects on every call, so the catch fallback (`Linter could not parse…`) was the only output ever produced. The minimal config-shape fix (`languageOptions.{ecmaVersion, sourceType, parserOptions.ecmaFeatures}`) was required for S-3's acceptance ("violations render N issues"). Rule set, 20-message cap, and model-facing wording unchanged. Recorded in PROGRESS.md "Discovered during remediation".
+- **S-3 contract (as anticipated by chunk 04):** `LinterService.lint` returns `LintResult { output, errors, warnings, parseError }`; `createLinterRuntimeTool(execute, outcomes?)` unwraps `output` for the model and stashes the structured outcome keyed by the exact code string; `toolDoneLabel` reads real counts from that map. Fatal parser messages (e.g. TS-only syntax) count as `parseError`, never as violations.
+- New specs: `linter.service.spec.ts`, `review.formatter.spec.ts`, `review.controller.spec.ts` (supertest through the real ValidationPipe), `rag.service.spec.ts`, `rag.repository.spec.ts` — 17 suites / 65 tests total.
