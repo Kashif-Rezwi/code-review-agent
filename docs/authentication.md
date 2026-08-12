@@ -43,12 +43,14 @@ The token is then forwarded to the backend on every fetch via an `Authorization:
 
 `apps/server/src/auth/auth.guard.ts` is a NestJS guard applied globally to the `ReviewController`, `HistoryController`, and `RagController`. It:
 
-1. Extracts the `Authorization: Bearer <token>` header from the incoming request.
+1. Extracts the token from the `Authorization: Bearer <token>` header. A `?token=<github_token>` query parameter is also accepted as a **deprecated** fallback — every use logs a `Logger.warn` deprecation warning.
 2. Calls `AuthService.resolve(token)`.
 3. Attaches the resolved `{ userId, login, name, avatarUrl }` to `req.user`.
 4. Returns `401 Unauthorized` if the token is missing, invalid, or expired.
 
 The guard is applied at the controller level with `@UseGuards(AuthGuard)` — not globally — so the health-check endpoint (`GET /health`) remains unauthenticated.
+
+> ⚠️ **Security note — the `?token=` fallback is deprecated.** Tokens placed in URLs leak into proxy/access logs, browser history, and referrer headers. Always send the token in the `Authorization: Bearer` header. The query-param path remains only for backward compatibility, is logged on every use, and will be removed once logs show zero usage.
 
 ### `AuthService`
 
@@ -67,7 +69,7 @@ The guard is applied at the controller level with `@UseGuards(AuthGuard)` — no
 
 The TTL defaults to **5 minutes (300,000ms)** and is configurable via the `GITHUB_TOKEN_CACHE_TTL_MS` env var.
 
-The cache is bounded at **500 entries**. When this limit is reached, expired entries are evicted before adding new ones (LRU-style lazy eviction).
+The cache is hard-bounded at **500 entries**. When the cap is reached, expired entries are evicted first; if every entry is still live, the oldest-inserted entries are evicted until there is room (JavaScript `Map` preserves insertion order), so the map can never grow past the cap. Re-caching an existing token moves it to the newest position.
 
 A resolved `CacheEntry` contains:
 

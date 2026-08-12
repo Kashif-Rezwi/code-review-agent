@@ -10,8 +10,14 @@ async function bootstrap() {
   // Remove trailing slashes from the environment variable if they exist
   const frontendUrl = process.env.FRONTEND_URL?.replace(/\/$/, '') || 'http://localhost:3000'
 
+  // localhost is a dev convenience — never trust it in production
+  const allowedOrigins =
+    process.env.NODE_ENV === 'production'
+      ? [frontendUrl]
+      : [frontendUrl, 'http://localhost:3000']
+
   app.enableCors({
-    origin: [frontendUrl, 'http://localhost:3000'],
+    origin: allowedOrigins,
     credentials: true,
   })
 

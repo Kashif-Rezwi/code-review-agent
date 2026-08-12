@@ -1,10 +1,12 @@
 import { Body, Controller, Post, Get, Delete, Param, HttpCode, Req, UseGuards, Sse, MessageEvent } from '@nestjs/common'
 import { Request } from 'express'
 import { Observable } from 'rxjs'
+import { Throttle } from '@nestjs/throttler'
 import { ReviewService } from './review.service'
 import { ReviewStreamerService } from './review-streamer.service'
 import { AuthGuard } from '../auth/auth.guard'
 import { HistoryService } from '../history/history.service'
+import { UserThrottlerGuard } from '../throttle/user-throttler.guard'
 import { CreateSessionDto } from './dto/create-session.dto'
 
 @UseGuards(AuthGuard)
@@ -18,6 +20,10 @@ export class ReviewController {
 
     @Post('session')
     @HttpCode(201)
+    // Paid endpoint (LLM calls) — 10 reviews per user per hour.
+    // Guard runs after the controller-level AuthGuard, so it keys on req.user.userId.
+    @UseGuards(UserThrottlerGuard)
+    @Throttle({ default: { limit: 10, ttl: 3_600_000 } })
     async createSession(@Body() dto: CreateSessionDto, @Req() req: Request) {
         const review = await this.reviewService.createSession(dto.type, dto.input, req.user!.userId)
         return { reviewId: review.id }

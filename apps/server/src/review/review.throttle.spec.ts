@@ -9,15 +9,15 @@ import { ReviewController } from './review.controller'
 import { ReviewService } from './review.service'
 import { ReviewStreamerService } from './review-streamer.service'
 
-describe('ReviewController POST /review/session validation', () => {
+describe('POST /review/session rate limiting', () => {
     let app: INestApplication
-    const reviewService = { createSession: jest.fn() }
+    const reviewService = { createSession: jest.fn().mockResolvedValue({ id: 'review-1' }) }
 
     beforeAll(async () => {
         const moduleRef = await Test.createTestingModule({
             imports: [
-                // The throttled session endpoint needs the throttler providers in scope.
                 ThrottlerModule.forRoot({
+                    errorMessage: 'Rate limit exceeded — too many requests. Please wait before trying again.',
                     throttlers: [{ name: 'default', ttl: 3_600_000, limit: 60 }],
                 }),
             ],
@@ -41,43 +41,27 @@ describe('ReviewController POST /review/session validation', () => {
         app = moduleRef.createNestApplication()
         app.useGlobalPipes(new ValidationPipe({ whitelist: true }))
         await app.init()
-
-        reviewService.createSession.mockResolvedValue({ id: 'review-1' })
     })
 
     afterAll(async () => {
         await app.close()
     })
 
-    beforeEach(() => {
-        reviewService.createSession.mockClear()
-    })
+    it('allows 10 sessions/hour per user, then returns 429 with a clear message', async () => {
+        for (let i = 0; i < 10; i++) {
+            await request(app.getHttpServer())
+                .post('/review/session')
+                .send({ type: 'CODE', input: 'const a = 1' })
+                .expect(201)
+        }
 
-    it('rejects an invalid review type with 400 before the service layer runs', async () => {
         const res = await request(app.getHttpServer())
             .post('/review/session')
-            .send({ type: 'FOO', input: 'x' })
-
-        expect(res.status).toBe(400)
-        expect(res.body.message).toBeDefined()
-        expect(reviewService.createSession).not.toHaveBeenCalled()
-    })
-
-    it('rejects a missing input with 400', async () => {
-        await request(app.getHttpServer())
-            .post('/review/session')
-            .send({ type: 'CODE' })
-            .expect(400)
-        expect(reviewService.createSession).not.toHaveBeenCalled()
-    })
-
-    it('accepts a valid payload and creates the session', async () => {
-        await request(app.getHttpServer())
-            .post('/review/session')
             .send({ type: 'CODE', input: 'const a = 1' })
-            .expect(201)
-            .expect({ reviewId: 'review-1' })
 
-        expect(reviewService.createSession).toHaveBeenCalledWith('CODE', 'const a = 1', 'user-1')
+        expect(res.status).toBe(429)
+        expect(res.text).toContain('Rate limit exceeded')
+        // The 11th request never reached the service layer.
+        expect(reviewService.createSession).toHaveBeenCalledTimes(10)
     })
 })

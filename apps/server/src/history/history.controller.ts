@@ -4,6 +4,8 @@ import { Observable } from 'rxjs'
 import { HistoryService } from './history.service'
 import { ChatMessageDto } from './dto/chat-message.dto'
 import { AuthGuard } from '../auth/auth.guard'
+import { UserThrottlerGuard } from '../throttle/user-throttler.guard'
+import { Throttle } from '@nestjs/throttler'
 
 @UseGuards(AuthGuard)
 @Controller('history')
@@ -33,8 +35,12 @@ export class HistoryController {
         await this.historyService.deleteReview(id, req.user!.userId)
     }
 
+    // Paid endpoint (LLM calls) — 60 chat messages per user per hour.
+    // Guard runs after the controller-level AuthGuard, so it keys on req.user.userId.
     @Post(':id/chat')
     @Sse()
+    @UseGuards(UserThrottlerGuard)
+    @Throttle({ default: { limit: 60, ttl: 3_600_000 } })
     chat(@Param('id') id: string, @Body() dto: ChatMessageDto, @Req() req: Request): Observable<MessageEvent> {
         return new Observable((subscriber) => {
             const stream = this.historyService.chatGenerator(id, req.user!.userId, dto.message)
