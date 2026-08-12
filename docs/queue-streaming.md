@@ -77,6 +77,8 @@ POST /review/session
 4. `finally`: `await conn.flush()` before the job completes — a BullMQ completion must never race the terminal stream append — then `execution.dispose()`.
 5. `@OnWorkerEvent('failed')` — if BullMQ itself kills the job (process stall/eviction), the handler forces the review `FAILED` in Postgres and appends a terminal `error` event — unless another terminal transition (e.g. cancellation) already won.
 
+Worker concurrency is deliberately **1** (the BullMQ default) — a hard cost cap on parallel LLM spend (~12 reviews/hour/instance ceiling). This is a recorded decision, not an oversight; see `remediation/decisions/002-bullmq-worker-concurrency.md`.
+
 ### `RedisService` (Streams primitives)
 
 `src/queue/redis.service.ts`:
@@ -100,7 +102,7 @@ POST /review/session
 2. `lastId = suppliedLastId` when it matches the `N-N` stream-id shape (`isStreamId`), else `0-0` (full replay).
 3. Loop: `XREAD` after `lastId`; `blockMs = 15s` while the review is live, `0` once the row is terminal (immediate drain — no needless 15-second wait).
 4. Each entry is forwarded as an SSE frame with `id: <stream-id>` — the client stores it for resume.
-5. After every read the review row is re-loaded; when it reaches a terminal status (`COMPLETE`/`PARTIAL`/`FAILED`/`CANCELLED`) the streamer emits a **reconstructed terminal event** from Postgres (below) and completes the Observable. A streamed `complete`/`error` event also closes the stream.
+5. After every read the review **status** is re-polled with a status-only query (`getReviewStatus` — one indexed column, ownership-scoped); the full row (issues + conversations) is loaded only when a terminal status (`COMPLETE`/`PARTIAL`/`FAILED`/`CANCELLED`) requires reconstructing the terminal event from Postgres (below). A streamed `complete`/`error` event also closes the stream; a review deleted mid-stream closes quietly.
 6. On an **empty** read it emits `{ type: 'heartbeat' }` — keeps proxies/browsers from killing idle connections. Heartbeats are deliberately **not** persisted to the stream (they would pad the replay log with noise).
 7. Teardown: unsubscribe sets `stopped` and calls `reader.disconnect()`, interrupting the blocking `XREAD` immediately.
 

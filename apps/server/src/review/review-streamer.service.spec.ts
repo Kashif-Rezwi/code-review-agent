@@ -43,7 +43,10 @@ describe('ReviewStreamerService terminal recovery', () => {
                 { id: '10-1', message: JSON.stringify({ type: 'start' }) },
             ]),
         } as unknown as RedisService
-        const history = { getReview: jest.fn().mockResolvedValue(completedReview()) } as unknown as HistoryService
+        const history = {
+            getReview: jest.fn().mockResolvedValue(completedReview()),
+            getReviewStatus: jest.fn().mockResolvedValue('COMPLETE'),
+        } as unknown as HistoryService
         const service = new ReviewStreamerService(redis, history)
 
         const events = await collect(service.createStream('review-1', 'user-1'))
@@ -70,11 +73,37 @@ describe('ReviewStreamerService terminal recovery', () => {
             createConnection: jest.fn().mockReturnValue(reader),
             readEvents: jest.fn().mockRejectedValue(new Error('redis unavailable')),
         } as unknown as RedisService
-        const history = { getReview: jest.fn().mockResolvedValue(completedReview()) } as unknown as HistoryService
+        const history = {
+            getReview: jest.fn().mockResolvedValue(completedReview()),
+            getReviewStatus: jest.fn().mockResolvedValue('COMPLETE'),
+        } as unknown as HistoryService
 
         const events = await collect(new ReviewStreamerService(redis, history).createStream('review-1', 'user-1'))
         expect(events).toHaveLength(1)
         expect(events[0].data).toMatchObject({ type: 'complete', review: { id: 'review-1' } })
+    })
+
+    it('polls with the status-only query and loads the full row only for terminal reconstruction', async () => {
+        const reader = { quit: jest.fn().mockResolvedValue('OK') }
+        const redis = {
+            createConnection: jest.fn().mockReturnValue(reader),
+            readEvents: jest.fn().mockResolvedValue([]),
+        } as unknown as RedisService
+        const getReview = jest.fn()
+            .mockResolvedValueOnce({ ...completedReview(), status: 'PENDING' })
+            .mockResolvedValue(completedReview())
+        const getReviewStatus = jest.fn()
+            .mockResolvedValueOnce('PENDING')
+            .mockResolvedValue('COMPLETE')
+        const history = { getReview, getReviewStatus } as unknown as HistoryService
+
+        const events = await collect(new ReviewStreamerService(redis, history).createStream('review-1', 'user-1'))
+
+        expect(getReviewStatus).toHaveBeenCalledWith('review-1', 'user-1')
+        // Initial full load + one full load for the terminal reconstruction — never per poll.
+        expect(getReview).toHaveBeenCalledTimes(2)
+        expect(events[0].data).toEqual({ type: 'heartbeat' })
+        expect(events.at(-1)?.data).toMatchObject({ type: 'complete', review: { id: 'review-1' } })
     })
 })
 

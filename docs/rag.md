@@ -71,7 +71,7 @@ Orchestrates ingestion and retrieval. Two primary methods:
 4. Delegates persistence to `RagRepository`.
 
 **`retrieveForContext(queryText, userId)`**
-1. Guards: if no `DATABASE_URL` is configured, returns `null` immediately (dev mode without DB).
+1. Guards: if no `DATABASE_URL` is configured, returns `null` immediately. The server **boots in degraded mode without a reachable database** (see `remediation/decisions/001-resilient-db-boot.md`) — `/health` reports `degraded` instead of the API crash-looping.
 2. Calls `embed()` to compute the query embedding.
 3. Calls `RagRepository.querySimilarChunks()` for the top-5 nearest chunks.
 4. Returns `{ content: string, appliedNames: string[] }` — content is all chunks joined; appliedNames is the deduplicated list of source document names.

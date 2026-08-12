@@ -24,8 +24,21 @@ describe('LinterService', () => {
         expect(result.output).toContain('Parsing error')
     })
 
-    it('flags TypeScript-only syntax as parseError (espree cannot parse it)', async () => {
-        const result = await service.lint('interface Foo { a: string }\n', 'typescript')
-        expect(result).toMatchObject({ errors: 0, warnings: 0, parseError: true })
+    it('does not flag ambient globals like console as undefined', async () => {
+        const result = await service.lint('console.log(String(1))\n', 'javascript')
+        expect(result).toEqual({ output: 'No lint issues found.', errors: 0, warnings: 0, parseError: false })
+    })
+
+    it('parses TypeScript via @typescript-eslint/parser when language is typescript', async () => {
+        const result = await service.lint(
+            'interface Foo { a: string }\nconst x: Foo = { a: String(1) }\nexport { x }\n',
+            'typescript',
+        )
+        expect(result).toEqual({ output: 'No lint issues found.', errors: 0, warnings: 0, parseError: false })
+    })
+
+    it('counts violations in TypeScript code the same as JavaScript', async () => {
+        const result = await service.lint('var y = 1\neval(String(2))\n', 'typescript')
+        expect(result).toMatchObject({ errors: 1, warnings: 2, parseError: false })
     })
 })

@@ -1,4 +1,5 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common'
+import type { ReviewStatus } from '@prisma/client'
 
 import { AiService } from '../ai/ai.service'
 import { streamText } from 'ai'
@@ -20,6 +21,11 @@ export class HistoryService {
         const review = await this.historyRepository.getReview(id, userId)
         if (!review) throw new NotFoundException(`Review ${id} not found.`)
         return review
+    }
+
+    /** Status-only poll used by the SSE streamer loop; null means the review no longer exists. */
+    async getReviewStatus(id: string, userId: string): Promise<ReviewStatus | null> {
+        return this.historyRepository.getReviewStatus(id, userId)
     }
 
     async getStats(userId: string) {

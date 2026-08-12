@@ -126,7 +126,7 @@ Output is capped at 20 messages to avoid blowing the context window.
 
 Return contract: `lint()` resolves to a structured `LintResult { output, errors, warnings, parseError }`. The model receives only `output` (plain text); the counts drive the user-visible `tool_done` label (`N issues` / `clean` / `could not parse`).
 
-**JavaScript only today:** ESLint's default parser (espree) cannot parse TypeScript syntax — the `language` argument is accepted but not yet wired to a TS-aware parser. TypeScript input produces a fatal parse message, reported as `parseError` with zero counts, and the agent gracefully continues the review without lint findings.
+**JavaScript and TypeScript both lint today.** The `language` argument selects the parser: JavaScript uses ESLint's default espree parser, TypeScript uses `@typescript-eslint/parser` (TSX supported). Both share the same rule set, and ambient globals (`console`, `process`, `window`, …) are configured so `no-undef` only flags genuinely undefined identifiers. Genuinely unparsable input (e.g. a statement-initial generic arrow `const f = <T>(v: T) => v`, which is ambiguous in TSX mode) degrades gracefully to `parseError` with zero counts, and the agent continues the review without lint findings.
 
 ---
 

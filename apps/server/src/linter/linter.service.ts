@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common'
+import type { Linter as LinterTypes } from 'eslint'
 
 export interface LintResult {
     /** Exact text handed to the model — this wording is part of the model surface. */
@@ -11,18 +12,26 @@ export interface LintResult {
 
 @Injectable()
 export class LinterService {
-    async lint(code: string, _language: 'javascript' | 'typescript' = 'javascript'): Promise<LintResult> {
-        void _language
+    async lint(code: string, language: 'javascript' | 'typescript' = 'javascript'): Promise<LintResult> {
         try {
             const { Linter } = await import('eslint')
+            const globalsPackage = await import('globals')
             const linter = new Linter()
 
+            const languageOptions: LinterTypes.LanguageOptions = {
+                ecmaVersion: 2022,
+                sourceType: 'module',
+                parserOptions: { ecmaFeatures: { jsx: true } },
+                // no-undef needs to know the ambient globals of realistic pastes
+                globals: { ...globalsPackage.es2022, ...globalsPackage.browser, ...globalsPackage.node },
+            }
+            if (language === 'typescript') {
+                // espree cannot parse TS; swap in the TS-aware parser (jsx stays on for TSX)
+                languageOptions.parser = (await import('@typescript-eslint/parser')) as unknown as LinterTypes.Parser
+            }
+
             const messages = linter.verify(code, {
-                languageOptions: {
-                    ecmaVersion: 2022,
-                    sourceType: 'module',
-                    parserOptions: { ecmaFeatures: { jsx: true } },
-                },
+                languageOptions,
                 rules: {
                     // Correctness
                     'no-unused-vars': 'warn',

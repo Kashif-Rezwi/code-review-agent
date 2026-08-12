@@ -1,6 +1,8 @@
 # Chunk 09 — Deferred decision records (ADRs)
 
-> **Status:** pending · **Findings:** S-2, M-4, S-6, S-10, S-11, M-10 (6) · **Severity mix:** 🟠2 🟡4
+> **Status:** done (2026-08-12) · **Findings:** S-2, M-4, S-6, S-10, S-11, M-10 (6) · **Severity mix:** 🟠2 🟡4
+>
+> **DECISIONS (2026-08-12, repo owner delegated to executor's recommendations):** **Q7/S-2 = (a) resilient boot** — `PrismaService` catches `$connect` failure, logs, boots degraded (activates the existing `/health` degraded design; Neon free-tier wake latency is routine). **Q4/M-4 = (a)** concurrency 1 documented as deliberate cost cap. **S-6 = (a) implemented** — `@typescript-eslint/parser` behind the `language` arg + ambient globals fix for `no-undef`. **S-10 = (b)** documented debt. **S-11 = (a) implemented** — status-only poll. **M-10 = (a)** watch-item.
 > **Depends on:** none (can run anytime) · **Gated by:** **Q4** (worker-concurrency intent), **Q7** (S-2 direction)
 > **Files touched:** `remediation/decisions/*.md` (new ADRs), `docs/` one-liners where a decision changes a documented claim, `remediation/PROGRESS.md`. **Code changes only where a decision explicitly says "implement".**
 
@@ -21,11 +23,11 @@ Six findings are policy decisions disguised as bugs. Writing code before decidin
 
 ## 3. Tasks
 
-1. [ ] Get the human's answers for Q4 and Q7 (and confirm the recommendations above for S-6/S-10/S-11/M-10).
-2. [ ] Write `remediation/decisions/NNN-<slug>.md` per finding (template: Context / Options / Decision / Consequences / Links to audit ID).
-3. [ ] Implement approved outcomes: S-11(a) status-only query (guard: keep `getReview`'s ownership check — the status query must still filter by `userId`); S-6(a) parser wiring **only if approved**; S-2 per Q7.
-4. [ ] Update affected docs (`docs/rag.md` for S-2; `docs/review-code.md` for S-6 if implemented; `docs/queue-streaming.md` for M-4/S-11 notes) — coordinate with chunks 03/04/05 if in flight.
-5. [ ] Close each finding in PROGRESS.md with the ADR link.
+1. [x] Get the human's answers for Q4 and Q7 (and confirm the recommendations above for S-6/S-10/S-11/M-10).
+2. [x] Write `remediation/decisions/NNN-<slug>.md` per finding (template: Context / Options / Decision / Consequences / Links to audit ID).
+3. [x] Implement approved outcomes: S-11(a) status-only query (guard: keep `getReview`'s ownership check — the status query must still filter by `userId`); S-6(a) parser wiring **only if approved**; S-2 per Q7.
+4. [x] Update affected docs (`docs/rag.md` for S-2; `docs/review-code.md` for S-6 if implemented; `docs/queue-streaming.md` for M-4/S-11 notes) — coordinate with chunks 03/04/05 if in flight.
+5. [x] Close each finding in PROGRESS.md with the ADR link.
 
 ## 4. Verification
 
@@ -42,7 +44,7 @@ pnpm --filter server test     # add a spec for the S-11 status-only path if impl
 
 ## 6. Done checklist
 
-- [ ] 6 ADRs written, decisions recorded with the human's answers
-- [ ] Approved implementations landed + tested
-- [ ] Docs updated where decisions changed claims
-- [ ] `PROGRESS.md` updated (6 findings) — **all 80 findings now resolved or recorded**
+- [x] 6 ADRs written, decisions recorded with the human's answers
+- [x] Approved implementations landed + tested
+- [x] Docs updated where decisions changed claims
+- [x] `PROGRESS.md` updated (6 findings) — **all 80 findings now resolved or recorded**

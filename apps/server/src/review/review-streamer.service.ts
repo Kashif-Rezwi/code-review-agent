@@ -1,5 +1,6 @@
 import { Injectable, Logger, type MessageEvent } from '@nestjs/common'
 import { ReviewDataSchema, type ReviewData, type ReviewStreamEvent } from '@cra/types'
+import type { ReviewStatus } from '@prisma/client'
 import type { Redis } from 'ioredis'
 import { Observable } from 'rxjs'
 
@@ -32,7 +33,10 @@ export class ReviewStreamerService {
 
             void (async () => {
                 try {
-                    let review = await this.historyService.getReview(reviewId, userId)
+                    // Full load once up front (ownership check + initial status); the poll
+                    // loop below uses the status-only query to avoid re-loading
+                    // issues/conversations on every cycle.
+                    let status: ReviewStatus = (await this.historyService.getReview(reviewId, userId)).status
                     reader = this.redisService.createConnection()
                     let lastId = isStreamId(suppliedLastId) ? suppliedLastId : '0-0'
                     let terminalDelivered = false
@@ -40,13 +44,19 @@ export class ReviewStreamerService {
                     while (!stopped && !subscriber.closed) {
                         // A terminal row should replay immediately rather than wait for
                         // an empty 15-second blocking read.
-                        const blockMs = TERMINAL_STATUSES.has(review.status) ? 0 : 15_000
+                        const blockMs = TERMINAL_STATUSES.has(status) ? 0 : 15_000
                         let entries: RedisStreamEvent[]
                         try {
                             entries = await this.redisService.readEvents(reader, reviewId, lastId, blockMs)
                         } catch (error) {
-                            review = await this.historyService.getReview(reviewId, userId)
-                            if (TERMINAL_STATUSES.has(review.status)) {
+                            const latest = await this.historyService.getReviewStatus(reviewId, userId)
+                            if (latest === null) {
+                                await finish()
+                                return
+                            }
+                            status = latest
+                            if (TERMINAL_STATUSES.has(status)) {
+                                const review = await this.historyService.getReview(reviewId, userId)
                                 const terminal = reconstructTerminal(review)
                                 subscriber.next({ type: terminal.type, data: terminal })
                                 await finish()
@@ -68,8 +78,15 @@ export class ReviewStreamerService {
                             return
                         }
 
-                        review = await this.historyService.getReview(reviewId, userId)
-                        if (TERMINAL_STATUSES.has(review.status)) {
+                        const latest = await this.historyService.getReviewStatus(reviewId, userId)
+                        if (latest === null) {
+                            // Review was deleted mid-stream — close quietly.
+                            await finish()
+                            return
+                        }
+                        status = latest
+                        if (TERMINAL_STATUSES.has(status)) {
+                            const review = await this.historyService.getReview(reviewId, userId)
                             const terminal = reconstructTerminal(review)
                             subscriber.next({ type: terminal.type, data: terminal })
                             await finish()
