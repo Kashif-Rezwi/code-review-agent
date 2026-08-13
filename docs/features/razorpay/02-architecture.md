@@ -45,7 +45,9 @@ This document defines the system design: payment flow, state machine, database s
        │                                   │    amount: 9900 (paise)         │
        │                                   │    currency: INR                │
        │                                   │    receipt: <orderId>           │
-       │                                   │    notes: { userId, packageId } │
+       │                                   │    notes: { packageId }         │
+       │                                   │    (no userId — avoids PII      │
+       │                                   │     in Razorpay dashboard, F-10)│
        │                                   │                                 │
    3.  │                                   │◄── { id: order_xyz } ──────────│
        │                                   │                                 │
@@ -189,6 +191,7 @@ model PaymentEvent {
 - `razorpayEventId` is `@unique` — the primary idempotency mechanism. Before processing, the handler attempts to insert this row; a unique constraint violation means the event was already processed → ack `200` and return.
 - `razorpayOrderId` is nullable for forward compatibility with events that don't carry an order reference.
 - `payload` stores the full event as `Json` for audit/debugging — matches the existing `Review.traceLog` pattern.
+- **Size-limited payload (F-03):** Only store the payload after the body-size limit check in §5.2. A `PaymentEvent` row is not created for rejected (oversized or invalid) requests.
 
 #### `CreditLedger`
 
@@ -221,6 +224,7 @@ model CreditLedger {
 - Append-only ledger — entries are never updated or deleted. The `balanceAfter` snapshot enables ledger reconstruction and audit.
 - `amount` is signed: positive for credits in (grants, purchases, refunds), negative for credits out (consumption). This matches accounting convention and simplifies querying.
 - `orderId` and `reviewId` are nullable foreign keys — a `PURCHASE` entry links to an order; a `CONSUMPTION` entry links to the review that consumed the credits.
+- **`balanceAfter` must come from the DB (F-04):** After every credit mutation, `balanceAfter` must be populated by re-reading `User.creditBalance` inside the same `$transaction` using the transaction client (e.g., `tx.user.findUniqueOrThrow({ where: { id: userId }, select: { creditBalance: true } })`). It must never be computed arithmetically in application code from a cached or pre-read value.
 
 #### `User` additions
 
@@ -285,9 +289,22 @@ Postgres evaluates the `WHERE` against the row being updated under a row-level l
 
 ### 5.2 Webhook signature verification
 
+The following sequence must be implemented exactly, in this order:
+
 ```
-signature = HMAC-SHA256(rawBody, RAZORPAY_WEBHOOK_SECRET)
-comparison = crypto.timingSafeEqual(Buffer.from(signature, 'hex'), Buffer.from(header, 'hex'))
+1. Read X-Razorpay-Signature header
+2. If header is missing or not exactly 64 hex characters → return 401 immediately
+   (timingSafeEqual throws RangeError if buffer lengths differ — F-02)
+3. Read req.rawBody as a Buffer — never stringify it first (F-01)
+4. signature = crypto.createHmac('sha256', RAZORPAY_WEBHOOK_SECRET)
+                     .update(req.rawBody)          ← Buffer, not string
+                     .digest('hex')
+5. comparison = crypto.timingSafeEqual(
+     Buffer.from(signature, 'hex'),
+     Buffer.from(signatureHeader, 'hex')
+   )
+6. If comparison === false → return 401
+7. Only now: parse the body and proceed
 ```
 
 **Implementation details:**
@@ -296,6 +313,8 @@ comparison = crypto.timingSafeEqual(Buffer.from(signature, 'hex'), Buffer.from(h
 - The webhook route must **not** be processed by the global `ValidationPipe({ whitelist: true })` — the payload is Razorpay's shape, not ours. This is handled by using `@Req()` to access the raw request directly, not `@Body()` with a DTO.
 - Timing-safe comparison prevents timing attacks that could probe for the correct HMAC.
 - Reject with `401` on signature mismatch — before any DB reads.
+- **Body-size limit (F-03):** The webhook route must enforce a maximum body size of **1 MB**. Payloads exceeding this must be rejected with `413` before HMAC verification. This prevents memory exhaustion from oversized payloads.
+- **Event-ID validation (F-08):** The `x-razorpay-event-id` header must be present and must be a non-empty string of at most 128 characters. If missing or invalid, return `400` (not `200`) — a missing event ID cannot occur on a legitimate Razorpay request.
 
 ### 5.3 What the client is allowed to send
 
@@ -404,14 +423,21 @@ This ensures the grant can only happen once per user, regardless of how many tim
 
 ### 7.4 Failed review credit refund
 
-When a review fails after credits were deducted (status transitions to `FAILED`), the `ReviewService` must issue a `CONSUMPTION_REFUND` ledger entry to return the credits. This is a compensating transaction — the same atomic `$transaction` pattern used for deduction:
+When a review fails after credits were deducted (status transitions to `FAILED`), a `CONSUMPTION_REFUND` ledger entry must be issued to return the credits.
+
+**Atomicity requirement (F-05):** The refund and the `markFailed` status transition must execute in the same Prisma `$transaction` (interactive callback form). If they are separate operations, a crash between `markFailed` and `refundCredits` leaves the review as `FAILED` with no refund, and the user permanently loses credits with no recovery path (the review is terminal and the dispatcher will not retry).
 
 ```
-Step 1: Insert CONSUMPTION_REFUND ledger entry (amount: +cost, reviewId)
-Step 2: updateMany User creditBalance increment by cost
+$transaction(async (tx) => {
+  Step 1: tx.review.updateMany({ where: { id: reviewId, status: 'PROCESSING' }, data: { status: 'FAILED' } })
+  Step 2: If count === 0 → review already terminal, skip refund
+  Step 3: tx.creditLedger.create({ type: 'CONSUMPTION_REFUND', amount: +cost, reviewId })
+  Step 4: tx.user.updateMany({ where: { id: userId }, data: { creditBalance: { increment: cost } } })
+  Step 5: Read tx.user.findUniqueOrThrow → balanceAfter (for ledger snapshot)
+})
 ```
 
-This runs in the existing `markFailed` path. A failed review always gets credits back.
+**Double-refund guard (F-05):** A unique constraint on `CreditLedger (reviewId, type = 'CONSUMPTION_REFUND')` ensures that at most one refund is issued per review. If the constraint is violated (caught as `P2002`), log at `warn` and return cleanly.
 
 ---
 
@@ -452,9 +478,13 @@ When `POST /review/session` or `POST /history/:id/chat` returns `402`:
 |---|---|---|---|---|
 | `POST` | `/payments/order` | `AuthGuard` | `UserThrottlerGuard` — 5/hr | Create Razorpay order + local `PaymentOrder` |
 | `POST` | `/payments/webhook` | None (HMAC sig) | None | Receive Razorpay webhook events |
-| `GET` | `/payments/wallet` | `AuthGuard` | None | Return credit balance + recent ledger |
+| `GET` | `/payments/wallet` | `AuthGuard` | `UserThrottlerGuard` — 60/min (F-12) | Return credit balance + recent ledger |
 
 Rate-limiting on order creation (5/hour) is intentionally conservative — it prevents scripted abuse while allowing legitimate double-clicks (each order is a separate DB row).
+
+**Pending order cap (F-11):** `POST /payments/order` must check the user's current count of `CREATED` orders before calling the Razorpay API. If the count is ≥ 3, reject with `429 Too Many Requests` and the message "You have too many pending orders — please complete or wait for them to expire." This prevents unbounded accumulation of abandoned orders.
+
+**Amount cross-check in webhook (F-09):** When processing `order.paid`, verify that `payload.order.entity.amount_paid` (in paise) matches `localOrder.amountPaise`. If they differ, log a critical alert, record a `PaymentEvent` with type `order.paid.amount_mismatch`, and return `200` without granting credits. Do not crash.
 
 ---
 

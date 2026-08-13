@@ -301,9 +301,13 @@ Implementation is broken into 11 chunks, ordered by dependency. Each chunk is in
 - **Purpose:** Implement Razorpay SDK initialization and `createOrder()` logic
 - **Changes:**
   - Constructor: initialize `Razorpay` SDK instance with `ConfigService.get('RAZORPAY_KEY_ID')` and `ConfigService.get('RAZORPAY_KEY_SECRET')`
-  - `createOrder()`: call `razorpay.orders.create({ amount, currency, receipt, notes })`, then delegate to repository for local persistence
+  - `createOrder()`: 
+    1. **Pending order cap (F-11):** Count user's `CREATED` orders. If count ≥ 3, throw `TooManyRequestsException(429)` before calling Razorpay API.
+    2. Call `razorpay.orders.create({ amount, currency, receipt: internalOrderId, notes: { packageId } })` — do NOT include `userId` in `notes` (F-10)
+    3. Wrap SDK call in `try/catch`; re-throw with only `err.message` (no raw SDK error object logging) (F-10)
+    4. Delegate to repository for local persistence
 - **Dependencies:** `razorpay` SDK, `ConfigService`
-- **Security:** SDK credentials read from `ConfigService` — never hardcoded or logged.
+- **Security:** SDK credentials read from `ConfigService` — never hardcoded or logged. Raw SDK errors are sanitised before logging or re-throwing.
 
 ### Verification
 
@@ -323,26 +327,34 @@ Implementation is broken into 11 chunks, ordered by dependency. Each chunk is in
 #### [MODIFY] `apps/server/src/payments/webhook.controller.ts`
 - **Category:** backend
 - **Changes:** Wire up the full webhook handler:
-  1. Read `req.rawBody`, `X-Razorpay-Signature`, `X-Razorpay-Event-Id` headers
-  2. Call `PaymentsService.handleWebhook(rawBody, signature, eventId)`
-  3. Return `200` on success, `401` on signature mismatch
+  1. Check body size: if `req.rawBody.length > 1_048_576` (1 MB) → return `413` immediately (F-03)
+  2. Read `X-Razorpay-Signature` header; if missing or not exactly 64 hex characters → return `401` immediately (F-02)
+  3. Read `x-razorpay-event-id` header; if missing or > 128 chars → return `400` (F-08)
+  4. Call `PaymentsService.handleWebhook(rawBody, signatureHeader, eventId)` — `rawBody` is passed as a `Buffer`, **never stringified** (F-01)
+  5. Return `200` on success, `401` on signature mismatch, `400` on invalid event-id
 
 #### [MODIFY] `apps/server/src/payments/payments.service.ts`
 - **Category:** backend
-- **Changes:** Implement `handleWebhook()`:
-  1. Verify HMAC-SHA256 using `crypto.timingSafeEqual`
-  2. Parse the event body
-  3. Route by `event` field: `order.paid` → `handleOrderPaid()`, `payment.failed` → `handlePaymentFailed()`
-  4. Return early (200) for unrecognized events
+- **Changes:** Implement `handleWebhook(rawBody: Buffer, signatureHeader: string, eventId: string)`:
+  1. Compute `hmac = crypto.createHmac('sha256', secret).update(rawBody).digest('hex')` — `rawBody` used as `Buffer` directly (F-01)
+  2. Compare with `crypto.timingSafeEqual(Buffer.from(hmac, 'hex'), Buffer.from(signatureHeader, 'hex'))` (F-02)
+  3. If mismatch → throw `UnauthorizedException`
+  4. Parse `rawBody.toString('utf8')` to JSON
+  5. Route by `event` field: `order.paid` → `handleOrderPaid()`, `payment.failed` → `handlePaymentFailed()`
+  6. Return early (200) for unrecognised events
+  - All Razorpay SDK errors caught and re-thrown with only `err.message` — never log raw error objects (F-10)
 
 #### [MODIFY] `apps/server/src/payments/payments.repository.ts`
 - **Category:** backend
-- **Changes:** Implement `captureOrder()` as a single `$transaction`:
-  1. Insert `PaymentEvent` row (idempotency — unique constraint on `razorpayEventId`)
-  2. `updateMany` on `PaymentOrder` where `razorpayOrderId = X AND status = CREATED` → set `status = CAPTURED, razorpayPaymentId, creditsGranted`
-  3. If `count === 0` → order already captured or doesn't exist → return early
-  4. `updateMany` on `User` where `id = userId` → `creditBalance: { increment: credits }`
-  5. Insert `CreditLedger` entry (type: `PURCHASE`, amount: +credits, balanceAfter)
+- **Changes:** Implement `captureOrder()` as an **interactive Prisma `$transaction`** (callback form — NOT the batch array form) (F-07):
+  1. `tx.paymentEvent.create({ razorpayEventId, ... })` — unique constraint catches duplicate events
+  2. `tx.paymentOrder.updateMany({ where: { razorpayOrderId, status: 'CREATED' }, data: { status: 'CAPTURED', razorpayPaymentId, creditsGranted } })`
+  3. If `count === 0` → order already captured or doesn't exist → return early (throw to rollback, caller handles)
+  4. **Amount cross-check (F-09):** Verify `localOrder.amountPaise === payload.order.entity.amount_paid`. If mismatch → log critical alert, create `PaymentEvent` with type `order.paid.amount_mismatch`, return without granting credits.
+  5. `tx.user.updateMany({ where: { id: userId }, data: { creditBalance: { increment: credits } } })`
+  6. Read `tx.user.findUniqueOrThrow({ where: { id: userId }, select: { creditBalance: true } })` to get `balanceAfter` (F-04)
+  7. `tx.creditLedger.create({ type: 'PURCHASE', amount: +credits, balanceAfter, orderId })` (F-04)
+- **`failOrder()` implementation (F-14):** Must use `tx.paymentOrder.updateMany({ where: { razorpayOrderId, status: 'CREATED' }, ... })` — the `WHERE status = 'CREATED'` guard is mandatory. Return `count` so the caller can detect no-ops.
 
 ### New test files
 
@@ -350,20 +362,27 @@ Implementation is broken into 11 chunks, ordered by dependency. Each chunk is in
 - **Category:** test
 - **Purpose:** Unit tests for signature verification, webhook routing, credit crediting
 - **Tests:**
-  - Valid HMAC signature → processes event
-  - Invalid HMAC signature → rejects with 401
-  - Duplicate event ID → returns 200, no processing
+  - Valid HMAC signature + valid event-id → processes event (WH-01)
+  - Invalid HMAC signature → rejects with `401` (WH-02)
+  - Missing `X-Razorpay-Signature` header → `401` (WH-03)
+  - Body modified by 1 character, original signature sent → `401` (WH-04)
+  - Empty `X-Razorpay-Signature` (length 0) → `401`, not `500` (WH-05 — F-02)
+  - Signature of length 1 → `401`, not `500` (WH-06 — F-02)
+  - Body larger than 1 MB → `413` (WH-07 — F-03)
+  - Missing `x-razorpay-event-id` → `400` (WH-08 — F-08)
+  - Duplicate `x-razorpay-event-id` → `200`, no second credit (WH-09)
+  - `payment.failed` after `order.paid` (same order) → `200`, no status change (WH-10 — F-14)
+  - `order.paid` with mismatched amount → `200`, no credits granted, `amount_mismatch` event recorded (F-09)
   - `order.paid` for known order → credits wallet
   - `order.paid` for already-captured order → no-op (status-guard)
-  - `payment.failed` for known order → marks FAILED, no credit change
-  - Unknown event type → returns 200, no processing
+  - Unknown event type → `200`, no processing
 
 #### [NEW] `apps/server/src/payments/webhook.controller.spec.ts`
 - **Category:** test
 - **Purpose:** Integration tests for the webhook HTTP endpoint
 - **Tests:**
-  - Missing `X-Razorpay-Signature` header → 401
-  - Valid webhook → 200
+  - Missing `X-Razorpay-Signature` header → `401`
+  - Valid webhook → `200`
   - Test uses `supertest` + `Test.createTestingModule` (matches `review.controller.spec.ts` pattern)
 
 ### Verification
@@ -404,12 +423,23 @@ Implementation is broken into 11 chunks, ordered by dependency. Each chunk is in
 - **Category:** backend
 - **Purpose:** Apply credit guard to `POST /review/session`
 - **Changes:**
-  - Import `CreditGuard` and `CreditCost` decorator
-  - Add `@UseGuards(CreditGuard)` and `@CreditCost(CREDIT_COSTS.CODE_REVIEW)` to `createSession()` method (for `type === 'CODE'`)
-  - For PR reviews (`type === 'PR'`), the cost is `CREDIT_COSTS.PR_REVIEW`
-  - **Design decision:** Since the cost depends on `dto.type` (known only after body parsing), the guard should read `dto.type` from the request body to determine the cost dynamically. Alternative: apply a fixed cost and refund the difference — but this adds complexity. The guard will use `req.body.type` to look up the cost from `CREDIT_COSTS`.
-- **Security:** Guard runs after `AuthGuard` and after `ValidationPipe` (body is parsed). If the DTO is invalid, `ValidationPipe` rejects first — no credits deducted.
+  - Import `CreditGuardCode` and `CreditGuardPR` guards (see design decision below)
+  - Apply `@UseGuards(CreditGuardCode)` to the `createSession()` method for `CODE` reviews
+  - Apply `@UseGuards(CreditGuardPR)` to the `createSession()` method for `PR` reviews
+  - **See security fix F-06 below**
+- **Security:** Guard runs BEFORE `ValidationPipe` in NestJS execution order. Do NOT rely on `req.body.type` being a validated value inside the guard (F-06). Use separate guards per route variant or type-safe metadata.
 - **Dependencies:** `PaymentsModule` must be imported by `ReviewModule` (or `CreditGuard` exported globally)
+
+> **Security design correction for M-1 (supersedes original recommendation) — F-06:**
+> NestJS guard execution order is: `Middleware → Guards → Interceptors (pre) → Pipes → Handler`. Guards run **before** `ValidationPipe`. The original M-1 recommendation to read `req.body.type` inside the guard is unsafe: an attacker can send `{ "type": "UNKNOWN", "input": "..." }` and if `getCreditCost("UNKNOWN")` returns `0` or falls through, the operation is free.
+>
+> **Correct approach:** Use two separate guards with hardcoded costs:
+> - `CreditGuardCode` — hardcodes `cost = CREDIT_COSTS.CODE_REVIEW` (5)
+> - `CreditGuardPR` — hardcodes `cost = CREDIT_COSTS.PR_REVIEW` (10)
+>
+> Apply the correct guard to the code-review route and PR-review route respectively. The type is determined by the route itself, not by reading the body. If a single endpoint handles both types (current design), split it into two routes, or accept only one fixed cost per method.
+>
+> In either case: if the cost resolves to zero or is not a positive integer, the guard must throw a `500 InternalServerError` (implementation bug, not a 402).
 
 #### [MODIFY] [`history.controller.ts`](../../../apps/server/src/history/history.controller.ts)
 - **Category:** backend
@@ -431,9 +461,18 @@ Implementation is broken into 11 chunks, ordered by dependency. Each chunk is in
 
 #### [MODIFY] `apps/server/src/review/review.service.ts`
 - **Category:** backend
-- **Purpose:** Issue `CONSUMPTION_REFUND` on review failure (architecture §7.4)
-- **Changes:** In the existing failure paths (where `markFailed` is called), add a call to `PaymentsService.refundCredits(userId, cost, reviewId, 'Review failed')`. The cost is determined by the review type (`CODE` → 5, `PR` → 10).
-- **Security:** Refund only happens when the review transitions to `FAILED` — the same status-guard pattern prevents double-refund.
+- **Purpose:** Issue `CONSUMPTION_REFUND` atomically with `markFailed` transition (F-05)
+- **Changes:** The `markFailed` + `refundCredits` operations must execute inside a single Prisma `$transaction` (interactive callback form). They must NOT be two sequential calls:
+  ```
+  // WRONG (gap between markFailed and refund — F-05):
+  await this.reviewRepository.markFailed(reviewId, ...)
+  await paymentsService.refundCredits(...)
+
+  // CORRECT (single atomic transaction):
+  await this.reviewRepository.markFailedAndRefund(reviewId, userId, cost, ...)
+  ```
+  The `markFailedAndRefund` method in the repository wraps both operations in one `$transaction`.
+- **Double-refund guard (F-05):** The repository method must catch `P2002` on the `CONSUMPTION_REFUND` ledger insert and return cleanly (already-refunded review — no double-credit).
 - **Scope note:** This is a minimal, targeted change — not a refactor of `ReviewService` (safety rail #3, M-10 acknowledged).
 
 ### New test files
@@ -442,9 +481,11 @@ Implementation is broken into 11 chunks, ordered by dependency. Each chunk is in
 - **Category:** test
 - **Purpose:** Unit tests for the credit guard
 - **Tests:**
-  - Sufficient balance → deducts credits, allows request
-  - Insufficient balance → returns 402, no review created
-  - Concurrent requests race → at most one succeeds (mock-level verification)
+  - Sufficient balance → deducts credits, allows request (CG-01, CG-02)
+  - Insufficient balance → returns `402`, no review created (CG-03)
+  - Body with `type: "FAKE"` does NOT affect guard cost — guard uses hardcoded cost (CG-04 — F-06)
+  - Two concurrent requests with total balance = cost → only one succeeds (CG-05)
+  - Failed review → credits refunded exactly once (CG-06 — F-05)
   - Missing auth → guard does not run (AuthGuard rejects first)
 
 ### Verification
@@ -468,6 +509,7 @@ Implementation is broken into 11 chunks, ordered by dependency. Each chunk is in
 - **Changes:**
   - After `prisma.user.upsert()`, call `PaymentsService.grantFreeCredits(profile.id)`
   - The grant is idempotent (unique partial index on `CreditLedger` for `FREE_GRANT` per user) — safe to call on every login
+  - **Error handling (F-15):** `grantFreeCredits` must catch Prisma error code `P2002` (unique constraint violation) and return cleanly — do NOT re-throw. Log at `debug` level only. A `P2002` means the user already has their free credits.
 - **Dependencies:** `PaymentsService` (injected via constructor)
 - **Security:** The unique partial index prevents double-granting even under concurrent `findOrCreate` calls.
 
@@ -516,7 +558,9 @@ Implementation is broken into 11 chunks, ordered by dependency. Each chunk is in
     - On "Buy" click: call `paymentsService.createOrder(packageId)` → open Razorpay popup with returned `orderId`, `amount`, `keyId`
     - On `handler(response)`: start polling `GET /payments/wallet` (architecture §8.2)
     - On popup close without payment: no action
-- **Security:** The client never sends payment amounts — only `packageId`. Checkout popup is Razorpay's hosted UI — we don't handle card data.
+- **Security:**
+  - The client never sends payment amounts — only `packageId`. Checkout popup is Razorpay's hosted UI — we don't handle card data.
+  - `GET /payments/wallet` response does **not** include `keyId` — the client uses `process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID` directly (F-13). `keyId` is only included in the `createOrder()` response.
 
 #### [NEW] `apps/client/lib/use-wallet.ts`
 - **Category:** frontend
@@ -720,7 +764,7 @@ Implementation is broken into 11 chunks, ordered by dependency. Each chunk is in
 
 | # | Decision | Options | Recommendation |
 |---|---|---|---|
-| M-1 | How does the credit guard determine the cost when it depends on `dto.type`? | (a) Guard reads `req.body.type` directly; (b) Separate guard per endpoint with hardcoded cost; (c) Dynamic cost via decorator metadata factory | **(a)** — simplest, matches the existing pattern where guards access `req` directly |
+| M-1 | How does the credit guard determine the cost when it depends on `dto.type`? | (a) Guard reads `req.body.type` directly; (b) Separate guard per endpoint with hardcoded cost; (c) Dynamic cost via decorator metadata factory | **CORRECTED by F-06:** Option (a) is UNSAFE. NestJS guards run before `ValidationPipe`. Use **(b)** — separate guards (`CreditGuardCode`, `CreditGuardPR`) with hardcoded costs applied to their respective routes. |
 | M-2 | Should `CreditGuard` be global or applied per-route? | (a) Global with opt-out; (b) Per-route with `@UseGuards` | **(b)** — per-route, matching the existing `UserThrottlerGuard` pattern |
 | M-3 | Should the Account page be a separate client route or a modal? | (a) `/account` page; (b) Modal from header | **(a)** — `/account` page, per D-10 and the existing page-based routing pattern |
 | M-4 | How to handle `CreditGuard` when `DATABASE_URL` is missing (degraded mode)? | (a) Guard passes (free access); (b) Guard rejects all | **(a)** — matches the existing degraded-mode behavior where `ReviewRepository` returns `null` and reviews still work |
