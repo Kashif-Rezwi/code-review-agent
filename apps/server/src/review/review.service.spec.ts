@@ -189,6 +189,50 @@ describe('ReviewService coverage-safe PR orchestration', () => {
         )
     })
 
+    it('prefers the captured provider error when the stream rejects with generic no-output', async () => {
+        const harness = createHarness()
+        streamTextMock.mockImplementation((options: { onError?: (arg: { error: unknown }) => void }) => {
+            options.onError?.({
+                error: { error: { code: 'billing_not_active', message: 'Your account is not active' } },
+            })
+            return {
+                text: Promise.reject(new Error('No output generated. Check the stream for errors.')),
+                steps: Promise.resolve([]),
+            }
+        })
+
+        await harness.service.runForQueue(REVIEW_ID, 'CODE', 'const a = 1', USER_ID, harness.conn)
+
+        // Non-transient billing error — no retry.
+        expect(streamTextMock).toHaveBeenCalledTimes(1)
+        expect(harness.events).toContainEqual(
+            expect.objectContaining({ type: 'error', message: 'The AI provider returned an error. Please try again later.' }),
+        )
+    })
+
+    it('waits out a transient quota error and completes the pasted-code review', async () => {
+        const harness = createHarness()
+        let call = 0
+        streamTextMock.mockImplementation((options: { onError?: (arg: { error: unknown }) => void }) => {
+            call++
+            if (call === 1) {
+                options.onError?.({
+                    error: new Error('Failed after 2 attempts. Last error: You exceeded your current quota. Please retry in 0.05s.'),
+                })
+                return {
+                    text: Promise.reject(new Error('No output generated. Check the stream for errors.')),
+                    steps: Promise.resolve([]),
+                }
+            }
+            return workerResult(JSON.stringify(VALID_REVIEW))
+        })
+
+        await harness.service.runForQueue(REVIEW_ID, 'CODE', 'const a = 1', USER_ID, harness.conn)
+
+        expect(streamTextMock).toHaveBeenCalledTimes(2)
+        expect(harness.events).toContainEqual(expect.objectContaining({ type: 'complete', outcome: 'complete' }))
+    })
+
     it('backs off and retries a worker when the provider rate-limits the stream', async () => {
         const harness = createHarness()
         harness.githubService.fetchPRSnapshot.mockResolvedValue(snapshot(3))

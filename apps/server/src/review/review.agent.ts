@@ -85,6 +85,9 @@ export async function runReviewAgent(options: ReviewAgentOptions): Promise<Revie
         ;[finalText, steps] = await Promise.all([result.text, result.steps])
     } catch (error) {
         if (signal.aborted) throwSignalReason(signal)
+        // A provider-failed stream rejects `text` with a generic "No output
+        // generated" error — prefer the truthful error captured by onError.
+        if (providerError) throw providerError
         throw error
     }
 

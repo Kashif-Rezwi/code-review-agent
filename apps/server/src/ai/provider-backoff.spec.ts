@@ -48,6 +48,27 @@ describe('waitBeforeProviderRetry', () => {
         controller.abort(new Error('cancelled'))
         await expect(wait).rejects.toThrow('cancelled')
     })
+
+    it('extracts Retry-After from the SDK RetryError lastError', async () => {
+        const start = Date.now()
+        const retryError = {
+            message: 'Failed after 2 attempts.',
+            lastError: { statusCode: 429, responseHeaders: { 'retry-after': '0.05' } },
+        }
+        await expect(waitBeforeProviderRetry(retryError, 1)).resolves.toBe(true)
+        expect(Date.now() - start).toBeGreaterThanOrEqual(40)
+    })
+
+    it('parses the Google message-text retry hint', async () => {
+        const start = Date.now()
+        const error = new Error('Failed after 2 attempts. Last error: Quota exceeded... Please retry in 0.05s.')
+        await expect(waitBeforeProviderRetry(error, 1)).resolves.toBe(true)
+        expect(Date.now() - start).toBeGreaterThanOrEqual(40)
+    })
+
+    it('classifies RetryError-wrapped 429s as transient', () => {
+        expect(isTransientProviderError({ message: 'Failed after 2 attempts.', lastError: { statusCode: 429 } })).toBe(true)
+    })
 })
 
 describe('withProviderRetry', () => {

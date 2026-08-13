@@ -212,7 +212,7 @@ Worker concurrency is deliberately **1** (the BullMQ default) — a hard cost ca
 | Client connects before the job starts | Stream is empty; blocking reads hold the connection; heartbeats every 15s until events arrive |
 | Browser drops mid-review | Next connect sends `Last-Event-ID`; replay resumes after that id (client dedupes by id) |
 | Redis down mid-review | Emitter captures the first append failure and aborts the pipeline early (no wasted LLM spend); `flush()` rethrows before job completion → job fails → `onFailed` forces `FAILED` + best-effort terminal event |
-| AI provider rate-limits a worker or synthesis call (429/5xx/quota) | Retry-After-aware backoff before the built-in retry (`ai/provider-backoff.ts`); unparseable-output retries still fire immediately |
+| AI provider rate-limits a call (429/5xx/quota) | SDK-internal retries capped at 1 (the default 3-attempt storm amplifies quota burn), then a backoff honoring the provider's retry hint — `Retry-After` header (incl. SDK `RetryError.lastError`) or Google's message text, capped at 45s — before the built-in retry (`ai/provider-backoff.ts`). Pasted-code reviews get one such retry; workers/synthesis retry within their existing attempt loops; unparseable-output retries still fire immediately |
 | Node process restarts mid-job | BullMQ `failed` event → review forced `FAILED` + terminal error event appended |
 | Dispatch keeps failing (e.g. Redis down at enqueue) | Backoff 1s→16s across 6 attempts → review `FAILED` + terminal error event |
 | Cancel while queued | `removeJob` drops the pending BullMQ job; review → `CANCELLED`; terminal event emitted |

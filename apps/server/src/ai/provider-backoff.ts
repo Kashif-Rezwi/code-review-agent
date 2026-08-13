@@ -63,25 +63,41 @@ export async function withProviderRetry<T>(
     }
 }
 
+/** Never honor a provider hint beyond this — the whole-job deadline is 5 minutes. */
+const MAX_RETRY_AFTER_MS = 45_000
+
 function statusCodeOf(error: unknown): number | undefined {
     if (error instanceof ProviderStreamError) return error.statusCode
+    // The AI SDK wraps exhausted retries in a RetryError whose `lastError`
+    // carries the original status; some providers nest under `error` instead.
     const record = asRecord(error)
     const inner = asRecord(record.error)
-    for (const candidate of [record.statusCode, record.status, inner.statusCode, inner.status]) {
+    const last = asRecord(record.lastError)
+    for (const candidate of [record.statusCode, record.status, inner.statusCode, inner.status, last.statusCode, last.status]) {
         if (typeof candidate === 'number' && Number.isFinite(candidate)) return candidate
     }
     return undefined
 }
 
-/** Parse the AI SDK's `responseHeaders['retry-after']` (seconds or HTTP-date). */
+/**
+ * Extract the provider's requested retry delay: `Retry-After` response header
+ * (possibly nested on the SDK's RetryError `lastError`), or Google's message
+ * text hint ("Please retry in 18.97s"). Capped at MAX_RETRY_AFTER_MS.
+ */
 function retryAfterMs(error: unknown): number | undefined {
-    const headers = asRecord(asRecord(error).responseHeaders)
-    const raw = stringValue(headers['retry-after'])
-    if (!raw) return undefined
-    const seconds = Number(raw)
-    if (Number.isFinite(seconds)) return Math.max(0, Math.round(seconds * 1_000))
-    const date = Date.parse(raw)
-    return Number.isNaN(date) ? undefined : Math.max(0, date - Date.now())
+    const record = asRecord(error)
+    for (const holder of [record, asRecord(record.error), asRecord(record.lastError)]) {
+        const raw = stringValue(asRecord(holder.responseHeaders)['retry-after'])
+        if (!raw) continue
+        const seconds = Number(raw)
+        if (Number.isFinite(seconds)) return Math.min(MAX_RETRY_AFTER_MS, Math.max(0, Math.round(seconds * 1_000)))
+        const date = Date.parse(raw)
+        if (!Number.isNaN(date)) return Math.min(MAX_RETRY_AFTER_MS, Math.max(0, date - Date.now()))
+    }
+    const message = error instanceof Error ? error.message : undefined
+    const hint = message?.match(/retry in (\d+(?:\.\d+)?)\s*s/i)
+    if (hint) return Math.min(MAX_RETRY_AFTER_MS, Math.round(Number(hint[1]) * 1_000))
+    return undefined
 }
 
 function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {

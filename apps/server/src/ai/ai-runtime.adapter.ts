@@ -72,12 +72,18 @@ const generateRuntime = generateText as unknown as (
 ) => Promise<{ text: string }>
 const chatStreamRuntime = streamText as unknown as (options: RuntimeOptions) => MinimalChatStreamResult
 
+// The SDK's default maxRetries (2 → 3 attempts) retries 429s with a backoff far
+// shorter than the provider's stated penalty, tripling quota consumption during
+// a rate-limit storm. One internal retry covers network blips; quota waits are
+// owned by provider-backoff.ts, which honors the provider's retry hint.
+const DEFAULT_MAX_RETRIES = 1
+
 export function runReviewStream(options: RuntimeOptions): MinimalStreamResult {
-    return streamRuntime(options)
+    return streamRuntime({ maxRetries: DEFAULT_MAX_RETRIES, ...options })
 }
 
 export function runReviewGenerate(options: RuntimeOptions): Promise<{ text: string }> {
-    return generateRuntime(options)
+    return generateRuntime({ maxRetries: DEFAULT_MAX_RETRIES, ...options })
 }
 
 /**
@@ -86,7 +92,7 @@ export function runReviewGenerate(options: RuntimeOptions): Promise<{ text: stri
  * the review pipeline, otherwise provider failures surface as blank replies.
  */
 export function runChatStream(options: RuntimeOptions): MinimalChatStreamResult {
-    return chatStreamRuntime(options)
+    return chatStreamRuntime({ maxRetries: DEFAULT_MAX_RETRIES, ...options })
 }
 
 // ── Embeddings ──────────────────────────────────────────────────────────────
@@ -98,6 +104,7 @@ type EmbedRuntimeOptions = {
     value?: string
     values?: string[]
     providerOptions?: Record<string, unknown>
+    maxRetries?: number
 }
 
 const embedRuntime = embed as unknown as (options: EmbedRuntimeOptions) => Promise<{ embedding: number[] }>
@@ -108,7 +115,7 @@ export async function runEmbedQuery(
     value: string,
     providerOptions: Record<string, unknown>,
 ): Promise<number[]> {
-    const { embedding } = await embedRuntime({ model, value, providerOptions })
+    const { embedding } = await embedRuntime({ model, value, providerOptions, maxRetries: DEFAULT_MAX_RETRIES })
     return embedding
 }
 
@@ -117,7 +124,7 @@ export async function runEmbedDocuments(
     values: string[],
     providerOptions: Record<string, unknown>,
 ): Promise<number[][]> {
-    const { embeddings } = await embedManyRuntime({ model, values, providerOptions })
+    const { embeddings } = await embedManyRuntime({ model, values, providerOptions, maxRetries: DEFAULT_MAX_RETRIES })
     return embeddings
 }
 

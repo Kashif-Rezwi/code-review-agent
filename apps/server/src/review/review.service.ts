@@ -33,7 +33,7 @@ import {
     stringValue,
 } from '../ai/ai-runtime.adapter'
 import { AI_POLICY } from '../ai/ai-policy'
-import { waitBeforeProviderRetry } from '../ai/provider-backoff'
+import { waitBeforeProviderRetry, withProviderRetry } from '../ai/provider-backoff'
 import type { SseConnection } from './review.sse'
 import { parseReviewText } from './review-parser.util'
 import { pickArgs, toolStartLabel, toolDoneLabel } from './review.formatter'
@@ -330,24 +330,30 @@ export class ReviewService {
         const { onChunk, onStepFinish, getToolCallCount } = this.buildStreamCallbacks(_send, pending, thinking, lintOutcomes)
 
         try {
-            const callDeadline = operationDeadline(signal, 'Pasted-code review', AI_POLICY.deadlineMs.codeReview)
-            let review: ReviewData
-            try {
-                // Linter tool only — the PR path pre-builds context and stays tool-free.
-                review = await runReviewAgent({
-                    model: this.aiService.defaultModel,
-                    system,
-                    userMessage,
-                    tools: this.buildCodeAgentTools(lintOutcomes),
-                    temperature: AI_POLICY.temperature.standard,
-                    maxOutputTokens: AI_POLICY.maxOutputTokens.code,
-                    maxSteps: AI_POLICY.maxSteps.code,
-                    signal: callDeadline.signal,
-                    callbacks: { onChunk, onStepFinish },
-                })
-            } finally {
-                callDeadline.dispose()
-            }
+            // Linter tool only — the PR path pre-builds context and stays tool-free.
+            // One transient-error retry (quota/429, provider-hint aware); parse
+            // failures and non-transient errors still throw immediately.
+            const review = await withProviderRetry(
+                async () => {
+                    const callDeadline = operationDeadline(signal, 'Pasted-code review', AI_POLICY.deadlineMs.codeReview)
+                    try {
+                        return await runReviewAgent({
+                            model: this.aiService.defaultModel,
+                            system,
+                            userMessage,
+                            tools: this.buildCodeAgentTools(lintOutcomes),
+                            temperature: AI_POLICY.temperature.standard,
+                            maxOutputTokens: AI_POLICY.maxOutputTokens.code,
+                            maxSteps: AI_POLICY.maxSteps.code,
+                            signal: callDeadline.signal,
+                            callbacks: { onChunk, onStepFinish },
+                        })
+                    } finally {
+                        callDeadline.dispose()
+                    }
+                },
+                { signal, label: 'Pasted-code review' },
+            )
 
             const merged = { ...review, appliedStandards: standards?.appliedNames }
             await this.completeReview(
