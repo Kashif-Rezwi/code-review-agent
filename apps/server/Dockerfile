@@ -49,9 +49,8 @@ RUN DATABASE_URL="postgresql://dummy:dummy@localhost/dummy" \
 # 3. Isolate the server and its production dependencies into a standalone folder
 RUN pnpm deploy --filter server --prod /app/deploy
 
-# 4. Generate Prisma client inside the isolated deploy folder.
-#    DATABASE_URL only needs to point at *any* valid-looking URL for codegen —
-#    the real URLs are injected at runtime via env_file.
+# 4. Generate Prisma client inside the isolated deploy folder — DATABASE_URL only needs
+#    any valid-looking URL for codegen; the real URLs are injected at runtime via env_file.
 RUN cp -r apps/server/prisma /app/deploy/prisma && \
     cd /app/deploy && \
     DATABASE_URL="postgresql://dummy:dummy@localhost/dummy" \

@@ -40,7 +40,7 @@ services:
       - key: GITHUB_TOKEN
         sync: false
       # Neon PostgreSQL (external) — set both in the Render dashboard.
-      # The API crash-loops at boot without a reachable DATABASE_URL.
+      # Without a reachable DATABASE_URL the API boots degraded; DB-backed features fail.
       - key: DATABASE_URL
         sync: false
       - key: DIRECT_URL

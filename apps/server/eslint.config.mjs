@@ -10,10 +10,8 @@ export default tseslint.config(
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
-  // Keep formatting and static analysis as separate checks. The repository's
-  // established server style intentionally differs from Prettier defaults;
-  // running Prettier as an ESLint rule made the documented lint command report
-  // thousands of unrelated formatting errors.
+  // Keep formatting and static analysis separate: the server's established style differs
+  // from Prettier defaults, so Prettier-as-an-ESLint-rule floods lint with unrelated errors.
   eslintConfigPrettier,
   {
     languageOptions: {
