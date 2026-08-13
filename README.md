@@ -86,7 +86,7 @@ Reviews are saved to your history and you can follow up with a chat interface to
 |---|---|
 | **Frontend** | Next.js 16 (App Router), NextAuth.js, Tailwind CSS, Monaco Editor |
 | **Backend** | NestJS (Node.js), BullMQ, ioredis |
-| **AI** | Vercel AI Gateway (`poolside/laguna-s-2.1-free` review tier · `poolside/laguna-s-2.1-free` fast tier) via AI SDK (`streamText`, `generateText`, `generateObject`) |
+| **AI** | Vercel AI Gateway (`deepseek/deepseek-v4-flash-0731` review tier · `deepseek/deepseek-v4-flash-0731` fast tier) via AI SDK (`streamText`, `generateText`, `generateObject`) |
 | **Embeddings** | `google/gemini-embedding-001` (truncated to 1,536 dims) via AI Gateway |
 | **Database** | PostgreSQL (Neon) with `pgvector` extension, Prisma ORM |
 | **Queue / Streaming** | Redis (BullMQ jobs + Redis Streams event log + cancellation channel) |
@@ -160,9 +160,11 @@ cp apps/server/.env.example apps/server/.env
 |---|---|
 | `DATABASE_URL` | Neon (or any Postgres) pooled connection string |
 | `DIRECT_URL` | Neon direct connection string (for Prisma migrations) |
-| `AI_GATEWAY_API_KEY` | Vercel AI Gateway key (required — one key reaches many providers, zero markup) |
-| `AI_REVIEW_MODEL` | *(Optional)* Review tier model, e.g. `poolside/laguna-s-2.1-free` |
-| `AI_FAST_MODEL` | *(Optional)* Fast tier (planner/chat) model, e.g. `poolside/laguna-s-2.1-free` |
+| `AI_ROUTER` | *(Optional)* Chat router: `vercel-gateway` (default) or `openrouter` — restart to switch |
+| `AI_GATEWAY_API_KEY` | Vercel AI Gateway key (required — serves embeddings always, plus chat when `AI_ROUTER=vercel-gateway`) |
+| `OPENROUTER_API_KEY` | *(Optional)* OpenRouter key — required when `AI_ROUTER=openrouter` |
+| `AI_REVIEW_MODEL` | *(Optional)* Review tier model ID in the active router's catalog, e.g. `deepseek/deepseek-v4-flash-0731` |
+| `AI_FAST_MODEL` | *(Optional)* Fast tier (planner/chat) model ID in the active router's catalog |
 | `REDIS_URL` | Redis connection string, e.g. `redis://localhost:6379` |
 | `FRONTEND_URL` | Frontend origin for CORS, e.g. `http://localhost:3000` |
 | `PORT` | Server port (default `4000`) |

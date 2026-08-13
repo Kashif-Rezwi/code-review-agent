@@ -10,7 +10,7 @@
 
 | Path | Package | Stack |
 |---|---|---|
-| `apps/server` | `server` | NestJS 11, Prisma 6 + pgvector (Neon), BullMQ + Redis (ioredis), AI SDK `ai` (bundles the Vercel AI Gateway provider) |
+| `apps/server` | `server` | NestJS 11, Prisma 6 + pgvector (Neon), BullMQ + Redis (ioredis), AI SDK `ai` (bundles the Vercel AI Gateway provider) + `@openrouter/ai-sdk-provider` — chat router selected via `AI_ROUTER`, embeddings pinned to the gateway |
 | `apps/client` | `client` | Next.js 16 (App Router, Turbopack), React 19, NextAuth 4 (GitHub OAuth, JWT sessions), Tailwind 4 |
 | `packages/ai` | `@cra/ai` | Prompts, clustering, embeddings (`chunkText`), linter tool factory, `PRFileSchema` |
 | `packages/types` | `@cra/types` | Zod contracts shared by server + client (`ReviewDataSchema`, `ReviewStreamEvent`) |

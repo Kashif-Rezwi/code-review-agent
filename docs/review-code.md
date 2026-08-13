@@ -33,7 +33,7 @@ ReviewService.streamAnalyzeCode(code, userId, conn, reviewId)
         │
         ▼
 Vercel AI SDK streamText()
-  ├── Model: poolside/laguna-s-2.1-free (temperature 0.2)
+  ├── Model: deepseek/deepseek-v4-flash-0731 (temperature 0.2)
   ├── System: expert code reviewer prompt + optional RAG standards
   ├── Tool: runLinter (ESLint in-process)
   ├── stopWhen: parseReviewText() succeeds OR step limit reached

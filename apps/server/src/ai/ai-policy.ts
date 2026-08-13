@@ -2,8 +2,8 @@
  * Central tuning surface for every AI call in the review pipeline.
  *
  * Values are provider/tier specific — tuned for the cheapest AI Gateway tier that
- * can run the pipeline reliably (`poolside/laguna-s-2.1-free` review tier + the
- * `poolside/laguna-s-2.1-free` fast tier). Revisit when changing AI_REVIEW_MODEL
+ * can run the pipeline reliably (`deepseek/deepseek-v4-flash-0731` review tier + the
+ * `deepseek/deepseek-v4-flash-0731` fast tier). Revisit when changing AI_REVIEW_MODEL
  * / AI_FAST_MODEL or the quota: a PR review fans out to 1 planner + N concurrent
  * workers (x attempts) + up to 2 synthesis calls, and every call counts against
  * the same gateway quota budget.

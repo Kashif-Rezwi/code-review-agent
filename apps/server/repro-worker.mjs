@@ -9,7 +9,7 @@ const env = Object.fromEntries(
 )
 const gateway = createGateway({ apiKey: env.AI_GATEWAY_API_KEY })
 const reviewModel = gateway.languageModel(env.AI_REVIEW_MODEL ?? 'google/gemini-3.5-flash')
-const fastModel = gateway.languageModel(env.AI_FAST_MODEL ?? 'poolside/laguna-s-2.1-free')
+const fastModel = gateway.languageModel(env.AI_FAST_MODEL ?? 'deepseek/deepseek-v4-flash-0731')
 
 // ── Ported verbatim from review.service.ts (budget logic) ────────────────────
 const BUDGET = { maxPatchChars: 8_000, maxClusterContextChars: 34_000 }

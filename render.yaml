@@ -29,7 +29,13 @@ services:
         value: 10000
       - key: FRONTEND_URL
         sync: false
+      # Chat router: vercel-gateway (default) | openrouter. Embeddings always
+      # stay on the Vercel AI Gateway, so AI_GATEWAY_API_KEY is required either way.
+      - key: AI_ROUTER
+        sync: false
       - key: AI_GATEWAY_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
         sync: false
       - key: GITHUB_TOKEN
         sync: false

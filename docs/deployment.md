@@ -75,7 +75,9 @@ A managed Redis instance. The `REDIS_URL` environment variable is automatically 
 | `PORT` | Set to `10000` in `render.yaml` |
 | `REDIS_URL` | Auto-injected from the managed Redis service |
 | `FRONTEND_URL` | The Vercel deployment URL (for CORS) |
-| `AI_GATEWAY_API_KEY` | Required — all AI calls fail without this |
+| `AI_GATEWAY_API_KEY` | Required — serves the embedding tier in every configuration, plus chat tiers when `AI_ROUTER=vercel-gateway` (the default) |
+| `AI_ROUTER` | *(Optional)* Chat router: `vercel-gateway` (default) or `openrouter` — restart to switch |
+| `OPENROUTER_API_KEY` | Required only when `AI_ROUTER=openrouter` — chat calls fail without it |
 | `DATABASE_URL` | Neon pooled connection string |
 | `DIRECT_URL` | Neon direct connection string (for Prisma) |
 | `GITHUB_TOKEN` | *(Optional)* For private repo PR reviews; declared as a secret in `render.yaml` |
@@ -239,7 +241,9 @@ Both apps have multi-stage Dockerfiles for minimal production images.
 | `PORT` | No | API port (default `4000`) |
 | `DATABASE_URL` | Yes | Neon pooled PostgreSQL URL |
 | `DIRECT_URL` | Yes | Neon direct PostgreSQL URL |
-| `AI_GATEWAY_API_KEY` | Yes | Vercel AI Gateway key — one key reaches many providers with zero markup on token prices; BYOK (bring-your-own provider keys) supported in the Vercel dashboard |
+| `AI_ROUTER` | No | Chat router selection: `vercel-gateway` (default) or `openrouter`; embeddings always stay on the Vercel AI Gateway |
+| `AI_GATEWAY_API_KEY` | Yes | Vercel AI Gateway key — one key reaches many providers with zero markup on token prices; BYOK (bring-your-own provider keys) supported in the Vercel dashboard. Required even with `AI_ROUTER=openrouter` (embeddings) |
+| `OPENROUTER_API_KEY` | Only when `AI_ROUTER=openrouter` | OpenRouter key — large free/cheap model catalog |
 | `REDIS_URL` | Yes | Redis connection string |
 | `GITHUB_CLIENT_ID` | No — client-only | Read by NextAuth in `apps/client`, never by the server |
 | `GITHUB_CLIENT_SECRET` | No — client-only | Same as above |
