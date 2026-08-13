@@ -124,10 +124,17 @@ function parseEvent(message: string): ReviewStreamEvent | undefined {
 }
 
 function reconstructTerminal(review: ReviewWithRelations): ReviewStreamEvent {
+    // The persisted trace ends with the original terminal event — recover the
+    // real duration/step count (and failure message) instead of emitting zeros.
+    const traceTerminal = lastTerminalFromTrace(review.traceLog)
+
     if (review.status === 'FAILED' || review.status === 'CANCELLED') {
+        const traceMessage = traceTerminal?.type === 'error' && typeof traceTerminal.message === 'string'
+            ? traceTerminal.message
+            : undefined
         return {
             type: 'error',
-            message: review.summary || (review.status === 'CANCELLED' ? 'Review cancelled' : 'Review failed'),
+            message: traceMessage ?? (review.summary || (review.status === 'CANCELLED' ? 'Review cancelled' : 'Review failed')),
         }
     }
 
@@ -153,10 +160,25 @@ function reconstructTerminal(review: ReviewWithRelations): ReviewStreamEvent {
     return {
         type: 'complete',
         review: ReviewDataSchema.parse(candidate),
-        durationMs: 0,
-        stepCount: Array.isArray(review.traceLog) ? review.traceLog.length : 0,
+        durationMs: typeof traceTerminal?.durationMs === 'number' ? traceTerminal.durationMs : 0,
+        stepCount: typeof traceTerminal?.stepCount === 'number'
+            ? traceTerminal.stepCount
+            : Array.isArray(review.traceLog) ? review.traceLog.length : 0,
         outcome: review.status === 'PARTIAL' ? 'partial' : 'complete',
     }
+}
+
+/** Find the terminal event (`complete`/`error`) the pipeline appended to the trace. */
+function lastTerminalFromTrace(traceLog: unknown): Record<string, unknown> | undefined {
+    if (!Array.isArray(traceLog)) return undefined
+    for (let index = traceLog.length - 1; index >= 0; index--) {
+        const entry: unknown = traceLog[index]
+        if (entry !== null && typeof entry === 'object' && !Array.isArray(entry)) {
+            const type = (entry as Record<string, unknown>).type
+            if (type === 'complete' || type === 'error') return entry as Record<string, unknown>
+        }
+    }
+    return undefined
 }
 
 function isStreamId(value?: string): value is string {

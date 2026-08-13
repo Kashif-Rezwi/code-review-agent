@@ -1,23 +1,5 @@
 import type { LintResult } from '../linter/linter.service'
 
-// ── Arg parsing helpers ───────────────────────────────────────────────────────
-// The AI SDK may deliver args as a parsed object, a JSON string, or undefined
-// depending on the SDK version and callback (onChunk vs onStepFinish).
-
-export function parseArgs(raw: unknown): Record<string, unknown> {
-    if (!raw) return {}
-    if (typeof raw === 'object' && !Array.isArray(raw)) return raw as Record<string, unknown>
-    if (typeof raw === 'string') {
-        try {
-            const parsed: unknown = JSON.parse(raw)
-            if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
-                return parsed as Record<string, unknown>
-            }
-        } catch { /* not JSON — ignore */ }
-    }
-    return {}
-}
-
 /** Pick the first args object that has actual keys (non-empty). */
 export function pickArgs(...candidates: Record<string, unknown>[]): Record<string, unknown> {
     for (const c of candidates) {
@@ -36,12 +18,6 @@ export function toolStartLabel(toolName: string, args: Record<string, unknown>):
         }
         default: return `Calling ${toolName}…`
     }
-}
-
-export function toolStartDetail(_toolName: string, _args: Record<string, unknown>): string | undefined {
-    void _toolName
-    void _args
-    return undefined
 }
 
 export function toolDoneLabel(
@@ -67,18 +43,5 @@ export function toolDoneLabel(
             return `${file} — ${status} · ${chars} chars`
         }
         default: return `${toolName} complete`
-    }
-}
-
-export function toolDoneDetail(
-    toolName: string,
-    _args: Record<string, unknown>,
-    _result: unknown,
-): string | undefined {
-    void _args
-    void _result
-    switch (toolName) {
-        case 'runLinter': return undefined
-        default: return undefined
     }
 }

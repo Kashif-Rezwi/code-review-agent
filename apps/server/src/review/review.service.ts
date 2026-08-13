@@ -25,23 +25,21 @@ import {
     operationDeadline,
     throwSignalReason,
 } from '../queue/review-cancellation.service'
-import { createLinterRuntimeTool, runReviewGenerate, runReviewStream, ProviderStreamError, type MinimalAiStep } from '../ai/ai-runtime.adapter'
+import {
+    asRecord,
+    createLinterRuntimeTool,
+    ProviderStreamError,
+    runReviewGenerate,
+    stringValue,
+} from '../ai/ai-runtime.adapter'
+import { AI_POLICY } from '../ai/ai-policy'
+import { waitBeforeProviderRetry } from '../ai/provider-backoff'
 import type { SseConnection } from './review.sse'
 import { parseReviewText } from './review-parser.util'
-import { parseArgs, pickArgs, toolStartLabel, toolStartDetail, toolDoneLabel, toolDoneDetail } from './review.formatter'
+import { pickArgs, toolStartLabel, toolDoneLabel } from './review.formatter'
 import { ThinkingStream } from './review.thinking'
+import { runReviewAgent } from './review.agent'
 import type { NormalizedPRFile, PRSnapshot } from '../github/github.types'
-
-/** Maximum agent loop steps per review type. */
-const AGENT_MAX_STEPS = { CODE: 10, WORKER: 5 } as const
-
-/** Maximum diff characters forwarded to each worker agent per file.
- *  Keeps prompts within token budget while preserving most of the useful signal. */
-const MAX_PATCH_CHARS = 8_000
-const MAX_CLUSTER_PROMPT_CHARS = 40_000
-const MAX_CLUSTER_CONTEXT_CHARS = 34_000
-const WORKER_CONCURRENCY = 3
-const WORKER_ATTEMPTS = 2
 
 type StandardsContext = Awaited<ReturnType<RagService['retrieveForContext']>>
 
@@ -83,10 +81,6 @@ export class ReviewService {
         // opportunistic; the two-second poller guarantees eventual handoff.
         void this.reviewDispatcher.kick()
         return session
-    }
-
-    async markFailed(reviewId: string, message: string, traceLog?: ReviewStreamEvent[]) {
-        return this.reviewRepository.markFailed(reviewId, message, traceLog)
     }
 
     /**
@@ -140,7 +134,7 @@ export class ReviewService {
             if (err instanceof ReviewCancelledError || signal?.reason instanceof ReviewCancelledError) return
             const message = this.publicErrorMessage(err)
             const event = { type: 'error' as const, message }
-            const transitioned = await this.markFailed(reviewId, message, [...conn.getTrace(), event])
+            const transitioned = await this.reviewRepository.markFailed(reviewId, message, [...conn.getTrace(), event])
             // A cancelled or already-terminal review must not receive a second,
             // contradictory terminal event.
             if (transitioned) conn.send(event)
@@ -150,7 +144,7 @@ export class ReviewService {
     // ── BullMQ Background Streaming ───────────────────────────────────────────
     // These orchestrate the pipeline and emit events directly to the Redis connection.
 
-    async streamAnalyzeCode(code: string, userId: string, conn: SseConnection, reviewId?: string, signal?: AbortSignal): Promise<void> {
+    private async streamAnalyzeCode(code: string, userId: string, conn: SseConnection, reviewId?: string, signal?: AbortSignal): Promise<void> {
         if (signal?.aborted) throwSignalReason(signal)
         const standards = await this.ragService.retrieveForContext(code, userId)
         if (signal?.aborted) throwSignalReason(signal)
@@ -161,7 +155,6 @@ export class ReviewService {
             })}`,
             standards,
             code,
-            'CODE',
             userId,
             conn,
             reviewId,
@@ -169,7 +162,7 @@ export class ReviewService {
         )
     }
 
-    async streamAnalyzeFromPR(prUrl: string, userId: string, conn: SseConnection, reviewId?: string, signal?: AbortSignal): Promise<void> {
+    private async streamAnalyzeFromPR(prUrl: string, userId: string, conn: SseConnection, reviewId?: string, signal?: AbortSignal): Promise<void> {
         if (signal?.aborted) throwSignalReason(signal)
         this.githubService.assertValidPRUrl(prUrl)
 
@@ -221,7 +214,7 @@ export class ReviewService {
             })
         }
 
-        const plannerDeadline = operationDeadline(signal, 'Planner', 30_000)
+        const plannerDeadline = operationDeadline(signal, 'Planner', AI_POLICY.deadlineMs.planner)
         let clusters: ClusterPlan[]
         try {
             clusters = await planClusters(files, this.aiService.defaultModel, plannerDeadline.signal)
@@ -251,7 +244,7 @@ export class ReviewService {
 
         const workerResults = await this.mapWithConcurrency(
             clusters,
-            WORKER_CONCURRENCY,
+            AI_POLICY.worker.concurrency,
             async (cluster): Promise<WorkerOutcome> => {
                 try {
                     const result = await this.runWorkerWithRetry(cluster, standards, send, signal)
@@ -312,112 +305,54 @@ export class ReviewService {
         )
     }
 
-    /** AI streaming phase — runs the model and emits thinking/tool/complete events. */
+    /** AI streaming phase — runs the pasted-code agent and emits thinking/tool/complete events. */
     private async streamAnalysis(
         userMessage: string,
         standards: Awaited<ReturnType<RagService['retrieveForContext']>>,
         input: string,
-        reviewType: 'CODE',
         userId: string,
         conn: SseConnection,
         reviewId?: string,
         signal?: AbortSignal,
     ): Promise<void> {
-        if (reviewType === 'CODE') {
-            conn.send({ type: 'start' as const })
-        }
+        conn.send({ type: 'start' as const })
 
         const _send = conn.send
         const _startedAt = conn.startedAt
 
         const system = buildSystemPrompt('CODE')
 
-        // PR reviews with pre-built context only need a few steps (no file-fetch tools).
-        // Code reviews may still call runLinter.
-        const MAX_STEPS = AGENT_MAX_STEPS[reviewType]
-
         const pending = new Map<string, { toolName: string; args: Record<string, unknown>; startedAt: number }>()
         const thinking = new ThinkingStream(_send)
         // Structured lint outcomes keyed by the exact code string: the model receives
         // only the plain-text `output`, while the SSE labeler reads real counts from here.
         const lintOutcomes = new Map<string, LintResult>()
-        const { onChunk, onStepFinish, getToolCallCount, onError, getProviderError } = this.buildStreamCallbacks(_send, pending, thinking, lintOutcomes)
+        const { onChunk, onStepFinish, getToolCallCount } = this.buildStreamCallbacks(_send, pending, thinking, lintOutcomes)
 
         try {
-            const callDeadline = operationDeadline(signal, 'Pasted-code review', 120_000)
-            const result = runReviewStream({
-                model: this.aiService.defaultModel,
-                system,
-                messages: [{ role: 'user', content: userMessage }],
-                // PR path: NO tools — context is fully pre-built from diffs. Giving the
-                // model tools in this path causes it to run runLinter on every file.
-                // Code path: linter only.
-                tools: this.buildCodeAgentTools(lintOutcomes),
-                temperature: 0.2,
-                abortSignal: callDeadline.signal,
-                maxOutputTokens: 8_192,
-
-                stopWhen: ({ steps }: { steps: MinimalAiStep[] }) => {
-                    const lastText = steps.at(-1)?.text ?? ''
-                    try {
-                        parseReviewText(lastText)
-                        return true
-                    } catch {
-                        /* keep going */
-                    }
-                    return steps.length >= MAX_STEPS
-                },
-
-                prepareStep: ({ steps }: { steps: MinimalAiStep[] }) => {
-                    if (steps.length >= MAX_STEPS - 1) return { toolChoice: 'none' as const }
-                    return {}
-                },
-
-                onChunk,
-                onStepFinish,
-                onError,
-            })
-
-            let finalText: string
-            let steps: MinimalAiStep[]
+            const callDeadline = operationDeadline(signal, 'Pasted-code review', AI_POLICY.deadlineMs.codeReview)
+            let review: ReviewData
             try {
-                ;[finalText, steps] = await Promise.all([result.text, result.steps])
-            } catch (error) {
-                if (callDeadline.signal.aborted) throwSignalReason(callDeadline.signal)
-                throw error
+                // Linter tool only — the PR path pre-builds context and stays tool-free.
+                review = await runReviewAgent({
+                    model: this.aiService.defaultModel,
+                    system,
+                    userMessage,
+                    tools: this.buildCodeAgentTools(lintOutcomes),
+                    temperature: AI_POLICY.temperature.standard,
+                    maxOutputTokens: AI_POLICY.maxOutputTokens.code,
+                    maxSteps: AI_POLICY.maxSteps.code,
+                    signal: callDeadline.signal,
+                    callbacks: { onChunk, onStepFinish },
+                })
             } finally {
                 callDeadline.dispose()
-            }
-
-            // A provider-side stream error (billing, quota, auth, …) resolves with
-            // empty text — fail truthfully instead of misreporting unparseable output.
-            const providerFailure = getProviderError()
-            if (providerFailure) throw providerFailure
-
-            const allTexts = [finalText, ...steps.map((s) => s.text).reverse()].filter((t) => t.trim())
-            let review: ReviewData | undefined
-            for (const text of allTexts) {
-                try {
-                    review = parseReviewText(text)
-                    break
-                } catch {
-                    /* try next */
-                }
-            }
-
-            if (!review) {
-                const message = 'The model did not return a valid review. Please try again.'
-                this.logger.error(
-                    `Stream: review parsing failed — steps: ${steps.length}, ` +
-                        `last text: ${JSON.stringify(finalText.slice(0, 300))}`,
-                )
-                throw new InternalServerErrorException(message)
             }
 
             const merged = { ...review, appliedStandards: standards?.appliedNames }
             await this.completeReview(
                 input,
-                reviewType,
+                'CODE',
                 merged,
                 userId,
                 conn,
@@ -481,9 +416,9 @@ export class ReviewService {
         const context = this.buildClusterContext(cluster, standards?.content)
         let lastError: unknown
 
-        for (let attempt = 1; attempt <= WORKER_ATTEMPTS; attempt++) {
+        for (let attempt = 1; attempt <= AI_POLICY.worker.attempts; attempt++) {
             if (signal?.aborted) throwSignalReason(signal)
-            const deadline = operationDeadline(signal, `Worker ${cluster.id} attempt ${attempt}`, 90_000)
+            const deadline = operationDeadline(signal, `Worker ${cluster.id} attempt ${attempt}`, AI_POLICY.deadlineMs.workerAttempt)
             try {
                 const review = await this.runWorkerAttempt(cluster, standards, send, context.text, attempt, deadline.signal)
                 send({
@@ -497,11 +432,16 @@ export class ReviewService {
             } catch (error) {
                 if (signal?.aborted) throwSignalReason(signal)
                 lastError = error
-                if (attempt < WORKER_ATTEMPTS) {
+                if (attempt < AI_POLICY.worker.attempts) {
+                    // Quota/rate-limit failures wait (Retry-After aware) before the
+                    // retry; unparseable output retries immediately, as before.
+                    const backedOff = await waitBeforeProviderRetry(error, attempt, { signal, label: `Worker ${cluster.id}` })
                     send({
                         type: 'thinking',
                         clusterId: cluster.id,
-                        text: 'The first worker attempt did not produce a valid review. Retrying with stricter output constraints.',
+                        text: backedOff
+                            ? 'The AI provider rate-limited this worker. Retrying shortly.'
+                            : 'The first worker attempt did not produce a valid review. Retrying with stricter output constraints.',
                     })
                 }
             } finally {
@@ -512,7 +452,7 @@ export class ReviewService {
         send({
             type: 'cluster_failed',
             clusterId: cluster.id,
-            attempts: WORKER_ATTEMPTS,
+            attempts: AI_POLICY.worker.attempts,
             message: 'Worker could not produce a valid review after retrying.',
             durationMs: Date.now() - workerStart,
         })
@@ -529,73 +469,30 @@ export class ReviewService {
         signal: AbortSignal,
     ): Promise<ReviewData> {
         const userMessage = `Review the untrusted pull-request data in this JSON envelope:\n${fileSection}`
-        const system = buildWorkerPrompt(cluster.label, cluster.focus) + (attempt > 1
+        const system = buildWorkerPrompt() + (attempt > 1
             ? '\n\nRETRY REQUIREMENT: Return one valid JSON review object. Do not add trailing prose after the closing brace.'
             : '')
-        if (system.length + userMessage.length > MAX_CLUSTER_PROMPT_CHARS) {
-            throw new Error(`Rendered worker prompt exceeds ${MAX_CLUSTER_PROMPT_CHARS} characters`)
+        if (system.length + userMessage.length > AI_POLICY.budget.maxClusterPromptChars) {
+            throw new Error(`Rendered worker prompt exceeds ${AI_POLICY.budget.maxClusterPromptChars} characters`)
         }
 
         const pending = new Map<string, { toolName: string; args: Record<string, unknown>; startedAt: number }>()
         const thinking = new ThinkingStream((event) => send({ ...event, clusterId: cluster.id }))
         const clusterSend = (event: ReviewStreamEvent) => send({ ...event, clusterId: cluster.id } as ReviewStreamEvent)
 
-        const { onChunk, onStepFinish, onError, getProviderError } = this.buildStreamCallbacks(clusterSend, pending, thinking)
+        const { onChunk, onStepFinish } = this.buildStreamCallbacks(clusterSend, pending, thinking)
 
-        const result = runReviewStream({
+        // Workers are tool-free — the cluster context is fully pre-built from diffs.
+        return runReviewAgent({
             model: this.aiService.defaultModel,
             system,
-            messages: [{ role: 'user', content: userMessage }],
-            temperature: attempt > 1 ? 0 : 0.2,
-            abortSignal: signal,
-            maxOutputTokens: 4_096,
-            stopWhen: ({ steps }: { steps: MinimalAiStep[] }) => {
-                const lastText = steps.at(-1)?.text ?? ''
-                try {
-                    parseReviewText(lastText)
-                    return true
-                } catch {
-                    /* keep going */
-                }
-                return steps.length >= AGENT_MAX_STEPS.WORKER
-            },
-            prepareStep: ({ steps }: { steps: MinimalAiStep[] }) => {
-                if (steps.length >= AGENT_MAX_STEPS.WORKER - 1) return { toolChoice: 'none' as const }
-                return {}
-            },
-            onChunk,
-            onStepFinish,
-            onError,
+            userMessage,
+            temperature: attempt > 1 ? AI_POLICY.temperature.retry : AI_POLICY.temperature.standard,
+            maxOutputTokens: AI_POLICY.maxOutputTokens.worker,
+            maxSteps: AI_POLICY.maxSteps.worker,
+            signal,
+            callbacks: { onChunk, onStepFinish },
         })
-
-        let finalText: string
-        let steps: MinimalAiStep[]
-        try {
-            ;[finalText, steps] = await Promise.all([result.text, result.steps])
-        } catch (error) {
-            if (signal.aborted) throwSignalReason(signal)
-            throw error
-        }
-
-        const providerFailure = getProviderError()
-        if (providerFailure) throw providerFailure
-
-        const allTexts = [finalText, ...steps.map((s) => s.text).reverse()].filter((t) => t.trim())
-        let review: ReviewData | undefined
-        for (const text of allTexts) {
-            try {
-                review = parseReviewText(text)
-                break
-            } catch {
-                /* try next */
-            }
-        }
-
-        if (!review) {
-            throw new Error(`Worker agent for cluster "${cluster.id}" did not return a valid review.`)
-        }
-
-        return review
     }
 
     private buildClusterContext(cluster: ClusterPlan, standardsContent?: string): { text: string; truncatedFiles: string[] } {
@@ -616,9 +513,9 @@ export class ReviewService {
             files: metadata,
         }
         const metadataSize = JSON.stringify(baseEnvelope).length
-        const available = Math.max(0, MAX_CLUSTER_CONTEXT_CHARS - 1_000 - metadataSize)
+        const available = Math.max(0, AI_POLICY.budget.maxClusterContextChars - 1_000 - metadataSize)
         const fairBudget = textFiles.length > 0
-            ? Math.min(MAX_PATCH_CHARS, Math.floor(available / textFiles.length))
+            ? Math.min(AI_POLICY.budget.maxPatchChars, Math.floor(available / textFiles.length))
             : 0
 
         const records = cluster.files.map((file) => {
@@ -642,7 +539,7 @@ export class ReviewService {
             files: records,
         }
         let text = JSON.stringify(envelope)
-        while (text.length > MAX_CLUSTER_CONTEXT_CHARS - 500) {
+        while (text.length > AI_POLICY.budget.maxClusterContextChars - 500) {
             const largest = records
                 .filter((record) => record.patch.length > 0)
                 .sort((left, right) => right.patch.length - left.patch.length || left.filename.localeCompare(right.filename))[0]
@@ -739,7 +636,9 @@ export class ReviewService {
     }
 
     /** Extract the onChunk / onStepFinish callbacks so streamAnalysis stays focused on control flow.
-     *  toolCallCount is owned here and exposed via getToolCallCount() to avoid a mutable closure leak. */
+     *  toolCallCount is owned here and exposed via getToolCallCount() to avoid a mutable closure leak.
+     *  Pinned AI SDK v6 shapes only: tool-call chunks carry `input`, text deltas carry
+     *  `text`, tool results carry `output`. */
     private buildStreamCallbacks(
         _send: (event: ReviewStreamEvent) => void,
         pending: Map<string, { toolName: string; args: Record<string, unknown>; startedAt: number }>,
@@ -747,7 +646,6 @@ export class ReviewService {
         lintOutcomes?: Map<string, LintResult>,
     ) {
         let toolCallCount = 0
-        let providerError: ProviderStreamError | undefined
 
         return {
             onChunk: ({ chunk: rawChunk }: { chunk: unknown }) => {
@@ -759,7 +657,7 @@ export class ReviewService {
                     if (!toolCallId || !toolName) return
                     // Flush any pending reasoning before showing a tool step.
                     thinking.flushPending()
-                    const args = parseArgs(chunk.input ?? chunk.args)
+                    const args = asRecord(chunk.input)
                     pending.set(toolCallId, {
                         toolName,
                         args,
@@ -771,13 +669,12 @@ export class ReviewService {
                         tool: toolName,
                         callId: toolCallId,
                         label: toolStartLabel(toolName, args),
-                        detail: toolStartDetail(toolName, args),
                     })
+                    return
                 }
 
-                const textDelta: unknown = chunk.text ?? chunk.textDelta
-                if (chunkType === 'text-delta' && typeof textDelta === 'string') {
-                    thinking.onDelta(textDelta)
+                if (chunkType === 'text-delta' && typeof chunk.text === 'string') {
+                    thinking.onDelta(chunk.text)
                 }
             },
 
@@ -790,38 +687,19 @@ export class ReviewService {
                     const p = pending.get(toolCallId)
                     pending.delete(toolCallId)
                     const tc = calls.find((candidate) => stringValue(candidate.toolCallId) === toolCallId)
-                    const tcArgs = parseArgs(tc?.input ?? tc?.args)
-                    const pArgs = p?.args ?? {}
-                    const trArgs = parseArgs(tr.input ?? tr.args)
-                    const args = pickArgs(pArgs, tcArgs, trArgs)
-                    const output = tr.output ?? tr.result
+                    const args = pickArgs(p?.args ?? {}, asRecord(tc?.input), asRecord(tr.input))
                     const startedAt = p?.startedAt ?? Date.now()
                     const toolName = stringValue(tr.toolName) ?? p?.toolName ?? 'tool'
                     _send({
                         type: 'tool_done' as const,
                         callId: toolCallId,
-                        label: toolDoneLabel(toolName, args, output, lintOutcomes),
-                        detail: toolDoneDetail(toolName, args, output),
+                        label: toolDoneLabel(toolName, args, tr.output, lintOutcomes),
                         durationMs: Date.now() - startedAt,
                     })
                 }
             },
 
             getToolCallCount: () => toolCallCount,
-
-            // The AI SDK never routes stream `error` parts to onChunk — they arrive
-            // via onError while the stream still resolves with empty text. Capture
-            // the error; the caller throws it once the stream has settled.
-            onError: ({ error }: { error: unknown }) => {
-                const providerRecord = asRecord(error)
-                const inner = asRecord(providerRecord.error) // providers nest the real error one level down
-                const code = stringValue(inner.code) ?? stringValue(inner.type)
-                    ?? stringValue(providerRecord.code) ?? stringValue(providerRecord.type)
-                const detail = stringValue(inner.message) ?? stringValue(providerRecord.message)
-                providerError = new ProviderStreamError(code, detail)
-            },
-
-            getProviderError: () => providerError,
         }
     }
 
@@ -852,15 +730,15 @@ export class ReviewService {
             })}`
 
         // ── Attempt 1: standard ───────────────────────────────────────────────
-        const firstDeadline = operationDeadline(signal, 'Synthesis attempt 1', 60_000)
+        const firstDeadline = operationDeadline(signal, 'Synthesis attempt 1', AI_POLICY.deadlineMs.synthesisAttempt)
         try {
             const { text } = await runReviewGenerate({
                 model: this.aiService.defaultModel,
                 system: baseSystem,
                 messages: [{ role: 'user', content: userMessage }],
-                temperature: 0.2,
+                temperature: AI_POLICY.temperature.standard,
                 abortSignal: firstDeadline.signal,
-                maxOutputTokens: 8_192,
+                maxOutputTokens: AI_POLICY.maxOutputTokens.synthesis,
             })
             return parseReviewText(text)
         } catch (err) {
@@ -869,12 +747,14 @@ export class ReviewService {
             }
             if (signal?.aborted) throwSignalReason(signal)
             this.logger.warn(`Synthesis attempt 1 failed: ${err instanceof Error ? err.message : err}`)
+            // Quota/rate-limit failures wait (Retry-After aware) before the retry.
+            await waitBeforeProviderRetry(err, 1, { signal, label: 'Synthesis' })
         } finally {
             firstDeadline.dispose()
         }
 
         // ── Attempt 2: temperature 0 + reinforced JSON-only instruction ───────
-        const secondDeadline = operationDeadline(signal, 'Synthesis attempt 2', 60_000)
+        const secondDeadline = operationDeadline(signal, 'Synthesis attempt 2', AI_POLICY.deadlineMs.synthesisAttempt)
         try {
             const { text } = await runReviewGenerate({
                 model: this.aiService.defaultModel,
@@ -884,9 +764,9 @@ export class ReviewService {
                     'Start with a line containing only { and end with a line containing only }. ' +
                     'Absolutely no text before or after the JSON.',
                 messages: [{ role: 'user', content: userMessage }],
-                temperature: 0,
+                temperature: AI_POLICY.temperature.retry,
                 abortSignal: secondDeadline.signal,
-                maxOutputTokens: 8_192,
+                maxOutputTokens: AI_POLICY.maxOutputTokens.synthesis,
             })
             return parseReviewText(text)
         } catch (err) {
@@ -966,14 +846,4 @@ export class ReviewService {
         this.logger.error(`Review pipeline failed: ${this.errMsg(err)}`)
         return 'Review failed unexpectedly. Please try again.'
     }
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-    return value !== null && typeof value === 'object' && !Array.isArray(value)
-        ? value as Record<string, unknown>
-        : {}
-}
-
-function stringValue(value: unknown): string | undefined {
-    return typeof value === 'string' ? value : undefined
 }

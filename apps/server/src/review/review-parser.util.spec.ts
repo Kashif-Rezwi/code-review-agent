@@ -1,6 +1,6 @@
 import { InternalServerErrorException } from '@nestjs/common';
 
-import { parseReviewText } from './review-parser.util';
+import { parseReviewFromSteps, parseReviewText } from './review-parser.util';
 
 const validReview = {
   summary: 'The change is safe and well scoped.',
@@ -54,6 +54,23 @@ describe('parseReviewText', () => {
       InternalServerErrorException,
     );
     expect(() => parseReviewText(refusal)).toThrow(
+      'The model did not return a valid review. Please try again.',
+    );
+  });
+});
+
+describe('parseReviewFromSteps', () => {
+  it('prefers the final text when it parses', () => {
+    expect(parseReviewFromSteps(JSON.stringify(validReview), [{ text: 'garbage' }])).toEqual(validReview);
+  });
+
+  it('falls back to the most recent parseable step text', () => {
+    const steps = [{ text: 'early prose' }, { text: JSON.stringify(validReview) }];
+    expect(parseReviewFromSteps('', steps)).toEqual(validReview);
+  });
+
+  it('throws when neither the final text nor any step parses', () => {
+    expect(() => parseReviewFromSteps('nope', [{ text: 'still nope' }])).toThrow(
       'The model did not return a valid review. Please try again.',
     );
   });

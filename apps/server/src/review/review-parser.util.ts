@@ -56,6 +56,24 @@ export function parseReviewText(text: string): ReviewData {
 }
 
 /**
+ * Extract a review from an agent stream's settled output: the final text first,
+ * then each step's text last-to-first (the most recent candidate is the most
+ * likely real answer). Throws only when nothing parses — callers retry or fail.
+ */
+export function parseReviewFromSteps(
+    finalText: string,
+    steps: ReadonlyArray<{ text: string }>,
+): ReviewData {
+    const candidates = [finalText, ...steps.map((step) => step.text).reverse()].filter((text) => text.trim())
+    for (const text of candidates) {
+        try {
+            return parseReviewText(text)
+        } catch { /* try next candidate */ }
+    }
+    throw new InternalServerErrorException('The model did not return a valid review. Please try again.')
+}
+
+/**
  * Walk `text` from `start` (which must be `{`) to find its balanced closing `}`.
  * Correctly skips `{` and `}` characters inside JSON string values.
  * Returns the index of the closing `}`, or -1 if the braces are unbalanced.

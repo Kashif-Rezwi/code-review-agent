@@ -2,6 +2,8 @@ import { Injectable } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { createGoogleGenerativeAI } from '@ai-sdk/google'
 import type { LanguageModel, EmbeddingModel } from 'ai'
+import { runEmbedDocuments, runEmbedQuery } from './ai-runtime.adapter'
+import { withProviderRetry } from './provider-backoff'
 
 /**
  * Embedding output dimensionality — MUST stay in sync with the pgvector column
@@ -35,11 +37,31 @@ export class AiService {
         return this.google(this.chatModelId)
     }
 
-    get provider() {
-        return this.google
+    private get embeddingModel(): EmbeddingModel {
+        return this.google.embedding(this.embeddingModelId)
     }
 
-    get embeddingModel(): EmbeddingModel {
-        return this.google.embedding(this.embeddingModelId)
+    /**
+     * Embed a retrieval query — task-typed and truncated to the pgvector column
+     * width. One retry on transient provider errors (429/5xx); callers degrade
+     * gracefully when the call still fails.
+     */
+    embedQuery(text: string): Promise<number[]> {
+        return withProviderRetry(
+            () => runEmbedQuery(this.embeddingModel, text, {
+                google: { outputDimensionality: EMBEDDING_DIMENSIONS, taskType: 'RETRIEVAL_QUERY' },
+            }),
+            { label: 'Embedding query' },
+        )
+    }
+
+    /** Embed document chunks for ingestion — same dimensions/task typing as queries. */
+    embedDocuments(chunks: string[]): Promise<number[][]> {
+        return withProviderRetry(
+            () => runEmbedDocuments(this.embeddingModel, chunks, {
+                google: { outputDimensionality: EMBEDDING_DIMENSIONS, taskType: 'RETRIEVAL_DOCUMENT' },
+            }),
+            { label: 'Document embedding' },
+        )
     }
 }

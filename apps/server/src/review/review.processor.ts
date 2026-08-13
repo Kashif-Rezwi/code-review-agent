@@ -1,4 +1,5 @@
 import { Processor, WorkerHost, OnWorkerEvent } from '@nestjs/bullmq'
+import { Logger } from '@nestjs/common'
 import { Job } from 'bullmq'
 import { ReviewService } from './review.service'
 import { RedisService } from '../queue/redis.service'
@@ -6,6 +7,7 @@ import { ReviewRepository } from './review.repository'
 import { createRedisEmitter } from '../queue/review.emitter'
 import type { ReviewJobPayload } from '../queue/queue.service'
 import { ReviewCancellationService } from '../queue/review-cancellation.service'
+import { AI_POLICY } from '../ai/ai-policy'
 
 /**
  * Executes AI pipelines in the background.
@@ -13,6 +15,8 @@ import { ReviewCancellationService } from '../queue/review-cancellation.service'
  */
 @Processor('review-jobs')
 export class ReviewProcessor extends WorkerHost {
+    private readonly logger = new Logger(ReviewProcessor.name)
+
     constructor(
         private readonly reviewService: ReviewService,
         private readonly redisService: RedisService,
@@ -31,7 +35,7 @@ export class ReviewProcessor extends WorkerHost {
         if (!job) return
         const { reviewId } = job.data
         const publicMessage = 'Background review worker failed. Please try again.'
-        console.error(`Background review job ${reviewId} failed`, error)
+        this.logger.error(`Background review job ${reviewId} failed: ${error.message}`, error.stack)
 
         // Force Postgres state sync. If another terminal transition already won
         // (for example, cancellation), do not append a contradictory Redis event.
@@ -42,7 +46,10 @@ export class ReviewProcessor extends WorkerHost {
                 publicMessage,
             )
         } catch (persistenceError) {
-            console.error('Failed to persist terminal failure state', persistenceError)
+            this.logger.error(
+                'Failed to persist terminal failure state',
+                persistenceError instanceof Error ? persistenceError.stack : String(persistenceError),
+            )
             // The DB is unavailable, but the live client still needs a terminal
             // signal instead of spinning forever.
             transitioned = true
@@ -55,16 +62,24 @@ export class ReviewProcessor extends WorkerHost {
             const msg = JSON.stringify({ type: 'error', message: publicMessage })
             await this.redisService.emitEvent(reviewId, msg)
         } catch (e) {
-            console.error('Failed to emit terminal failure event', e)
+            this.logger.error('Failed to emit terminal failure event', e instanceof Error ? e.stack : String(e))
         }
     }
 
     async process(job: Job<ReviewJobPayload>): Promise<void> {
         const { reviewId, type, input, userId } = job.data
-        const execution = await this.cancellation.createExecution(reviewId, 5 * 60_000)
+        const execution = await this.cancellation.createExecution(reviewId, AI_POLICY.deadlineMs.total)
 
-        // 1. Create a Redis-backed Emitter that perfectly implements SseConnection
-        const conn = createRedisEmitter(this.redisService, reviewId)
+        // 1. Create a Redis-backed Emitter that perfectly implements SseConnection.
+        //    A dead event stream aborts the pipeline early rather than finishing
+        //    an expensive LLM run whose progress events are being dropped.
+        const conn = createRedisEmitter(this.redisService, reviewId, (writeError) => {
+            this.logger.error(
+                `Review ${reviewId} event stream append failed — aborting pipeline: ` +
+                (writeError instanceof Error ? writeError.message : String(writeError)),
+            )
+            execution.abort(new Error('Review event stream unavailable'))
+        })
 
         // 2. Run the pipeline. Errors are caught internally by runForQueue,
         // which emits { type: "error" } over Redis and updates the DB.

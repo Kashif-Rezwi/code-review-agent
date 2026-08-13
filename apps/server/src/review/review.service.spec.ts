@@ -111,7 +111,7 @@ function createHarness(): Harness {
         githubService as unknown as GithubService,
         { lint: jest.fn() } as unknown as LinterService,
         { retrieveForContext: jest.fn().mockResolvedValue(null) } as unknown as RagService,
-        { defaultModel: { modelId: 'configured-test-model' }, provider: jest.fn() } as unknown as AiService,
+        { defaultModel: { modelId: 'configured-test-model' } } as unknown as AiService,
         { enqueue: jest.fn(), removeJob: jest.fn() } as unknown as QueueService,
         { emitEvent: jest.fn() } as unknown as RedisService,
         { kick: jest.fn() } as never,
@@ -187,6 +187,28 @@ describe('ReviewService coverage-safe PR orchestration', () => {
             'The AI provider returned an error. Please try again later.',
             expect.any(Array),
         )
+    })
+
+    it('backs off and retries a worker when the provider rate-limits the stream', async () => {
+        const harness = createHarness()
+        harness.githubService.fetchPRSnapshot.mockResolvedValue(snapshot(3))
+        let call = 0
+        streamTextMock.mockImplementation((options: { onError?: (arg: { error: unknown }) => void }) => {
+            call++
+            if (call === 1) {
+                options.onError?.({
+                    error: { error: { code: 429, status: 'RESOURCE_EXHAUSTED', message: 'Quota exceeded' } },
+                })
+                return workerResult('')
+            }
+            return workerResult(JSON.stringify(VALID_REVIEW))
+        })
+
+        await harness.service.runForQueue(REVIEW_ID, 'PR', PR_URL, USER_ID, harness.conn)
+
+        expect(streamTextMock).toHaveBeenCalledTimes(2)
+        expect(harness.events.some((event) => event.type === 'thinking' && event.text.includes('rate-limited'))).toBe(true)
+        expect(harness.events).toContainEqual(expect.objectContaining({ type: 'complete', outcome: 'complete' }))
     })
 
     it('uses the same clustered path for a public-diff snapshot and never invokes the generic PR agent', async () => {

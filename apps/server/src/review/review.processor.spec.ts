@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import type { Job } from 'bullmq';
 
 import type { ReviewJobPayload } from '../queue/queue.service';
@@ -23,9 +24,10 @@ describe('ReviewProcessor failed-job terminal signaling', () => {
   let processor: ReviewProcessor;
   let reviewRepository: { markFailed: jest.Mock };
   let redisService: { emitEvent: jest.Mock };
+  let loggerError: jest.SpyInstance;
 
   beforeEach(() => {
-    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    loggerError = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
     reviewRepository = { markFailed: jest.fn() };
     redisService = { emitEvent: jest.fn().mockResolvedValue(undefined) };
     processor = new ReviewProcessor(
@@ -68,14 +70,13 @@ describe('ReviewProcessor failed-job terminal signaling', () => {
 
   it('still emits a terminal Redis error when failure persistence rejects', async () => {
     const persistenceError = new Error('database unavailable');
-    const consoleError = jest.mocked(console.error);
     reviewRepository.markFailed.mockRejectedValue(persistenceError);
 
     await processor.onFailed(createJob(), new Error('worker crashed'));
 
-    expect(consoleError).toHaveBeenCalledWith(
+    expect(loggerError).toHaveBeenCalledWith(
       'Failed to persist terminal failure state',
-      persistenceError,
+      persistenceError.stack,
     );
     expect(redisService.emitEvent).toHaveBeenCalledWith(
       REVIEW_ID,

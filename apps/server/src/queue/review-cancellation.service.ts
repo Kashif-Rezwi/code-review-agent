@@ -26,6 +26,8 @@ export class OperationDeadlineError extends Error {
 
 export interface ReviewExecution {
     signal: AbortSignal
+    /** Abort the execution early (e.g. the event stream died mid-pipeline). */
+    abort: (reason?: unknown) => void
     dispose: () => Promise<void>
 }
 
@@ -69,6 +71,9 @@ export class ReviewCancellationService {
 
         return {
             signal: controller.signal,
+            abort: (reason?: unknown) => {
+                if (!controller.signal.aborted) controller.abort(reason ?? new Error('Operation aborted'))
+            },
             dispose: async () => {
                 if (disposed) return
                 disposed = true

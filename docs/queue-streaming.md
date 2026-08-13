@@ -211,7 +211,8 @@ Worker concurrency is deliberately **1** (the BullMQ default) — a hard cost ca
 | Client connects after the review completed | Stream drains with `blockMs = 0`; terminal event **reconstructed from Postgres** — works even after the 24h stream TTL |
 | Client connects before the job starts | Stream is empty; blocking reads hold the connection; heartbeats every 15s until events arrive |
 | Browser drops mid-review | Next connect sends `Last-Event-ID`; replay resumes after that id (client dedupes by id) |
-| Redis down mid-review | Emitter captures the append failure; `flush()` rethrows before job completion → job fails → `onFailed` forces `FAILED` + best-effort terminal event |
+| Redis down mid-review | Emitter captures the first append failure and aborts the pipeline early (no wasted LLM spend); `flush()` rethrows before job completion → job fails → `onFailed` forces `FAILED` + best-effort terminal event |
+| AI provider rate-limits a worker or synthesis call (429/5xx/quota) | Retry-After-aware backoff before the built-in retry (`ai/provider-backoff.ts`); unparseable-output retries still fire immediately |
 | Node process restarts mid-job | BullMQ `failed` event → review forced `FAILED` + terminal error event appended |
 | Dispatch keeps failing (e.g. Redis down at enqueue) | Backoff 1s→16s across 6 attempts → review `FAILED` + terminal error event |
 | Cancel while queued | `removeJob` drops the pending BullMQ job; review → `CANCELLED`; terminal event emitted |
@@ -241,8 +242,4 @@ Worker concurrency is deliberately **1** (the BullMQ default) — a hard cost ca
 | [`apps/server/src/health.controller.ts`](../apps/server/src/health.controller.ts) | `/health` dependency probes |
 | [`apps/client/lib/use-review-stream.ts`](../apps/client/lib/use-review-stream.ts) | Client SSE consumer (resume, backoff, dedupe, heartbeat skip) |
 | [`apps/client/lib/sse.ts`](../apps/client/lib/sse.ts) | SSE frame parser (multiline `data:`, `id:` capture, CRLF, comments) |
-
-| `githubToken` | server PAT validity (`GithubService.getTokenHealth()`) |
-
-Each dependency reads `valid` / `invalid` / `unchecked`. The client also polls `/health` for its server-wakeup UX (Render free-tier cold starts).
 

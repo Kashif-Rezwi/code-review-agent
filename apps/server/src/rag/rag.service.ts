@@ -1,10 +1,9 @@
 import { Injectable, Logger, BadRequestException, NotFoundException } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
-import { embed, embedMany } from 'ai'
 import { chunkText } from '@cra/ai'
 import { RagRepository, RetrievedStandards } from './rag.repository'
 import { extractText } from './document-parser.util'
-import { AiService, EMBEDDING_DIMENSIONS } from '../ai/ai.service'
+import { AiService } from '../ai/ai.service'
 
 @Injectable()
 export class RagService {
@@ -32,15 +31,9 @@ export class RagService {
         }
 
         this.logger.log(`[RAG Ingest] Extracted ${chunks.length} chunks. Generating embeddings...`)
-        // One batched API call for all chunks — far fewer round-trips than a loop
-        const { embeddings } = await embedMany({
-            model: this.aiService.embeddingModel,
-            values: chunks,
-            // Truncate to the pgvector column width and tag chunks as documents
-            providerOptions: {
-                google: { outputDimensionality: EMBEDDING_DIMENSIONS, taskType: 'RETRIEVAL_DOCUMENT' },
-            },
-        })
+        // One batched call for all chunks — far fewer round-trips than a loop.
+        // Dimensions/task typing live in AiService (the provider boundary).
+        const embeddings = await this.aiService.embedDocuments(chunks)
 
         // Delegate persistence and SQL vectors to Repository
         this.logger.log(`[RAG Ingest SUCCESS] Persisting ${chunks.length} vector chunks to pgvector.`)
@@ -68,13 +61,7 @@ export class RagService {
             const preview = queryText.replace(/\s+/g, ' ').trim()
             const excerpt = preview.length > 120 ? `${preview.slice(0, 120)}…` : preview
             this.logger.log(`[RAG Retrieve] Encoding context query (${queryText.length} chars): "${excerpt}"`)
-            const { embedding } = await embed({
-                model: this.aiService.embeddingModel,
-                value: queryText,
-                providerOptions: {
-                    google: { outputDimensionality: EMBEDDING_DIMENSIONS, taskType: 'RETRIEVAL_QUERY' },
-                },
-            })
+            const embedding = await this.aiService.embedQuery(queryText)
 
             const standards = await this.ragRepository.querySimilarChunks(embedding, userId)
 
