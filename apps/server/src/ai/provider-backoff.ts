@@ -73,7 +73,8 @@ function statusCodeOf(error: unknown): number | undefined {
     const record = asRecord(error)
     const inner = asRecord(record.error)
     const last = asRecord(record.lastError)
-    for (const candidate of [record.statusCode, record.status, inner.statusCode, inner.status, last.statusCode, last.status]) {
+    const cause = asRecord(record.cause)
+    for (const candidate of [record.statusCode, record.status, inner.statusCode, inner.status, last.statusCode, last.status, cause.statusCode, cause.status]) {
         if (typeof candidate === 'number' && Number.isFinite(candidate)) return candidate
     }
     return undefined
@@ -86,7 +87,7 @@ function statusCodeOf(error: unknown): number | undefined {
  */
 function retryAfterMs(error: unknown): number | undefined {
     const record = asRecord(error)
-    for (const holder of [record, asRecord(record.error), asRecord(record.lastError)]) {
+    for (const holder of [record, asRecord(record.error), asRecord(record.lastError), asRecord(record.cause)]) {
         const raw = stringValue(asRecord(holder.responseHeaders)['retry-after'])
         if (!raw) continue
         const seconds = Number(raw)

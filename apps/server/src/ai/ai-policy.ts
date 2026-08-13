@@ -1,10 +1,12 @@
 /**
  * Central tuning surface for every AI call in the review pipeline.
  *
- * Values are provider/tier specific — tuned for the Google AI Studio free tier
- * (`gemini-3.5-flash`). Revisit when changing AI_CHAT_MODEL or moving to a paid
- * quota: a PR review fans out to 1 planner + N concurrent workers (x attempts)
- * + up to 2 synthesis calls, and every call counts against the same RPM budget.
+ * Values are provider/tier specific — tuned for the cheapest AI Gateway tier that
+ * can run the pipeline reliably (`poolside/laguna-s-2.1-free` review tier + the
+ * `poolside/laguna-s-2.1-free` fast tier). Revisit when changing AI_REVIEW_MODEL
+ * / AI_FAST_MODEL or the quota: a PR review fans out to 1 planner + N concurrent
+ * workers (x attempts) + up to 2 synthesis calls, and every call counts against
+ * the same gateway quota budget.
  */
 
 function envInt(name: string, fallback: number, min: number, max: number): number {
@@ -22,7 +24,12 @@ export const AI_POLICY = {
     /** 0.2 balances determinism with genuine analysis; retries go fully deterministic. */
     temperature: { standard: 0.2, retry: 0, chat: 0.3 },
 
-    maxOutputTokens: { code: 8_192, worker: 4_096, synthesis: 8_192, chat: 2_048 },
+    /**
+     * Output-token ceilings. Gemini flash models spend hidden *thinking* tokens
+     * against the same budget, so caps include reasoning headroom — a 4,096 worker
+     * cap truncated mid-analysis (no JSON ever emitted) on real PRs; 8,192 passed.
+     */
+    maxOutputTokens: { code: 8_192, worker: 8_192, synthesis: 8_192, chat: 4_096 },
 
     deadlineMs: {
         /** Whole-job ceiling enforced by ReviewProcessor. */

@@ -31,7 +31,10 @@ function createHarness() {
     }
     const service = new HistoryService(
         historyRepository as unknown as HistoryRepository,
-        { defaultModel: { modelId: 'test-model' } } as unknown as AiService,
+        {
+            defaultModel: { modelId: 'test-model' },
+            fastModel: { modelId: 'test-model' },
+        } as unknown as AiService,
     )
     return { service, historyRepository }
 }

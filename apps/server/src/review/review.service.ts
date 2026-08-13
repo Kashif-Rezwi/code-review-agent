@@ -217,7 +217,7 @@ export class ReviewService {
         const plannerDeadline = operationDeadline(signal, 'Planner', AI_POLICY.deadlineMs.planner)
         let clusters: ClusterPlan[]
         try {
-            clusters = await planClusters(files, this.aiService.defaultModel, plannerDeadline.signal)
+            clusters = await planClusters(files, this.aiService.fastModel, plannerDeadline.signal)
         } catch (error) {
             if (signal?.aborted) throwSignalReason(signal)
             this.logger.warn(`Planner timed out; using deterministic clustering: ${this.errMsg(error)}`)

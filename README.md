@@ -54,7 +54,7 @@ Reviews are saved to your history and you can follow up with a chat interface to
 │  │  RAG Retrieval ──► AI Pipeline ──► emit events      │  │     │
 │  │       ▲                │                  │         │  │     │
 │  │  pgvector         streamText()        Redis Streams │  │     │
-│  │  (Neon DB)    (Gemini 2.5 Flash)    event log       │  │     │
+│  │  (Neon DB)     (AI Gateway)       event log          │  │     │
 │  └──────────────────────────────────────┬──────────────┘  │     │
 │                                         │                 │     │
 │                                   Redis ◄─────────────────┘     │
@@ -86,8 +86,8 @@ Reviews are saved to your history and you can follow up with a chat interface to
 |---|---|
 | **Frontend** | Next.js 16 (App Router), NextAuth.js, Tailwind CSS, Monaco Editor |
 | **Backend** | NestJS (Node.js), BullMQ, ioredis |
-| **AI** | Google Gemini 2.5 Flash via Vercel AI SDK (`streamText`, `generateText`, `generateObject`) |
-| **Embeddings** | `gemini-embedding-001` (truncated to 1,536 dims) via Vercel AI SDK |
+| **AI** | Vercel AI Gateway (`poolside/laguna-s-2.1-free` review tier · `poolside/laguna-s-2.1-free` fast tier) via AI SDK (`streamText`, `generateText`, `generateObject`) |
+| **Embeddings** | `google/gemini-embedding-001` (truncated to 1,536 dims) via AI Gateway |
 | **Database** | PostgreSQL (Neon) with `pgvector` extension, Prisma ORM |
 | **Queue / Streaming** | Redis (BullMQ jobs + Redis Streams event log + cancellation channel) |
 | **Auth** | GitHub OAuth (NextAuth on client, token validation via GitHub `/user` API on server) |
@@ -108,7 +108,7 @@ code-review-agent/
 │   │   └── lib/              # Hooks, SSE consumer, stream reducer, API client
 │   └── server/               # NestJS backend
 │       ├── src/
-│       │   ├── ai/           # Google Gemini provider setup
+│       │   ├── ai/           # Vercel AI Gateway provider + tiered model selection
 │       │   ├── auth/         # GitHub token validation, AuthGuard, token cache
 │       │   ├── github/       # GitHub API client (PR snapshot: metadata, files, patches)
 │       │   ├── history/      # Review history, follow-up chat
@@ -160,7 +160,9 @@ cp apps/server/.env.example apps/server/.env
 |---|---|
 | `DATABASE_URL` | Neon (or any Postgres) pooled connection string |
 | `DIRECT_URL` | Neon direct connection string (for Prisma migrations) |
-| `GOOGLE_GENERATIVE_AI_API_KEY` | Google AI Studio key (required — free tier, no billing) |
+| `AI_GATEWAY_API_KEY` | Vercel AI Gateway key (required — one key reaches many providers, zero markup) |
+| `AI_REVIEW_MODEL` | *(Optional)* Review tier model, e.g. `poolside/laguna-s-2.1-free` |
+| `AI_FAST_MODEL` | *(Optional)* Fast tier (planner/chat) model, e.g. `poolside/laguna-s-2.1-free` |
 | `REDIS_URL` | Redis connection string, e.g. `redis://localhost:6379` |
 | `FRONTEND_URL` | Frontend origin for CORS, e.g. `http://localhost:3000` |
 | `PORT` | Server port (default `4000`) |

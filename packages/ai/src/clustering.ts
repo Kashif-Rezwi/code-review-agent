@@ -54,7 +54,10 @@ export async function planClusters(files: PRFile[], model: LanguageModel, abortS
             schema: ClusterPlanSchema,
             temperature: 0,
             abortSignal,
-            maxOutputTokens: 2_000,
+            // 4,096 (not 2,000): thinking models burn hidden reasoning tokens
+            // against this cap before any visible output — truncation here silently
+            // degrades to deterministic clustering via the catch below.
+            maxOutputTokens: 4_096,
             prompt: `You are a senior engineer planning a code review.
 Group the following changed files into 2-4 review clusters by domain.
 Each cluster should have a clear review focus.

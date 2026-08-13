@@ -1,6 +1,6 @@
-import { Injectable } from '@nestjs/common'
+import { Injectable, Logger } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
-import { createGoogleGenerativeAI } from '@ai-sdk/google'
+import { createGateway } from 'ai'
 import type { LanguageModel, EmbeddingModel } from 'ai'
 import { runEmbedDocuments, runEmbedQuery } from './ai-runtime.adapter'
 import { withProviderRetry } from './provider-backoff'
@@ -14,31 +14,56 @@ import { withProviderRetry } from './provider-backoff'
  */
 export const EMBEDDING_DIMENSIONS = 1536
 
+/**
+ * Single provider boundary for every AI call in the app. Everything is routed
+ * through the Vercel AI Gateway (`createGateway`), so one API key reaches many
+ * providers and model selection is pure configuration.
+ *
+ * Model tiers are independently configurable via env (`provider/model` gateway IDs):
+ *  - review (defaultModel): code review agent, PR cluster workers, synthesis
+ *  - fast (fastModel):            PR clustering planner + follow-up chat
+ *  - embedding:                   RAG vectors (must stay Gemini 1536-dim space)
+ */
 @Injectable()
 export class AiService {
-    private readonly google: ReturnType<typeof createGoogleGenerativeAI>
-    private readonly chatModelId: string
+    private readonly logger = new Logger(AiService.name)
+    private readonly gateway: ReturnType<typeof createGateway>
+    private readonly reviewModelId: string
+    private readonly fastModelId: string
     private readonly embeddingModelId: string
 
     constructor(private readonly config: ConfigService) {
-        // Google AI Studio key — the free tier needs no billing and covers
-        // chat (tool calling + structured output) and embeddings alike.
-        this.google = createGoogleGenerativeAI({
-            apiKey: this.config.get<string>('GOOGLE_GENERATIVE_AI_API_KEY'),
-        })
-        // gemini-3.5-flash: stable, free-tier eligible, coding/agentic-focused.
-        // The 2.5 generation family is retired for new API keys (generateContent
-        // 404s "no longer available to new users"); Pro models have no free quota.
-        this.chatModelId = this.config.get<string>('AI_CHAT_MODEL') ?? 'gemini-3.5-flash'
-        this.embeddingModelId = this.config.get<string>('AI_EMBEDDING_MODEL') ?? 'gemini-embedding-001'
+        const apiKey = this.config.get<string>('AI_GATEWAY_API_KEY')
+        if (!apiKey) {
+            this.logger.warn(
+                'AI_GATEWAY_API_KEY is not set — every AI call will fail until it is configured.',
+            )
+        }
+        this.gateway = createGateway({ apiKey })
+
+        // Review tier — the quality-critical pipeline (tool-calling, long structured
+        // JSON, large patches). Default is the cheapest current-gen Gemini coding model.
+        this.reviewModelId = this.config.get<string>('AI_REVIEW_MODEL') ?? 'poolside/laguna-s-2.1-free'
+        // Fast tier — light classification (planner) and chat Q&A over a fixed review.
+        // Defaults to the cheapest flash-lite tier; independent of the review model.
+        this.fastModelId = this.config.get<string>('AI_FAST_MODEL') ?? 'poolside/laguna-s-2.1-free'
+        // Embedding tier — MUST remain a Gemini 1536-dim model to match vector(1536) and
+        // keep already-embedded RAG documents (same model = same vector space) comparable.
+        this.embeddingModelId = this.config.get<string>('AI_EMBEDDING_MODEL') ?? 'google/gemini-embedding-001'
     }
 
+    /** Review tier — the review pipeline (code review, PR workers, synthesis). */
     get defaultModel(): LanguageModel {
-        return this.google(this.chatModelId)
+        return this.gateway.languageModel(this.reviewModelId)
+    }
+
+    /** Fast tier — PR planner + follow-up chat. Cheaper/faster, quality non-critical. */
+    get fastModel(): LanguageModel {
+        return this.gateway.languageModel(this.fastModelId)
     }
 
     private get embeddingModel(): EmbeddingModel {
-        return this.google.embedding(this.embeddingModelId)
+        return this.gateway.embeddingModel(this.embeddingModelId)
     }
 
     /**

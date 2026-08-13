@@ -111,7 +111,10 @@ function createHarness(): Harness {
         githubService as unknown as GithubService,
         { lint: jest.fn() } as unknown as LinterService,
         { retrieveForContext: jest.fn().mockResolvedValue(null) } as unknown as RagService,
-        { defaultModel: { modelId: 'configured-test-model' } } as unknown as AiService,
+        {
+            defaultModel: { modelId: 'configured-test-model' },
+            fastModel: { modelId: 'configured-test-model' },
+        } as unknown as AiService,
         { enqueue: jest.fn(), removeJob: jest.fn() } as unknown as QueueService,
         { emitEvent: jest.fn() } as unknown as RedisService,
         { kick: jest.fn() } as never,

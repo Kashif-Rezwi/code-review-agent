@@ -29,7 +29,7 @@ services:
         value: 10000
       - key: FRONTEND_URL
         sync: false
-      - key: GOOGLE_GENERATIVE_AI_API_KEY
+      - key: AI_GATEWAY_API_KEY
         sync: false
       - key: GITHUB_TOKEN
         sync: false

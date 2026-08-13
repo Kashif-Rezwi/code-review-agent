@@ -57,7 +57,7 @@ export class HistoryService {
 
         let providerError: ProviderStreamError | undefined
         const result = runChatStream({
-            model: this.aiService.defaultModel,
+            model: this.aiService.fastModel,
             system,
             messages: [...history, { role: 'user', content: message }],
             temperature: AI_POLICY.temperature.chat,
