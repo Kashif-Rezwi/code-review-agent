@@ -78,9 +78,8 @@ export function ReviewPageClient({ initialReviewType, initialReviewId }: { initi
 
     const handleClear = useCallback(async () => {
         if (isStreaming && initialReviewId) {
-            // Fire-and-forget the cancel request — the server marks the DB as CANCELLED
-            // and emits a terminal Redis event. We reset the local stream immediately
-            // so the UI is responsive; the server handles the rest asynchronously.
+            // Fire-and-forget the cancel request (server marks the DB CANCELLED + emits a terminal
+            // Redis event); reset the local stream immediately so the UI stays responsive.
             reviewService.cancelSession(initialReviewId, githubToken).catch((err) => {
                 console.warn('[review] cancel request failed — job may still run to completion', err)
             })

@@ -7,11 +7,8 @@ interface UseReviewScrollOptions {
 }
 
 /**
- * A unified hook to manage auto-scrolling during AI review streaming.
- * Handles:
- * 1. 'isAtBottom' detection for toggleable auto-scroll.
- * 2. ResizeObserver to track streaming content expansion.
- * 3. Programmatic scroll locking to prevent "warring" between user and script.
+ * Unified auto-scroll management during AI review streaming: isAtBottom detection, ResizeObserver
+ * tracking of content expansion, and programmatic scroll locking to prevent user/script "warring".
  */
 export function useReviewScroll({
     threshold = 120,
@@ -51,7 +48,6 @@ export function useReviewScroll({
         }
     }, [])
 
-    // Monitor scroll position
     useEffect(() => {
         const onScroll = () => {
             if (isProgrammaticRef.current) return
@@ -65,7 +61,6 @@ export function useReviewScroll({
         return () => window.removeEventListener('scroll', onScroll)
     }, [threshold])
 
-    // Monitor dimension changes (ResizeObserver)
     useEffect(() => {
         const content = contentRef.current
         if (!content) return

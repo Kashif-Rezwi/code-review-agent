@@ -33,9 +33,8 @@ export class ReviewStreamerService {
 
             void (async () => {
                 try {
-                    // Full load once up front (ownership check + initial status); the poll
-                    // loop below uses the status-only query to avoid re-loading
-                    // issues/conversations on every cycle.
+                    // Full load once up front (ownership check + initial status); the poll loop
+                    // below uses the status-only query to avoid re-loading issues/conversations every cycle.
                     let status: ReviewStatus = (await this.historyService.getReview(reviewId, userId)).status
                     reader = this.redisService.createConnection()
                     let lastId = isStreamId(suppliedLastId) ? suppliedLastId : '0-0'

@@ -84,16 +84,13 @@ export class ReviewService {
     }
 
     /**
-     * Cancels an in-progress review:
-     * 1. Removes the BullMQ job if it hasn't started yet.
-     * 2. Marks the DB record as CANCELLED (no-op if already terminal).
-     * 3. Emits a terminal error event to Redis so any live SSE client closes immediately.
+     * Cancels an in-progress review: removes the queued BullMQ job, marks the DB record
+     * CANCELLED (no-op if already terminal), and emits a terminal Redis event so live SSE clients close.
      */
     async cancelReview(reviewId: string): Promise<void> {
         const wasCancelled = await this.reviewRepository.markCancelled(reviewId)
-        // Only push the terminal event when we actually flipped the status.
-        // If the review already reached COMPLETE/FAILED, emitting an error event
-        // here would corrupt the Redis replay list seen by future SSE connections.
+        // Only push the terminal event when we actually flipped the status — a second event
+        // on a COMPLETE/FAILED review would corrupt the Redis replay list for future SSE connections.
         if (wasCancelled) {
             const results = await Promise.allSettled([
                 this.queueService.removeJob(reviewId),
@@ -330,9 +327,8 @@ export class ReviewService {
         const { onChunk, onStepFinish, getToolCallCount } = this.buildStreamCallbacks(_send, pending, thinking, lintOutcomes)
 
         try {
-            // Linter tool only — the PR path pre-builds context and stays tool-free.
-            // One transient-error retry (quota/429, provider-hint aware); parse
-            // failures and non-transient errors still throw immediately.
+            // Linter tool only — the PR path pre-builds context and stays tool-free. One transient-error
+            // retry (quota/429, provider-hint aware); parse failures and non-transient errors throw immediately.
             const review = await withProviderRetry(
                 async () => {
                     const callDeadline = operationDeadline(signal, 'Pasted-code review', AI_POLICY.deadlineMs.codeReview)
@@ -641,10 +637,10 @@ export class ReviewService {
         return results
     }
 
-    /** Extract the onChunk / onStepFinish callbacks so streamAnalysis stays focused on control flow.
-     *  toolCallCount is owned here and exposed via getToolCallCount() to avoid a mutable closure leak.
-     *  Pinned AI SDK v6 shapes only: tool-call chunks carry `input`, text deltas carry
-     *  `text`, tool results carry `output`. */
+    /**
+     * Extract the onChunk / onStepFinish callbacks so streamAnalysis stays focused on control flow.
+     * Pinned AI SDK v6 shapes only: tool-call chunks carry `input`, text deltas `text`, tool results `output`.
+     */
     private buildStreamCallbacks(
         _send: (event: ReviewStreamEvent) => void,
         pending: Map<string, { toolName: string; args: Record<string, unknown>; startedAt: number }>,
@@ -710,12 +706,8 @@ export class ReviewService {
     }
 
     /**
-     * Run the synthesis LLM with two attempts and a guaranteed programmatic fallback.
-     *
-     * Attempt 1 — standard call (temperature 0.2).
-     * Attempt 2 — temperature 0, reinforced JSON-only instruction, in case the first
-     *             attempt produced prose wrapping around the JSON.
-     * Fallback   — deterministic merge of worker reviews; always produces valid ReviewData.
+     * Run the synthesis LLM with two attempts (standard, then temperature 0 + reinforced
+     * JSON-only instruction), then a deterministic-merge fallback that always yields valid ReviewData.
      */
     private async synthesizeReview(
         prUrl: string,

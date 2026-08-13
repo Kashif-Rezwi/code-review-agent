@@ -7,7 +7,6 @@ async function bootstrap() {
 
   app.useGlobalPipes(new ValidationPipe({ whitelist: true }))
 
-  // Remove trailing slashes from the environment variable if they exist
   const frontendUrl = process.env.FRONTEND_URL?.replace(/\/$/, '') || 'http://localhost:3000'
 
   // localhost is a dev convenience — never trust it in production

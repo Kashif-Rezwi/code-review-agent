@@ -1,12 +1,7 @@
 /**
- * Central tuning surface for every AI call in the review pipeline.
- *
- * Values are provider/tier specific — tuned for the cheapest AI Gateway tier that
- * can run the pipeline reliably (`deepseek/deepseek-v4-flash-0731` review tier + the
- * `deepseek/deepseek-v4-flash-0731` fast tier). Revisit when changing AI_REVIEW_MODEL
- * / AI_FAST_MODEL or the quota: a PR review fans out to 1 planner + N concurrent
- * workers (x attempts) + up to 2 synthesis calls, and every call counts against
- * the same gateway quota budget.
+ * Central tuning surface for every AI call in the review pipeline. Values are tuned for the
+ * deepseek/deepseek-v4-flash-0731 tier (review + fast) — revisit when changing models or quota:
+ * a PR review fans out to 1 planner + N concurrent workers (x attempts) + 2 synthesis calls on one quota budget.
  */
 
 function envInt(name: string, fallback: number, min: number, max: number): number {
@@ -24,11 +19,7 @@ export const AI_POLICY = {
     /** 0.2 balances determinism with genuine analysis; retries go fully deterministic. */
     temperature: { standard: 0.2, retry: 0, chat: 0.3 },
 
-    /**
-     * Output-token ceilings. Gemini flash models spend hidden *thinking* tokens
-     * against the same budget, so caps include reasoning headroom — a 4,096 worker
-     * cap truncated mid-analysis (no JSON ever emitted) on real PRs; 8,192 passed.
-     */
+    /** Output-token ceilings with headroom for hidden *thinking* tokens — a 4,096 worker cap truncated mid-analysis (no JSON emitted); 8,192 passed. */
     maxOutputTokens: { code: 8_192, worker: 8_192, synthesis: 8_192, chat: 4_096 },
 
     deadlineMs: {

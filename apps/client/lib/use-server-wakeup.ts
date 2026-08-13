@@ -14,11 +14,7 @@ const PING_TIMEOUT_MS = 3_000
 /** How often to retry while the server is waking up. */
 const POLL_INTERVAL_MS = 5_000
 
-/**
- * DEV ONLY — set to true to force the waking state immediately, bypassing the real
- * health ping. Lets you preview the full banner → recovery flow without waiting for
- * Render to actually sleep. Flip back to false before committing.
- */
+/** DEV ONLY — force the waking state to preview the banner → recovery flow without waiting for Render to sleep. Flip back before committing. */
 const DEV_SIMULATE_SLEEP = false
 
 async function pingHealth(timeoutMs: number): Promise<boolean> {
@@ -38,12 +34,8 @@ async function pingHealth(timeoutMs: number): Promise<boolean> {
 }
 
 /**
- * Pings /health on mount. If the server doesn't respond within PING_TIMEOUT_MS,
- * transitions to 'waking' and polls every POLL_INTERVAL_MS until it comes back up.
- *
- * Returns:
- *  - status     — current wakeup phase
- *  - elapsedSec — seconds spent waiting (shown in the banner)
+ * Ping /health on mount; if the server doesn't respond within PING_TIMEOUT_MS, transition to
+ * 'waking' and poll every POLL_INTERVAL_MS until it's up. Returns the wakeup status + elapsed seconds.
  */
 export function useServerWakeup() {
     const [status, setStatus] = useState<WakeupStatus>('idle')
@@ -67,8 +59,7 @@ export function useServerWakeup() {
         }
 
         const poll = async () => {
-            // When simulating, never resolve to awake — keeps the banner visible
-            // indefinitely so you can inspect it without it flashing and disappearing.
+            // When simulating, never resolve to awake — keeps the banner visible for inspection.
             const isUp = DEV_SIMULATE_SLEEP ? false : await pingHealth(PING_TIMEOUT_MS)
             if (cancelled) return
             if (isUp) {
@@ -80,15 +71,12 @@ export function useServerWakeup() {
         }
 
         const run = async () => {
-            // In dev, skip the real ping and jump straight to the waking state so you
-            // can preview the banner → recovery flow without waiting for Render to sleep.
             const isUp = DEV_SIMULATE_SLEEP ? false : await pingHealth(PING_TIMEOUT_MS)
             if (cancelled) return
 
             if (isUp) {
-                // Server was already awake — leave status as 'idle' so the banner
-                // never renders. Only show the green confirmation when the server
-                // recovers from a sleeping state (idle → waking → awake).
+                // Server was already awake — stay 'idle' so the banner never renders; the green
+                // confirmation only shows on recovery from a sleeping state (idle → waking → awake).
                 return
             }
 

@@ -67,7 +67,7 @@ export function AppHeader() {
                             })}
                         </nav>
 
-                        {/* Profile menu — matches lingo-agent pattern */}
+                        {/* Profile menu */}
                         {session?.user && (
                             <div className="relative" ref={menuRef}>
                                 <button

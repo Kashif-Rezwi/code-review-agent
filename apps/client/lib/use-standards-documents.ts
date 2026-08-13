@@ -1,9 +1,4 @@
-/**
- * Custom hook that manages the Standards page document list.
- *
- * Encapsulates all fetch / upload / delete logic so the page component
- * stays focused on presentation only.
- */
+/** Manage the Standards page document list — encapsulates fetch/upload/delete so the page stays presentational. */
 
 import { useCallback, useEffect, useState } from 'react'
 import { ragService } from '@/lib/api'

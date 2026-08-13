@@ -4,12 +4,9 @@ import { RedisService } from './redis.service'
 export type Emit = (event: ReviewStreamEvent) => void
 
 /**
- * Creates an event emitter backed by Redis.
- * Calls remain synchronous for orchestration ergonomics, while Redis appends are
- * serialized. Terminal paths must await flush() before returning.
- *
- * `onWriteError` fires once, on the first append failure — the caller uses it to
- * abort the pipeline early instead of finishing an LLM run nobody can observe.
+ * Create a Redis-backed event emitter: `send` stays synchronous for orchestration ergonomics
+ * while Redis appends are serialized; terminal paths must await flush() before returning.
+ * `onWriteError` fires once on the first append failure so the caller can abort early.
  */
 export function createRedisEmitter(
     redis: RedisService,

@@ -1,6 +1,5 @@
-// UI configuration constants for review issue types and severities.
-// Kept in a separate file from review.types.ts so pure-type imports never
-// pull in Lucide icons or other runtime UI dependencies.
+// UI configuration constants for review issue types and severities — separate from
+// review.types.ts so pure-type imports never pull in Lucide icons or other runtime UI dependencies.
 
 import { XCircle, Shield, Zap, Wrench, Lightbulb } from 'lucide-react'
 

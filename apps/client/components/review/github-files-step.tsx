@@ -29,8 +29,7 @@ function DiffStats({ detail }: { detail: string }) {
 }
 
 // ── GithubFilesStep ───────────────────────────────────────────────────────────
-// Shows the PR file-fetch step as a compact card.
-// Expanded view shows files as tags instead of a per-file checkbox list.
+// PR file-fetch step as a compact card; the expanded view shows files as tags.
 
 export function GithubFilesStep({ items }: { items: TaskItem[] }) {
     const [expanded, setExpanded] = useState(false)

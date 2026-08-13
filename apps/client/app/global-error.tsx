@@ -11,7 +11,6 @@ export default function GlobalError({
     reset: () => void
 }) {
     useEffect(() => {
-        // Log deep layout crash
         console.error('Catastrophic global layout error:', error)
     }, [error])
 

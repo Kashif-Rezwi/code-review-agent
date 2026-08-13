@@ -35,7 +35,6 @@ export class RagService {
         // Dimensions/task typing live in AiService (the provider boundary).
         const embeddings = await this.aiService.embedDocuments(chunks)
 
-        // Delegate persistence and SQL vectors to Repository
         this.logger.log(`[RAG Ingest SUCCESS] Persisting ${chunks.length} vector chunks to pgvector.`)
         return this.ragRepository.insertDocumentWithEmbeddings(fileName, userId, chunks, embeddings)
     }
@@ -43,9 +42,8 @@ export class RagService {
     // ── Retrieve ─────────────────────────────────────────────────────────────
 
     /**
-     * Returns the top-5 most relevant chunks for `queryText`.
-     * Returns null — never throws — so reviews degrade gracefully when
-     * no standards are uploaded or the DB is unavailable.
+     * Top-5 most relevant chunks for `queryText`, or null — never throws, so reviews
+     * degrade gracefully when no standards are uploaded or the DB is unavailable.
      */
     async retrieveForContext(queryText: string, userId: string): Promise<RetrievedStandards | null> {
         if (!this.hasDb) {
@@ -54,10 +52,8 @@ export class RagService {
         }
 
         try {
-            // For pasted-code reviews the query IS the user's source code — never
-            // log it verbatim (proprietary code and hardcoded secrets would persist
-            // in log pipelines, and multi-KB multi-line entries bury real signals).
-            // Length + a short single-line preview is enough to correlate requests.
+            // The query IS the user's source code — never log it verbatim (proprietary code/secrets
+            // would persist in log pipelines). Length + a short preview is enough to correlate requests.
             const preview = queryText.replace(/\s+/g, ' ').trim()
             const excerpt = preview.length > 120 ? `${preview.slice(0, 120)}…` : preview
             this.logger.log(`[RAG Retrieve] Encoding context query (${queryText.length} chars): "${excerpt}"`)

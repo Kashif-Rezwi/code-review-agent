@@ -1,11 +1,6 @@
 /**
- * Pure text-chunking utility — no external dependencies.
- *
- * Splits a document into overlapping chunks suitable for embedding.
- * Default sizing: ~2 000 chars per chunk ≈ 500 tokens at 4 chars/token.
- *                  200 char overlap         ≈  50 tokens.
- *
- * Used by RagService (NestJS) before calling the Gemini embedding model.
+ * Pure text-chunking utility — splits a document into overlapping chunks suitable for embedding.
+ * Defaults: 2 000 chars/chunk (≈ 500 tokens) with 200-char overlap. Used by RagService before embedding.
  */
 export function chunkText(
     text: string,

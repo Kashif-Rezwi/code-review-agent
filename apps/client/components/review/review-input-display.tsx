@@ -11,11 +11,8 @@ interface ReviewInputDisplayProps {
 }
 
 /**
- * Shows the original input that was reviewed:
- *  - PR   → card with a clickable URL, Copy, and Open-in-GitHub buttons
- *  - CODE → read-only instance of the shared CodeEditor component
- *
- * All editor styling, theming, and toolbar markup live in CodeEditor.
+ * Show the original reviewed input: PR → clickable URL card with Copy/Open-in-GitHub;
+ * CODE → read-only CodeEditor (all editor styling and theming live there).
  */
 export function ReviewInputDisplay({ type, input }: ReviewInputDisplayProps) {
     const { copied, copy } = useCopyToClipboard()

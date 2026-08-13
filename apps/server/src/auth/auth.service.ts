@@ -14,12 +14,8 @@ export class AuthService {
         private readonly githubService: GithubService,
     ) {}
 
-    /**
-     * Returns a cached entry if valid, otherwise resolves via GitHub API.
-     * Uses an in-flight map to deduplicate concurrent calls for the same token.
-     */
+    /** Return a cached entry if valid, else resolve via GitHub API — an in-flight map dedupes concurrent calls for the same token. */
     async resolve(token: string): Promise<CacheEntry> {
-        // Cache hit
         const cached = this.tokenCache.getCached(token)
         if (cached) {
             return cached

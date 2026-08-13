@@ -1,12 +1,9 @@
 import { UNTRUSTED_CONTENT_GUARD } from './review.prompt'
 
 /**
- * Build the system prompt for a worker agent.
- *
- * The cluster label and focus travel inside the untrusted JSON user-data
- * envelope — never in the system prompt — so untrusted planner output cannot
- * rewrite worker instructions. The worker outputs a partial ReviewData JSON,
- * same schema as a full review, scoped to its assigned files only.
+ * Build the system prompt for a worker agent. Cluster label and focus travel inside the untrusted
+ * JSON envelope — never the system prompt — so planner output cannot rewrite worker instructions.
+ * The worker outputs a partial ReviewData JSON scoped to its assigned files only.
  */
 export function buildWorkerPrompt(): string {
     return `You are a senior software engineer performing a focused code review.

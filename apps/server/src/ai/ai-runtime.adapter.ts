@@ -11,9 +11,8 @@ export type MinimalStreamResult = {
 export type MinimalChatStreamResult = { textStream: AsyncIterable<string> }
 
 /**
- * A provider-side failure delivered as a stream `error` chunk (billing, quota,
- * auth, …). The AI SDK resolves the stream with empty text instead of throwing,
- * so without explicit handling these surface as misleading parse failures.
+ * Provider-side failure delivered as a stream `error` chunk (billing, quota, auth).
+ * The SDK resolves such streams with empty text instead of throwing — without this, they surface as misleading parse failures.
  */
 export class ProviderStreamError extends Error {
     constructor(
@@ -43,10 +42,8 @@ function numberValue(value: unknown): number | undefined {
 }
 
 /**
- * Normalize a provider stream error into a ProviderStreamError.
- * Providers nest the real error one level down; shapes vary — OpenAI-style
- * `{ error: { code: 'billing_not_active', message } }` and Google RPC-style
- * `{ error: { code: 429, status: 'RESOURCE_EXHAUSTED', message } }` both occur.
+ * Normalize a provider stream error into a ProviderStreamError. Providers nest the real
+ * error one level down; shapes vary (OpenAI `error.code` strings vs Google RPC `error.status`).
  */
 export function toProviderStreamError(error: unknown): ProviderStreamError {
     const record = asRecord(error)
@@ -72,10 +69,8 @@ const generateRuntime = generateText as unknown as (
 ) => Promise<{ text: string }>
 const chatStreamRuntime = streamText as unknown as (options: RuntimeOptions) => MinimalChatStreamResult
 
-// The SDK's default maxRetries (2 → 3 attempts) retries 429s with a backoff far
-// shorter than the provider's stated penalty, tripling quota consumption during
-// a rate-limit storm. One internal retry covers network blips; quota waits are
-// owned by provider-backoff.ts, which honors the provider's retry hint.
+// The SDK default (maxRetries 2) retries 429s far sooner than the provider's stated
+// penalty, tripling quota burn. One retry covers blips; quota waits live in provider-backoff.ts.
 const DEFAULT_MAX_RETRIES = 1
 
 export function runReviewStream(options: RuntimeOptions): MinimalStreamResult {
@@ -87,9 +82,8 @@ export function runReviewGenerate(options: RuntimeOptions): Promise<{ text: stri
 }
 
 /**
- * Follow-up chat consumes the raw token stream. Callers must pass `onError`
- * and re-throw the captured error after the stream settles — same contract as
- * the review pipeline, otherwise provider failures surface as blank replies.
+ * Follow-up chat consumes the raw token stream. Callers must pass `onError` and re-throw
+ * after the stream settles — same contract as the review pipeline, else provider failures surface as blank replies.
  */
 export function runChatStream(options: RuntimeOptions): MinimalChatStreamResult {
     return chatStreamRuntime({ maxRetries: DEFAULT_MAX_RETRIES, ...options })
@@ -135,10 +129,8 @@ const linterRuntime = createRunLinterTool as unknown as (
 ) => unknown
 
 /**
- * Wires the domain linter into the AI SDK tool surface.
- * `execute` returns a structured LintResult; only `output` reaches the model, so the
- * model surface stays plain text. The structured outcome is stashed in `outcomes`
- * (keyed by the exact code string) for the SSE labeler.
+ * Wires the domain linter into the AI SDK tool surface. Only the plain-text `output` reaches
+ * the model; the structured LintResult is stashed in `outcomes` (keyed by code string) for the SSE labeler.
  */
 export function createLinterRuntimeTool(
     execute: (input: LinterInput) => Promise<LintResult>,

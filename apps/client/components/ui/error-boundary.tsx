@@ -13,9 +13,8 @@ interface State {
 }
 
 /**
- * Class-based error boundary wrapping the review output area.
- * Catches render errors thrown by ReviewPanel or child components
- * and shows a recovery card instead of a blank or broken page.
+ * Class-based error boundary for the review output area — catches render errors from
+ * ReviewPanel or children and shows a recovery card instead of a blank or broken page.
  */
 export class ReviewErrorBoundary extends React.Component<Props, State> {
     state: State = { hasError: false }

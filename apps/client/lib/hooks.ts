@@ -1,9 +1,8 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 
 /**
- * Manages "copied!" flash state for clipboard copy buttons.
- * Returns `copied` (boolean) and `copy(text)` — the flag resets after `timeoutMs`.
- * The pending timer is cancelled automatically when the component unmounts.
+ * Manage "copied!" flash state for clipboard copy buttons — returns `copied` and `copy(text)`;
+ * the flag resets after `timeoutMs`, and the pending timer is cancelled on unmount.
  */
 export function useCopyToClipboard(timeoutMs = 2000) {
     const [copied, setCopied] = useState(false)

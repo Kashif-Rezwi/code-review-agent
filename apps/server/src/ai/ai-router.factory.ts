@@ -3,15 +3,9 @@ import type { LanguageModel } from 'ai'
 import { createOpenRouter } from '@openrouter/ai-sdk-provider'
 
 /**
- * Pluggable AI routers — "one API key → many models" broker APIs. The active
- * router is selected manually via the AI_ROUTER env var (one active chat router
- * per process; restart to switch). Adding a new router = one registry name +
- * one `createChatRouter` case.
- *
- * Routers cover CHAT models only (review + fast tiers). The embedding tier is
- * deliberately pinned to the Vercel AI Gateway in AiService: OpenRouter has no
- * comparable embedding catalog, and swapping embedding models invalidates every
- * stored RAG vector regardless (different vector space).
+ * Pluggable AI routers — "one API key → many models" broker APIs, selected via AI_ROUTER
+ * (one active chat router per process; restart to switch). Chat tiers only: embeddings stay
+ * pinned to the Vercel AI Gateway in AiService (OpenRouter has no comparable embedding catalog).
  */
 
 export const AI_ROUTER_NAMES = ['vercel-gateway', 'openrouter'] as const
@@ -28,9 +22,8 @@ export type AiRouterKeys = {
 }
 
 /**
- * Parse the AI_ROUTER env value — case/whitespace-insensitive. Unknown values
- * fail fast at boot with the valid options listed — silently defaulting could
- * route paid traffic to the wrong provider.
+ * Parse the AI_ROUTER env value (case/whitespace-insensitive). Unknown values fail fast
+ * at boot — silently defaulting could route paid traffic to the wrong provider.
  */
 export function parseAiRouterName(raw: string | undefined): AiRouterName {
     const normalized = raw?.trim().toLowerCase()
@@ -40,9 +33,8 @@ export function parseAiRouterName(raw: string | undefined): AiRouterName {
 }
 
 /**
- * Build the active chat router. A missing API key is a boot-time warning, not
- * an exception — matching the historical fail-at-call-time behavior so the app
- * still boots for tooling/tests that never call a model.
+ * Build the active chat router. A missing API key warns at boot instead of throwing,
+ * so the app still boots for tooling/tests that never call a model.
  */
 export function createChatRouter(
     name: AiRouterName,

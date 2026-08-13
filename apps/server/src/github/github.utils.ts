@@ -1,9 +1,6 @@
 import { BadRequestException } from '@nestjs/common'
 
-/**
- * Extracts owner, repo, and PR number from a standard GitHub PR URL.
- * Throws a BadRequestException if the URL format is invalid.
- */
+/** Extract owner, repo, and PR number from a GitHub PR URL; throws BadRequestException on invalid input. */
 export function parsePRUrl(url: string): { owner: string; repo: string; number: number } {
     const match = url.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/)
     if (!match) {

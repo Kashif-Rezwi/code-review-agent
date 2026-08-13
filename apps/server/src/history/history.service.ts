@@ -39,11 +39,8 @@ export class HistoryService {
     }
 
     /**
-     * Streams the chat completion from the LLM, yielding text chunks.
-     * Persists the conversation securely to the database when the stream naturally completes.
-     *
-     * Same provider-error contract as the review pipeline: the AI SDK resolves a
-     * failed stream with empty text instead of throwing, so a captured stream
+     * Stream the chat completion, yielding text chunks; persist the conversation when the stream
+     * completes naturally. Same provider-error contract as the review pipeline: a captured stream
      * error is rethrown after the loop — never saved as a blank answer.
      */
     async *chatGenerator(id: string, userId: string, message: string, signal?: AbortSignal): AsyncGenerator<string, void, unknown> {

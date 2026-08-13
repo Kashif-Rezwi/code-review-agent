@@ -12,9 +12,8 @@ interface ChatThreadProps {
 }
 
 /**
- * Renders a full chat conversation: settled messages, the in-progress streaming
- * response (with blinking cursor), and the loading dots while waiting for the
- * first token. Used on both the Review page and the History detail page.
+ * Render a full chat conversation: settled messages, the in-progress streaming response
+ * (blinking cursor), and loading dots before the first token. Used on Review and History detail pages.
  */
 export function ChatThread({ messages, streamingContent, isSending, bottomRef }: ChatThreadProps) {
     return (

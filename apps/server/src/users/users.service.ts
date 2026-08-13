@@ -13,10 +13,7 @@ export interface GithubProfile {
 export class UsersService {
     constructor(private readonly prisma: PrismaService) {}
 
-    /**
-     * Upserts a user from their GitHub profile.
-     * Returns the stored user record.
-     */
+    /** Upsert a user from their GitHub profile; returns the stored record. */
     async findOrCreate(profile: GithubProfile) {
         return this.prisma.user.upsert({
             where: { id: profile.id },

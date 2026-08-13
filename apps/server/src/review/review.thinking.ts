@@ -1,14 +1,8 @@
 export class ThinkingStream {
     // ── Thinking stream state ─────────────────────────────────────────────
-    // fullAccumulated: every text-delta received, in order.
-    // lastThinkingEnd: index into fullAccumulated up to which we've already
-    //   emitted thinking events.  Everything at or after this that relates
-    //   to JSON output is permanently suppressed.
-    // jsonBoundary: index where the JSON answer starts (-1 until found).
-    //   Once jsonBoundary is set, no more thinking events are ever emitted.
-    // searchFrom: incremental scan offset — only text appended since the last
-    //   check can contain a new boundary (plus a small lookbehind so a boundary
-    //   split across two deltas, e.g. `\n` then `{`, is never missed).
+    // Thinking events cover fullAccumulated up to lastThinkingEnd; once jsonBoundary is found,
+    // everything from it on is permanently suppressed. searchFrom is an incremental scan offset
+    // (with a small lookbehind so a boundary split across two deltas, e.g. `\n` then `{`, isn't missed).
     private fullAccumulated = ''
     private lastThinkingEnd = 0
     private jsonBoundary = -1
@@ -61,12 +55,9 @@ export class ThinkingStream {
     }
 
     /**
-     * Index where the JSON answer starts, or -1 while still in reasoning territory.
-     * Two shapes are recognized:
-     *   1. A standalone `{` line outside any code fence (the instructed format).
-     *   2. A ``` / ```json fence immediately followed by `{` — fence-wrapping is
-     *      common model drift; without it the whole JSON review would stream into
-     *      the thinking feed. Fences around non-JSON snippets stay thinking.
+     * Index where the JSON answer starts, or -1 while still in reasoning territory. Recognizes a
+     * standalone `{` line outside code fences, or a ``` / ```json fence immediately followed by `{`
+     * (common model drift — without it the whole JSON review would stream into the thinking feed).
      */
     private findBoundary(): number {
         const from = Math.max(0, this.searchFrom - ThinkingStream.LOOKBEHIND)

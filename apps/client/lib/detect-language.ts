@@ -1,7 +1,4 @@
-/**
- * Detects the programming language of a code snippet heuristically.
- * Returns a Monaco-compatible language identifier.
- */
+/** Heuristically detect the programming language of a code snippet; returns a Monaco-compatible language identifier. */
 export function detectLanguage(code: string): string {
     if (!code.trim()) return 'plaintext'
 

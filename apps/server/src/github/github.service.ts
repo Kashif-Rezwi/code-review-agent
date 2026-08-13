@@ -67,9 +67,8 @@ export class GithubService implements OnModuleInit {
     }
 
     /**
-     * Acquire a normalized, per-file PR snapshot. Both the structured REST path
-     * and the unified-diff fallback produce the same contract, so acquisition
-     * availability never changes the review strategy.
+     * Acquire a normalized, per-file PR snapshot. The REST path and the unified-diff
+     * fallback produce the same contract, so acquisition never changes the review strategy.
      */
     async fetchPRSnapshot(prUrl: string): Promise<PRSnapshot> {
         let apiFiles: PRFile[] | null = null
@@ -114,9 +113,8 @@ export class GithubService implements OnModuleInit {
             warnings.push('GitHub file-list request returned no changed files.')
         }
 
-        // The structured endpoint has already exhausted authenticated and
-        // anonymous API access. Move directly to GitHub's raw public diff so a
-        // bad shared token cannot force the model-facing fallback path.
+        // The structured endpoint has already exhausted authenticated and anonymous API
+        // access — go straight to GitHub's raw public diff so a bad shared token can't force the fallback path.
         let parsed: ReturnType<typeof parseUnifiedDiff>
         try {
             parsed = parseUnifiedDiff(await this.fetchPublicPRDiff(prUrl))
@@ -147,9 +145,8 @@ export class GithubService implements OnModuleInit {
         const { owner, repo, number } = parsePRUrl(prUrl)
         let authenticatedError: unknown
 
-        // Prefer the authenticated REST endpoint for private repositories and a
-        // higher rate limit. If the configured token is invalid or GitHub rejects
-        // the request, still try GitHub's public .diff endpoint before giving up.
+        // Prefer the authenticated REST endpoint (private repos, higher rate limit); if the
+        // token is invalid or rejected, still try GitHub's public .diff endpoint before giving up.
         if (this.token) {
             try {
                 const res = await this.fetchViaApi(owner, repo, number)
@@ -215,7 +212,6 @@ export class GithubService implements OnModuleInit {
             }
             allFiles.push(...page)
 
-            // Follow the "next" link if the API returned multiple pages.
             const link = res.headers.get('link') ?? ''
             const next = link.match(/<([^>]+)>;\s*rel="next"/)
             url = next ? next[1] : null
@@ -238,9 +234,8 @@ export class GithubService implements OnModuleInit {
     }
 
     /**
-     * Fetch a GitHub REST resource. When a configured token is rejected, retry
-     * once without credentials so public repositories remain reviewable. The
-     * original authenticated error is retained if the public retry also fails.
+     * Fetch a GitHub REST resource; when a configured token is rejected, retry once without
+     * credentials so public repos remain reviewable (the authenticated error is kept if that also fails).
      */
     private async fetchApiResource(
         url: string,
@@ -356,10 +351,7 @@ export class GithubService implements OnModuleInit {
         return err instanceof Error ? err.message : String(err)
     }
 
-    /**
-     * Authenticated path — REST API with diff Accept header.
-     * Supports private repos; benefits from the 5 000 req/hr token rate limit.
-     */
+    /** Authenticated path — REST API with diff Accept header; supports private repos, 5 000 req/hr token rate limit. */
     private fetchViaApi(owner: string, repo: string, number: number) {
         return this.fetchWithPolicy(`https://api.github.com/repos/${owner}/${repo}/pulls/${number}`, {
             headers: this.buildHeaders('application/vnd.github.diff'),
@@ -367,9 +359,8 @@ export class GithubService implements OnModuleInit {
     }
 
     /**
-     * Unauthenticated path — GitHub's direct .diff URL.
-     * Not subject to the strict 60 req/hr API limit; reliable for public repos
-     * in shared-IP environments (Vercel, Railway, etc.).
+     * Unauthenticated path — GitHub's direct .diff URL; not subject to the strict 60 req/hr
+     * API limit, so reliable for public repos in shared-IP environments (Vercel, Railway, etc.).
      */
     private fetchViaDirect(owner: string, repo: string, number: number) {
         return this.fetchWithPolicy(`https://github.com/${owner}/${repo}/pull/${number}.diff`, {

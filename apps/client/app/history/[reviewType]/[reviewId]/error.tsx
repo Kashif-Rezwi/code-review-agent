@@ -11,7 +11,6 @@ export default function HistoryErrorPage({
     reset: () => void
 }) {
     useEffect(() => {
-        // Log deep layout crash
         console.error('History Detail Crash:', error)
     }, [error])
 

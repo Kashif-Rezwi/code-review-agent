@@ -33,15 +33,9 @@ export interface ReviewAgentOptions {
 }
 
 /**
- * The single agent loop shared by the pasted-code review and the PR cluster
- * workers. Owns the AI SDK stream ceremony so call sites stay declarative:
- *
- *  - stops the loop as soon as a step parses as a valid review (saves tokens)
- *  - forces a plain-text answer on the final step when tools are in play
- *  - settles `text`/`steps`, surfacing abort reasons truthfully
- *  - captures provider stream errors and rethrows them once settled, instead
- *    of misreporting them as unparseable output
- *  - falls back to parsing earlier step texts, last-to-first
+ * The single agent loop shared by pasted-code review and PR cluster workers — owns the AI SDK stream
+ * ceremony so call sites stay declarative. Stops once a step parses as a valid review (saves tokens),
+ * forces plain text on the final tool step, rethrows captured provider errors once settled, else parses steps last-to-first.
  */
 export async function runReviewAgent(options: ReviewAgentOptions): Promise<ReviewData> {
     const { model, system, userMessage, tools, temperature, maxOutputTokens, maxSteps, signal, callbacks } = options

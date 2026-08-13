@@ -16,11 +16,7 @@ export interface AuthUser {
     avatarUrl: string | null
 }
 
-/**
- * AuthGuard — validates every incoming Bearer token by delegating to AuthService.
- *
- * On success, attaches { userId, login, name, avatarUrl } to req.user.
- */
+/** Validate every incoming Bearer token via AuthService; on success attach { userId, login, name, avatarUrl } to req.user. */
 @Injectable()
 export class AuthGuard implements CanActivate {
     private readonly logger = new Logger(AuthGuard.name)
@@ -36,8 +32,7 @@ export class AuthGuard implements CanActivate {
             token = authHeader.slice(7).trim()
         } else if (req.query.token && typeof req.query.token === 'string') {
             // Deprecated fallback: query-param tokens leak into proxy/access logs,
-            // browser history and referrer headers. Removal candidate once logs
-            // show zero usage.
+            // browser history and referrer headers. Removal candidate once logs show zero usage.
             this.logger.warn('Auth via ?token= query parameter is deprecated — use the Authorization: Bearer header instead.')
             token = req.query.token
         }

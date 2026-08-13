@@ -9,10 +9,7 @@ import type { ReviewJobPayload } from '../queue/queue.service'
 import { ReviewCancellationService } from '../queue/review-cancellation.service'
 import { AI_POLICY } from '../ai/ai-policy'
 
-/**
- * Executes AI pipelines in the background.
- * Part of the ReviewModule (so it can inject ReviewService without circular dependencies).
- */
+/** Executes AI pipelines in the background. Lives in ReviewModule so it can inject ReviewService without circular dependencies. */
 @Processor('review-jobs')
 export class ReviewProcessor extends WorkerHost {
     private readonly logger = new Logger(ReviewProcessor.name)
@@ -26,10 +23,7 @@ export class ReviewProcessor extends WorkerHost {
         super()
     }
 
-    /**
-     * Rescues stuck jobs if BullMQ inherently terminates them (e.g. Node process stall/eviction).
-     * Binds strictly to the BullMQ failed event instead of using brittle DB polling timeouts.
-     */
+    /** Rescues jobs BullMQ terminates (e.g. process stall/eviction) via the failed event — no brittle DB polling timeouts. */
     @OnWorkerEvent('failed')
     async onFailed(job: Job<ReviewJobPayload> | undefined, error: Error) {
         if (!job) return
@@ -37,8 +31,8 @@ export class ReviewProcessor extends WorkerHost {
         const publicMessage = 'Background review worker failed. Please try again.'
         this.logger.error(`Background review job ${reviewId} failed: ${error.message}`, error.stack)
 
-        // Force Postgres state sync. If another terminal transition already won
-        // (for example, cancellation), do not append a contradictory Redis event.
+        // Force Postgres state sync — if another terminal transition already won
+        // (e.g. cancellation), do not append a contradictory Redis event.
         let transitioned = false
         try {
             transitioned = await this.reviewRepository.markFailed(
@@ -70,9 +64,8 @@ export class ReviewProcessor extends WorkerHost {
         const { reviewId, type, input, userId } = job.data
         const execution = await this.cancellation.createExecution(reviewId, AI_POLICY.deadlineMs.total)
 
-        // 1. Create a Redis-backed Emitter that perfectly implements SseConnection.
-        //    A dead event stream aborts the pipeline early rather than finishing
-        //    an expensive LLM run whose progress events are being dropped.
+        // 1. Create a Redis-backed emitter implementing SseConnection — a dead event stream
+        //    aborts the pipeline early rather than finishing an LLM run nobody observes.
         const conn = createRedisEmitter(this.redisService, reviewId, (writeError) => {
             this.logger.error(
                 `Review ${reviewId} event stream append failed — aborting pipeline: ` +
@@ -81,9 +74,8 @@ export class ReviewProcessor extends WorkerHost {
             execution.abort(new Error('Review event stream unavailable'))
         })
 
-        // 2. Run the pipeline. Errors are caught internally by runForQueue,
-        // which emits { type: "error" } over Redis and updates the DB.
-        // We do *not* throw to BullMQ, because we do not want it to retry expensive LLM runs.
+        // 2. Run the pipeline. Errors are caught internally by runForQueue (emits an error
+        // event over Redis + updates the DB) — never thrown to BullMQ, so it won't retry expensive LLM runs.
         try {
             await this.reviewService.runForQueue(reviewId, type, input, userId, conn, execution.signal)
         } finally {

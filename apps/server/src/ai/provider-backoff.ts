@@ -6,11 +6,9 @@ const logger = new Logger('ProviderBackoff')
 const TRANSIENT_PATTERN = /rate.?limit|resource.?exhaust|quota|too many requests|overloaded|temporarily unavailable|service unavailable/i
 
 /**
- * True when the failure is a transient provider condition worth retrying after
- * a delay: HTTP 429 / 5xx, or a quota/rate-limit error code. Unparseable model
- * output, validation errors and 4xx auth failures are NOT transient — and our
- * own NestJS HTTP exceptions never are (they carry a runtime `status` property
- * that would otherwise masquerade as a provider 5xx).
+ * True for transient provider conditions worth retrying after a delay: HTTP 429 / 5xx, or a
+ * quota/rate-limit error code. 4xx auth failures and unparseable output are NOT transient — nor are
+ * NestJS HttpExceptions (their runtime `status` property would masquerade as a provider 5xx).
  */
 export function isTransientProviderError(error: unknown): boolean {
     if (error instanceof HttpException) return false
@@ -23,11 +21,8 @@ export function isTransientProviderError(error: unknown): boolean {
 }
 
 /**
- * Sleep before retrying a failed attempt — only for transient provider errors.
- * Honors the provider's `Retry-After` header when present, otherwise exponential
- * backoff with jitter. Returns true when it actually waited; non-transient
- * failures (e.g. unparseable output) return false immediately so existing
- * immediate-retry behavior is preserved.
+ * Sleep before retrying a transient provider error — honors `Retry-After` when present, else
+ * exponential backoff with jitter. Returns false immediately for non-transient failures (no wait).
  */
 export async function waitBeforeProviderRetry(
     error: unknown,
@@ -44,10 +39,7 @@ export async function waitBeforeProviderRetry(
     return true
 }
 
-/**
- * Run `fn` with up to `attempts` tries, backing off between transient provider
- * failures. Non-transient errors are rethrown immediately.
- */
+/** Run `fn` with up to `attempts` tries, backing off between transient provider failures; non-transient errors rethrow immediately. */
 export async function withProviderRetry<T>(
     fn: () => Promise<T>,
     options: { attempts?: number; signal?: AbortSignal; label?: string } = {},
@@ -81,9 +73,8 @@ function statusCodeOf(error: unknown): number | undefined {
 }
 
 /**
- * Extract the provider's requested retry delay: `Retry-After` response header
- * (possibly nested on the SDK's RetryError `lastError`), or Google's message
- * text hint ("Please retry in 18.97s"). Capped at MAX_RETRY_AFTER_MS.
+ * Extract the provider's requested retry delay — `Retry-After` header (possibly nested on the SDK's
+ * RetryError `lastError`) or Google's "Please retry in 18.97s" text hint. Capped at MAX_RETRY_AFTER_MS.
  */
 function retryAfterMs(error: unknown): number | undefined {
     const record = asRecord(error)
