@@ -4,6 +4,7 @@ import { ThrottlerModule } from '@nestjs/throttler'
 import request from 'supertest'
 
 import { AuthGuard } from '../auth/auth.guard'
+import { CreditGuard } from '../payments/credit.guard'
 import { HistoryService } from '../history/history.service'
 import { ReviewController } from './review.controller'
 import { ReviewService } from './review.service'
@@ -36,6 +37,8 @@ describe('POST /review/session rate limiting', () => {
                     return true
                 },
             })
+            .overrideGuard(CreditGuard)
+            .useValue({ canActivate: () => true })
             .compile()
 
         app = moduleRef.createNestApplication()

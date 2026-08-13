@@ -50,6 +50,71 @@ export class ReviewRepository {
         return result.count > 0
     }
 
+    /**
+     * Atomically transition a review to FAILED and issue a CONSUMPTION_REFUND credit ledger entry.
+     * Both operations run inside a single $transaction — if either fails, neither is committed (F-05).
+     *
+     * Returns true if the review was actually transitioned, false if already terminal (skip refund).
+     * A double-refund guard catches P2002 on the ledger insert (unique reviewId + type constraint
+     * enforced at application level — we skip if a CONSUMPTION_REFUND for this review already exists).
+     */
+    async markFailedAndRefund(
+        reviewId: string,
+        message: string,
+        refund: { userId: string; cost: number; description: string },
+        traceLog?: ReviewStreamEvent[],
+    ): Promise<boolean> {
+        if (!this.hasDb) return false
+        return this.prisma.$transaction(async (tx) => {
+            // Step 1: Status-guard transition PENDING → FAILED.
+            const result = await tx.review.updateMany({
+                where: { id: reviewId, status: 'PENDING' },
+                data: {
+                    status: 'FAILED',
+                    summary: message,
+                    ...(traceLog && traceLog.length > 0 ? { traceLog: traceLog as unknown as Prisma.InputJsonValue } : {}),
+                },
+            })
+            if (result.count === 0) return false // Already terminal — skip refund.
+
+            // Step 2: Double-refund guard — check if a refund already exists for this review.
+            const existingRefund = await tx.creditLedger.findFirst({
+                where: { reviewId, type: 'CONSUMPTION_REFUND' },
+                select: { id: true },
+            })
+            if (existingRefund) {
+                this.logger.warn(`Refund for review ${reviewId} already exists — skipping double-refund (F-05)`)
+                return true
+            }
+
+            // Step 3: Increment user's credit balance.
+            await tx.user.updateMany({
+                where: { id: refund.userId },
+                data: { creditBalance: { increment: refund.cost } },
+            })
+
+            // Step 4: Read balanceAfter from DB — never compute it (F-04).
+            const updatedUser = await tx.user.findUniqueOrThrow({
+                where: { id: refund.userId },
+                select: { creditBalance: true },
+            })
+
+            // Step 5: Append CONSUMPTION_REFUND ledger entry.
+            await tx.creditLedger.create({
+                data: {
+                    userId: refund.userId,
+                    type: 'CONSUMPTION_REFUND',
+                    amount: refund.cost,
+                    balanceAfter: updatedUser.creditBalance,
+                    reviewId,
+                    description: refund.description,
+                },
+            })
+
+            return true
+        })
+    }
+
     /** Returns true if the review was actually cancelled (was PENDING), false otherwise. */
     async markCancelled(reviewId: string): Promise<boolean> {
         if (!this.hasDb) return false

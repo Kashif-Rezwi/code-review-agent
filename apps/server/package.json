@@ -40,6 +40,7 @@
     "ioredis": "^5.10.1",
     "parse-diff": "0.12.0",
     "pdf-parse": "^1.1.1",
+    "razorpay": "^2.9.8",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "zod": "^3.24.2"

@@ -6,6 +6,8 @@ name: code-review-agent
 # heavier than it is worth for local parity.
 # Run migrations against your database before `docker compose up`:
 #   cd apps/server && npx prisma migrate deploy
+# Note: Razorpay webhook testing in local dev requires an HTTP tunnel
+# (e.g. ngrok or localtunnel) to route webhooks from Razorpay to http://localhost:4000/payments/webhook.
 
 services:
   # ─────────────────────────────────────────────────────────

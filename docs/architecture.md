@@ -43,8 +43,9 @@ Code Review Agent is a monorepo containing two applications (`client` and `serve
 External dependencies
   ├── Vercel AI Gateway   (AI models + embeddings)
   ├── GitHub API        (OAuth, user profile, PR diffs)
-  ├── PostgreSQL/Neon   (pgvector — reviews, users, RAG chunks)
-  └── Redis             (BullMQ jobs + Streams event log + cancellation channel)
+  ├── PostgreSQL/Neon   (pgvector — reviews, users, RAG chunks, payments)
+  ├── Redis             (BullMQ jobs + Streams event log + cancellation channel)
+  └── Razorpay API      (Orders, Checkout.js, HMAC webhooks)
 ```
 
 ---

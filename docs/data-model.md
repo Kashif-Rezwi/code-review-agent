@@ -19,10 +19,64 @@ Stores every authenticated user. The primary key is the GitHub **numeric user ID
 | `name` | `String?` | Display name (may be null) |
 | `email` | `String?` | GitHub email (may be null if private) |
 | `avatarUrl` | `String?` | GitHub avatar URL |
+| `creditBalance` | `Int` (default `0`) | Prepaid credit balance for reviews and chat |
 | `createdAt` | `DateTime` | Auto-set on first sign-in |
 | `updatedAt` | `DateTime` | Auto-updated on every upsert |
 
-**Lifecycle:** Created or updated (`upsert`) on every authenticated request via `AuthGuard → AuthService → UsersService.findOrCreate`. There is no explicit sign-up step.
+**Lifecycle:** Created or updated (`upsert`) on every authenticated request via `AuthGuard → AuthService → UsersService.findOrCreate`. Upon initial creation, `grantFreeCredits` idempotently adds 25 free credits to `creditBalance` and records a `FREE_GRANT` ledger entry.
+
+---
+
+### `PaymentOrder`
+
+Tracks checkout sessions created with Razorpay.
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | `String` (CUID, PK) | Internal order ID (receipt) |
+| `userId` | `String` | FK → `User.id` |
+| `razorpayOrderId` | `String` (unique) | Razorpay order ID (e.g. `order_xyz`) |
+| `razorpayPaymentId` | `String?` | Set upon `CAPTURED` transition |
+| `packageId` | `String` | Credit pack ID (`"50"`, `"200"`, `"500"`) |
+| `amountPaise` | `Int` | Integer amount in paise (e.g. `9900` = ₹99) |
+| `currency` | `String` (default `"INR"`) | Currency code |
+| `creditsGranted` | `Int` (default `0`) | Credits awarded on capture |
+| `status` | `OrderStatus` | `CREATED`, `CAPTURED`, `FAILED`, `EXPIRED` |
+| `createdAt` | `DateTime` | Order creation timestamp |
+| `updatedAt` | `DateTime` | Auto-updated timestamp |
+
+---
+
+### `PaymentEvent`
+
+Raw webhook audit log and primary idempotency key store.
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | `String` (CUID, PK) | Event record ID |
+| `razorpayEventId` | `String` (unique) | `x-razorpay-event-id` header (idempotency key) |
+| `razorpayOrderId` | `String?` | FK → `PaymentOrder.razorpayOrderId` |
+| `eventType` | `String` | `order.paid`, `payment.failed`, `order.paid.amount_mismatch` |
+| `payload` | `Json` | Raw Razorpay webhook payload |
+| `processedAt` | `DateTime` | Processing timestamp |
+
+---
+
+### `CreditLedger`
+
+Append-only transaction ledger for credit audit and balance tracking.
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | `String` (CUID, PK) | Ledger entry ID |
+| `userId` | `String` | FK → `User.id` |
+| `type` | `LedgerEntryType` | `FREE_GRANT`, `PURCHASE`, `CONSUMPTION`, `CONSUMPTION_REFUND` |
+| `amount` | `Int` | Positive (credits in), negative (credits out) |
+| `balanceAfter` | `Int` | DB snapshot of `User.creditBalance` after entry |
+| `orderId` | `String?` | Set for `PURCHASE` entries |
+| `reviewId` | `String?` | Set for `CONSUMPTION` and `CONSUMPTION_REFUND` entries |
+| `description` | `String?` | Human-readable note |
+| `createdAt` | `DateTime` | Entry creation timestamp |
 
 ---
 

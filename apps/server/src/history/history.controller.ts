@@ -8,6 +8,10 @@ import { AuthGuard } from '../auth/auth.guard'
 import { UserThrottlerGuard } from '../throttle/user-throttler.guard'
 import { Throttle } from '@nestjs/throttler'
 
+import { CreditGuard } from '../payments/credit.guard'
+import { CreditCost } from '../payments/credit-cost.decorator'
+import { CREDIT_COSTS } from '../payments/credit-cost.policy'
+
 @UseGuards(AuthGuard)
 @Controller('history')
 export class HistoryController {
@@ -40,7 +44,8 @@ export class HistoryController {
     // Guard runs after the controller-level AuthGuard, so it keys on req.user.userId.
     @Post(':id/chat')
     @Sse()
-    @UseGuards(UserThrottlerGuard)
+    @UseGuards(UserThrottlerGuard, CreditGuard)
+    @CreditCost(CREDIT_COSTS.CHAT)
     @Throttle({ default: { limit: 60, ttl: 3_600_000 } })
     chat(@Param('id') id: string, @Body() dto: ChatMessageDto, @Req() req: Request): Observable<MessageEvent> {
         return new Observable((subscriber) => {

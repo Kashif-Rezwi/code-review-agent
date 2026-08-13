@@ -10,6 +10,7 @@ import { HealthController } from './health.controller'
 import { QueueModule } from './queue/queue.module'
 import { AiModule } from './ai/ai.module'
 import { GithubModule } from './github/github.module'
+import { PaymentsModule } from './payments/payments.module'
 
 @Module({
     imports: [
@@ -28,6 +29,7 @@ import { GithubModule } from './github/github.module'
         ReviewModule,
         HistoryModule,
         QueueModule,
+        PaymentsModule,
     ],
     controllers: [HealthController],
 })

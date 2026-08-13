@@ -40,6 +40,7 @@ import { pickArgs, toolStartLabel, toolDoneLabel } from './review.formatter'
 import { ThinkingStream } from './review.thinking'
 import { runReviewAgent } from './review.agent'
 import type { NormalizedPRFile, PRSnapshot } from '../github/github.types'
+import { getReviewCreditCost } from '../payments/credit-cost.policy'
 
 type StandardsContext = Awaited<ReturnType<RagService['retrieveForContext']>>
 
@@ -131,7 +132,15 @@ export class ReviewService {
             if (err instanceof ReviewCancelledError || signal?.reason instanceof ReviewCancelledError) return
             const message = this.publicErrorMessage(err)
             const event = { type: 'error' as const, message }
-            const transitioned = await this.reviewRepository.markFailed(reviewId, message, [...conn.getTrace(), event])
+            // Atomically mark the review FAILED and refund the deducted credits (F-05).
+            // markFailedAndRefund runs both operations in a single $transaction.
+            const creditCost = getReviewCreditCost(type)
+            const transitioned = await this.reviewRepository.markFailedAndRefund(
+                reviewId,
+                message,
+                { userId, cost: creditCost, description: `Refund: ${type === 'PR' ? 'PR' : 'Code'} review failed` },
+                [...conn.getTrace(), event],
+            )
             // A cancelled or already-terminal review must not receive a second,
             // contradictory terminal event.
             if (transitioned) conn.send(event)
