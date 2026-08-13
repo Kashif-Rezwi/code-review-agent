@@ -3,22 +3,26 @@
 import Link from 'next/link'
 import Image from 'next/image'
 import { usePathname } from 'next/navigation'
-import { Code2, BookOpen, History } from 'lucide-react'
+import { Code2, BookOpen, History, Wallet } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useSession, signOut } from 'next-auth/react'
 import { useState, useRef, useEffect } from 'react'
 import { ServerWakeupBanner } from '@/components/ui/server-wakeup-banner'
+import { useWallet } from '@/lib/use-wallet'
 
 const NAV = [
     { href: '/review', label: 'Review', icon: Code2 },
     { href: '/standards', label: 'Standards', icon: BookOpen },
     { href: '/history', label: 'History', icon: History },
+    { href: '/account', label: 'Account', icon: Wallet },
 ] as const
 
 /** Shared top navigation header — identical across every page. */
 export function AppHeader() {
     const pathname = usePathname()
     const { data: session } = useSession()
+    const token = (session as unknown as { accessToken?: string })?.accessToken
+    const { balance } = useWallet(token)
     const [menuOpen, setMenuOpen] = useState(false)
     const menuRef = useRef<HTMLDivElement>(null)
 
@@ -66,6 +70,18 @@ export function AppHeader() {
                                 )
                             })}
                         </nav>
+
+                        {/* Credit Balance Badge */}
+                        {session?.user && (
+                            <Link
+                                href="/account"
+                                className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-500/10 text-blue-400 border border-blue-500/20 hover:bg-blue-500/20 transition-all duration-200"
+                                title="Click to view wallet and recharge credits"
+                            >
+                                <Wallet className="w-3.5 h-3.5" />
+                                <span>{balance} credits</span>
+                            </Link>
+                        )}
 
                         {/* Profile menu */}
                         {session?.user && (
