@@ -66,7 +66,7 @@ export default function ReviewDetailPage() {
         await submit()
     }, [submit, scrollToBottom, isAtBottomRef])
 
-    // ── HOTFIX: Hooks must execute before early returns (React Error 310) ──
+    // Hooks must run before the early returns below (React Error 310)
     const {
         traceEntries, clusterMap, taskItems, totalDurationMs, mode,
         acquisition, outcome, synthesisStarted,

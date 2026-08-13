@@ -92,10 +92,18 @@ export function useChatMessages(
 
             if (streamError) throw new Error(streamError)
             setMessages(prev => [...prev, { role: 'assistant', content: accumulated }])
-        } catch {
+        } catch (err) {
+            // Surface the real server/network message (e.g. an expired-token 401) —
+            // fall back to the generic copy only when there is nothing actionable.
+            const detail = err instanceof Error ? err.message : ''
             setMessages(prev => [
                 ...prev,
-                { role: 'assistant', content: 'Sorry, something went wrong. Please try again.' },
+                {
+                    role: 'assistant',
+                    content: detail
+                        ? `Something went wrong: ${detail}`
+                        : 'Sorry, something went wrong. Please try again.',
+                },
             ])
         } finally {
             isSendingRef.current = false

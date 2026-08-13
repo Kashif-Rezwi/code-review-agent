@@ -1,9 +1,15 @@
 # Clustered PR Review — Implementation Spec
 
-> **Purpose:** This document is the single source of truth for implementing the
-> clustered PR review architecture. Hand it to Cursor AI or Claude Code and it
-> will have everything it needs to implement the feature correctly inside the
-> existing monorepo without guessing.
+> ⚠️ **HISTORICAL — superseded.** This document was the *design spec* for the
+> clustered PR review architecture. The shipped implementation differs in
+> important details (queue-backed pipeline with a Postgres dispatch outbox,
+> Redis Streams instead of direct SSE, a bounded worker-concurrency pool,
+> coverage accounting, cancellation) — the living reference is
+> [`docs/review-pr.md`](docs/review-pr.md) plus the code. Kept for design
+> history; **do not implement against this file.**
+
+> **Purpose (original, 2026-07):** This document was the single source of truth
+> for implementing the clustered PR review architecture.
 
 ---
 

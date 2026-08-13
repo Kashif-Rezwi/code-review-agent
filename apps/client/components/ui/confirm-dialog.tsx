@@ -13,10 +13,7 @@ interface ConfirmDialogProps {
     onCancel: () => void
 }
 
-/**
- * A reusable, accessible confirmation dialog with a dark glassmorphism look.
- * Traps focus and responds to the Escape key.
- */
+/** Reusable, accessible confirmation dialog (dark glassmorphism) — traps focus, closes on Escape. */
 export function ConfirmDialog({
     title,
     description,
@@ -26,7 +23,6 @@ export function ConfirmDialog({
     onConfirm,
     onCancel,
 }: ConfirmDialogProps) {
-    // Close on Escape
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
             if (e.key === 'Escape' && !isLoading) onCancel()

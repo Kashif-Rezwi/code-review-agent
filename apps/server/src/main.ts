@@ -7,15 +7,24 @@ async function bootstrap() {
 
   app.useGlobalPipes(new ValidationPipe({ whitelist: true }))
 
-  // Remove trailing slashes from the environment variable if they exist
   const frontendUrl = process.env.FRONTEND_URL?.replace(/\/$/, '') || 'http://localhost:3000'
 
+  // localhost is a dev convenience — never trust it in production
+  const allowedOrigins =
+    process.env.NODE_ENV === 'production'
+      ? [frontendUrl]
+      : [frontendUrl, 'http://localhost:3000']
+
   app.enableCors({
-    origin: [frontendUrl, 'http://localhost:3000'],
+    origin: allowedOrigins,
     credentials: true,
   })
 
-  await app.listen(process.env.PORT ?? 4000)
-  console.log('Server running on port 4000')
+  // Drain Prisma/Redis/BullMQ cleanly on SIGTERM (every Render deploy sends one)
+  app.enableShutdownHooks()
+
+  const port = process.env.PORT ?? 4000
+  await app.listen(port)
+  console.log(`Server running on port ${port}`)
 }
 void bootstrap()

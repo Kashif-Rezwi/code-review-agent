@@ -2,7 +2,7 @@
 
 ## Overview
 
-Code Review Agent uses a PostgreSQL database with the `pgvector` extension, managed via Prisma ORM. The schema is intentionally lean — five models covering users, coding-standard documents and their vector chunks, completed reviews with their issues, and per-review conversation history.
+Code Review Agent uses a PostgreSQL database with the `pgvector` extension, managed via Prisma ORM. The schema is intentionally lean — seven models covering users, coding-standard documents and their vector chunks, reviews with their issues, a dispatch outbox, and per-review conversation history.
 
 ---
 
@@ -40,17 +40,17 @@ These two models implement the RAG (Retrieval-Augmented Generation) layer for cu
 | `chunks` | `DocumentChunk[]` | Cascade-deletes on Document delete |
 | `createdAt` | `DateTime` | |
 
-**`DocumentChunk`** — one paragraph-sized text segment from a Document, with its embedding vector.
+**`DocumentChunk`** — one fixed-window text segment from a Document (2,000 chars, 200-char overlap), with its embedding vector.
 
 | Field | Type | Notes |
 |---|---|---|
-| `id` | `String` (CUID, PK) | |
+| `id` | `String` (UUID, PK) | `randomUUID()` on raw-SQL inserts — the `@default(cuid())` never fires on that path |
 | `documentId` | `String` | FK → `Document.id` (cascade delete) |
 | `content` | `String` | Raw text of the chunk |
 | `embedding` | `vector(1536)?` | `pgvector` native type; null until embedded |
 | `metadata` | `Json?` | Reserved for future chunk metadata |
 
-**Lifecycle:** During ingestion, the `RagService` extracts text from a PDF/text file, splits it into ~500-character chunks, embeds all chunks in a single `embedMany` call, then persists the `Document` and all `DocumentChunk` rows atomically via `RagRepository.insertDocumentWithEmbeddings`.
+**Lifecycle:** During ingestion, the `RagService` extracts text from a PDF/text/Markdown file, splits it into overlapping 2,000-character chunks (200-char overlap), embeds all chunks in a single `embedMany` call, then persists the `Document` and all `DocumentChunk` rows atomically via `RagRepository.insertDocumentWithEmbeddings`.
 
 ---
 
@@ -73,6 +73,7 @@ The central model — one row per review session, regardless of type (code paste
 | `coverage` | `Json?` | Optional PR acquisition/worker coverage; null for code and legacy reviews |
 | `issues` | `Issue[]` | Cascade-deletes |
 | `conversations` | `Conversation[]` | Cascade-deletes |
+| `dispatch` | `ReviewDispatch?` | 1:1 dispatch-outbox row (below) |
 | `createdAt` | `DateTime` | |
 
 **Status transitions:**
@@ -85,6 +86,36 @@ PENDING  ──► COMPLETE   (all planned worker clusters succeeded)
 ```
 
 The `traceLog` column stores the complete `ReviewStreamEvent[]` array recorded during streaming. It enables the history view to replay a finished review exactly as it was streamed, even after the Redis TTL has expired.
+
+---
+
+### `ReviewDispatch`
+
+The dispatch **outbox** — one row per review, written in the same transaction as the `Review` row, so a crash between "accept HTTP request" and "enqueue job" can never strand work. `ReviewDispatcherService` polls this table to hand work to BullMQ; see [queue-streaming.md](./queue-streaming.md) for the full mechanism.
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | `String` (CUID, PK) | |
+| `reviewId` | `String` (unique) | FK → `Review.id` (cascade delete) |
+| `status` | `DispatchStatus` | See lifecycle below |
+| `attempts` | `Int` | Dispatch attempts so far (max 6, backoff 1s→16s) |
+| `availableAt` | `DateTime` | Backoff gate — rows become claimable once due |
+| `lockedUntil` | `DateTime?` | 30-second claim lease |
+| `lastError` | `String?` (Text) | Last dispatch failure message |
+| `dispatchedAt` | `DateTime?` | Set once the BullMQ enqueue succeeded |
+| `createdAt` / `updatedAt` | `DateTime` | |
+
+**Status transitions:**
+
+```
+PENDING  ──► PROCESSING  (claimed by the dispatcher, 30s lease)
+         ├─► DISPATCHED  (BullMQ enqueue succeeded)
+         ├─► PENDING     (enqueue failed — backoff then retry, up to 6 attempts)
+         ├─► FAILED      (attempts exhausted, or the review left PENDING)
+         └─► CANCELLED   (review was cancelled before dispatch)
+```
+
+Indexes: unique on `reviewId`; `@@index([status, availableAt])` backs the poll query. See the Indexes section below.
 
 ---
 
@@ -124,9 +155,32 @@ Persists the multi-turn follow-up chat for each review.
 ## Enums
 
 ```
-ReviewStatus: PENDING | COMPLETE | PARTIAL | FAILED | CANCELLED
-ReviewType:   CODE | PR
+ReviewStatus:   PENDING | COMPLETE | PARTIAL | FAILED | CANCELLED
+ReviewType:     CODE | PR
+DispatchStatus: PENDING | PROCESSING | DISPATCHED | FAILED | CANCELLED
 ```
+
+---
+
+## Indexes
+
+Beyond primary keys and the `User.login` unique constraint:
+
+| Index | Columns | Why |
+|---|---|---|
+| `Review_userId_idx` | `Review.userId` | Every history list/stats query filters by user |
+| `Issue_reviewId_idx` | `Issue.reviewId` | Review-detail joins |
+| `Conversation_reviewId_idx` | `Conversation.reviewId` | Review-detail joins |
+| `Document_userId_idx` | `Document.userId` | Per-user document listing |
+| `DocumentChunk_documentId_idx` | `DocumentChunk.documentId` | Join + cascade-delete lookups |
+| `ReviewDispatch_reviewId_key` (unique) | `ReviewDispatch.reviewId` | 1:1 outbox row per review |
+| `ReviewDispatch_status_availableAt_idx` | `ReviewDispatch(status, availableAt)` | Dispatcher poll query |
+
+---
+
+## Migrations
+
+Migration history starts at `20260301000000_baseline_core`, a baseline creating the core tables/enums (`User`, `Review`, `Issue`, `Conversation`, `ReviewStatus`, `ReviewType`) plus the `pgvector` extension. It was prepended after the fact — the original databases were provisioned out-of-band via `prisma db push`, so no migration previously created those tables and a fresh `prisma migrate deploy` failed. The baseline makes empty-database deploys work; pre-existing databases mark it applied once via `prisma migrate resolve --applied 20260301000000_baseline_core`.
 
 ---
 
@@ -140,6 +194,7 @@ ReviewType:   CODE | PR
 | `pgvector` extension natively in Postgres | Keeps the stack to one database; no separate vector store service required |
 | Cascade deletes everywhere | Deleting a `Document` removes all its chunks; deleting a `Review` removes all issues and conversations. No orphan rows possible |
 | `summary` and `score` nullable | Both are null until the AI pipeline completes, so the DB row can be created before the job runs (PENDING state) |
+| Dispatch outbox (`ReviewDispatch`) | Written atomically with the review, so review creation never blocks on Redis/BullMQ and a crash between HTTP and enqueue is reconciled by the dispatcher |
 
 ---
 

@@ -15,10 +15,6 @@ WORKDIR /app
 # ─────────────────────────────────────────────────────────────────────────────
 FROM base AS deps
 
-# git is required because @nanostores/react is a git+https:// dependency.
-# Installed here (not in base) so it doesn't pollute unrelated stages.
-RUN apk add --no-cache git
-
 # Copy manifests for all workspace members so pnpm can resolve the full graph
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json .npmrc ./
 COPY apps/client/package.json ./apps/client/
@@ -79,7 +75,9 @@ USER node
 EXPOSE 3000
 
 # Next.js standalone entrypoint
+# Probe 127.0.0.1/login: / redirects (307) behind auth, and busybox wget does not
+# fall back from ::1 to IPv4 when given "localhost" (server binds 0.0.0.0 only).
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
-  CMD wget -qO- http://localhost:3000 || exit 1
+  CMD wget -qO- http://127.0.0.1:3000/login || exit 1
 
 CMD ["node", "apps/client/server.js"]

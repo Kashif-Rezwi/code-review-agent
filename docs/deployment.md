@@ -21,7 +21,7 @@ Vercel CDN / Edge
 Render.com (Web Service)
   NestJS API — PORT 10000
         │
-        ├── Redis (Render managed)    ← BullMQ queue + pub/sub + replay lists
+        ├── Redis (Render managed)    ← BullMQ queue + Streams event log + cancel channel
         └── Neon PostgreSQL           ← Users, Reviews, RAG vectors
               (external — shared across envs)
 ```
@@ -59,11 +59,13 @@ A managed Redis instance. The `REDIS_URL` environment variable is automatically 
 **Build steps:**
 1. `pnpm install` — installs all workspace dependencies
 2. `pnpm build:packages` — compiles `@cra/types` then `@cra/ai`
-3. `pnpm --filter server build` — runs `tsc` on the NestJS app
+3. `pnpm --filter server build` — `prisma generate` + `nest build` (swc transpile) for the NestJS app
 
 **Start:** `pnpm --filter server start:prod` — runs the compiled `dist/main.js` via `node`.
 
 **Port:** `10000` (Render's default for web services).
+
+**Deploy branch:** the blueprint pins `branch: main`, so only pushes to `main` auto-deploy the API. Day-to-day development happens on `develop` and never triggers a deploy — merge `develop` → `main` to ship.
 
 ### Required Environment Variables (Render Dashboard)
 
@@ -73,13 +75,14 @@ A managed Redis instance. The `REDIS_URL` environment variable is automatically 
 | `PORT` | Set to `10000` in `render.yaml` |
 | `REDIS_URL` | Auto-injected from the managed Redis service |
 | `FRONTEND_URL` | The Vercel deployment URL (for CORS) |
-| `OPENAI_API_KEY` | Required — all AI calls fail without this |
+| `AI_GATEWAY_API_KEY` | Required — serves the embedding tier in every configuration, plus chat tiers when `AI_ROUTER=vercel-gateway` (the default) |
+| `AI_ROUTER` | *(Optional)* Chat router: `vercel-gateway` (default) or `openrouter` — restart to switch |
+| `OPENROUTER_API_KEY` | Required only when `AI_ROUTER=openrouter` — chat calls fail without it |
 | `DATABASE_URL` | Neon pooled connection string |
 | `DIRECT_URL` | Neon direct connection string (for Prisma) |
-| `GITHUB_CLIENT_ID` | GitHub OAuth App |
-| `GITHUB_CLIENT_SECRET` | GitHub OAuth App |
 | `GITHUB_TOKEN` | *(Optional)* For private repo PR reviews; declared as a secret in `render.yaml` |
-| `HELICONE_API_KEY` | *(Optional)* AI observability |
+
+> `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` are **client-only** (NextAuth reads them in `apps/client`) — set them in Vercel, not Render; the server never reads them. `GROQ_API_KEY`, `HELICONE_API_KEY`, and `STRIPE_*` appear in `.env.example` under "Not implemented (reserved)" and have no code support — do not configure them.
 
 ---
 
@@ -87,7 +90,7 @@ A managed Redis instance. The `REDIS_URL` environment variable is automatically 
 
 Configured in [`apps/client/vercel.json`](../apps/client/vercel.json).
 
-Vercel auto-detects Next.js and handles SSR, static export, and Edge functions. The client is deployed from the monorepo root; Vercel's build detects the `apps/client` directory as the Next.js app.
+The Vercel project's **Root Directory is `apps/client`** — `vercel.json` overrides the install/build commands to run from the monorepo root (`cd ../.. && pnpm …`) so the workspace packages are resolvable. A custom `ignoreCommand` gates builds: a push only triggers a client deploy when the commit ref is `main` **and** the diff touches `apps/client`, `packages/`, or the root manifests.
 
 ### Required Environment Variables (Vercel Dashboard)
 
@@ -201,7 +204,7 @@ Both apps have multi-stage Dockerfiles for minimal production images.
 ### `apps/client/Dockerfile`
 
 - Stage 1 (`builder`): installs, builds packages, runs `next build`
-- Stage 2 (`runner`): production-only image, copies `.next/`, runs `next start`
+- Stage 2 (`runner`): production-only image; copies the standalone bundle (`.next/standalone` + `.next/static`) and runs `node apps/client/server.js`
 - `NEXT_PUBLIC_API_URL` is a build ARG so it can be baked in at image build time
 
 ---
@@ -238,17 +241,19 @@ Both apps have multi-stage Dockerfiles for minimal production images.
 | `PORT` | No | API port (default `4000`) |
 | `DATABASE_URL` | Yes | Neon pooled PostgreSQL URL |
 | `DIRECT_URL` | Yes | Neon direct PostgreSQL URL |
-| `OPENAI_API_KEY` | Yes | OpenAI API key |
+| `AI_ROUTER` | No | Chat router selection: `vercel-gateway` (default) or `openrouter`; embeddings always stay on the Vercel AI Gateway |
+| `AI_GATEWAY_API_KEY` | Yes | Vercel AI Gateway key — one key reaches many providers with zero markup on token prices; BYOK (bring-your-own provider keys) supported in the Vercel dashboard. Required even with `AI_ROUTER=openrouter` (embeddings) |
+| `OPENROUTER_API_KEY` | Only when `AI_ROUTER=openrouter` | OpenRouter key — large free/cheap model catalog |
 | `REDIS_URL` | Yes | Redis connection string |
-| `GITHUB_CLIENT_ID` | Yes | GitHub OAuth App client ID |
-| `GITHUB_CLIENT_SECRET` | Yes | GitHub OAuth App client secret |
+| `GITHUB_CLIENT_ID` | No — client-only | Read by NextAuth in `apps/client`, never by the server |
+| `GITHUB_CLIENT_SECRET` | No — client-only | Same as above |
 | `FRONTEND_URL` | Yes | Client origin (for CORS) |
 | `GITHUB_TOKEN` | No | PAT for private repo PR access; present in `.env.example` and must be supplied per environment |
-| `HELICONE_API_KEY` | No | AI observability proxy key |
-| `GROQ_API_KEY` | No | Alternative AI provider |
-| `STRIPE_SECRET_KEY` | No | Stripe billing integration |
-| `STRIPE_WEBHOOK_SECRET` | No | Stripe webhook verification |
-| `STRIPE_PRO_PRICE_ID` | No | Stripe Pro plan price ID |
+| `HELICONE_API_KEY` | No | **Not implemented** — reserved (roadmap: AI observability) |
+| `GROQ_API_KEY` | No | **Not implemented** — reserved (roadmap: alternative provider) |
+| `STRIPE_SECRET_KEY` | No | **Not implemented** — reserved (roadmap: billing) |
+| `STRIPE_WEBHOOK_SECRET` | No | **Not implemented** — reserved |
+| `STRIPE_PRO_PRICE_ID` | No | **Not implemented** — reserved |
 | `JWT_SECRET` | No | **Legacy/unused.** Present in `.env.example` but the auth system uses GitHub tokens directly — no JWT is issued or verified |
 | `JWT_EXPIRES_IN` | No | **Legacy/unused.** Same as above |
 
@@ -261,7 +266,7 @@ Both apps have multi-stage Dockerfiles for minimal production images.
 | `GITHUB_CLIENT_ID` | Yes | GitHub OAuth App client ID |
 | `GITHUB_CLIENT_SECRET` | Yes | GitHub OAuth App client secret |
 | `NEXT_PUBLIC_API_URL` | Yes | Backend URL |
-| `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` | No | Stripe publishable key (client-safe) |
+| `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` | No | **Not implemented** — reserved (roadmap: billing) |
 
 ---
 

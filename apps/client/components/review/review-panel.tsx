@@ -4,7 +4,7 @@ import { IssueCard } from './issue-card'
 import type { ReviewData } from '@/types/review.types'
 
 // Renders the full structured review: score, summary, issue cards, positives, and
-// an optional badge showing which coding-standards documents were applied (Week 4 RAG).
+// an optional badge showing which coding-standards documents were applied.
 export function ReviewPanel({ review }: { review: ReviewData }) {
     const criticalCount = review.issues.filter(i => i.severity === 'critical').length
     const warningCount = review.issues.filter(i => i.severity === 'warning').length

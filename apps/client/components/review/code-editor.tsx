@@ -52,13 +52,8 @@ interface CodeEditorProps {
 }
 
 /**
- * Unified Monaco-powered code editor used across the whole app.
- *
- *  - Editable (default)  — Review page: token counter on the right.
- *  - readOnly            — History detail: Copy button on the right.
- *
- * Toolbar height is pinned at 41 px so the layout never shifts when
- * the language badge appears or disappears.
+ * Unified Monaco-powered code editor used across the whole app — editable (default) shows a token
+ * counter, readOnly shows a Copy button. Toolbar height is pinned at 41px so the layout never shifts.
  */
 export function CodeEditor({
     value,

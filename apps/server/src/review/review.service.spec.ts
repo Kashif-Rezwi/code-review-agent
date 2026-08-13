@@ -111,7 +111,10 @@ function createHarness(): Harness {
         githubService as unknown as GithubService,
         { lint: jest.fn() } as unknown as LinterService,
         { retrieveForContext: jest.fn().mockResolvedValue(null) } as unknown as RagService,
-        { defaultModel: { modelId: 'configured-test-model' }, provider: jest.fn() } as unknown as AiService,
+        {
+            defaultModel: { modelId: 'configured-test-model' },
+            fastModel: { modelId: 'configured-test-model' },
+        } as unknown as AiService,
         { enqueue: jest.fn(), removeJob: jest.fn() } as unknown as QueueService,
         { emitEvent: jest.fn() } as unknown as RedisService,
         { kick: jest.fn() } as never,
@@ -165,6 +168,94 @@ describe('ReviewService coverage-safe PR orchestration', () => {
             'complete',
         )
         expect(harness.operations.indexOf('save')).toBeLessThan(harness.operations.indexOf('send:complete'))
+    })
+
+    it('surfaces provider stream errors instead of misreporting unparseable model output', async () => {
+        const harness = createHarness()
+        streamTextMock.mockImplementation((options: { onError?: (arg: { error: unknown }) => void }) => {
+            options.onError?.({
+                error: { error: { code: 'billing_not_active', message: 'Your account is not active' } },
+            })
+            return workerResult('')
+        })
+
+        await harness.service.runForQueue(REVIEW_ID, 'CODE', 'const a = 1', USER_ID, harness.conn)
+
+        const errorEvent = harness.events.find((event) => event.type === 'error')
+        expect(errorEvent).toMatchObject({
+            message: 'The AI provider returned an error. Please try again later.',
+        })
+        expect(harness.reviewRepository.markFailed).toHaveBeenCalledWith(
+            REVIEW_ID,
+            'The AI provider returned an error. Please try again later.',
+            expect.any(Array),
+        )
+    })
+
+    it('prefers the captured provider error when the stream rejects with generic no-output', async () => {
+        const harness = createHarness()
+        streamTextMock.mockImplementation((options: { onError?: (arg: { error: unknown }) => void }) => {
+            options.onError?.({
+                error: { error: { code: 'billing_not_active', message: 'Your account is not active' } },
+            })
+            return {
+                text: Promise.reject(new Error('No output generated. Check the stream for errors.')),
+                steps: Promise.resolve([]),
+            }
+        })
+
+        await harness.service.runForQueue(REVIEW_ID, 'CODE', 'const a = 1', USER_ID, harness.conn)
+
+        // Non-transient billing error — no retry.
+        expect(streamTextMock).toHaveBeenCalledTimes(1)
+        expect(harness.events).toContainEqual(
+            expect.objectContaining({ type: 'error', message: 'The AI provider returned an error. Please try again later.' }),
+        )
+    })
+
+    it('waits out a transient quota error and completes the pasted-code review', async () => {
+        const harness = createHarness()
+        let call = 0
+        streamTextMock.mockImplementation((options: { onError?: (arg: { error: unknown }) => void }) => {
+            call++
+            if (call === 1) {
+                options.onError?.({
+                    error: new Error('Failed after 2 attempts. Last error: You exceeded your current quota. Please retry in 0.05s.'),
+                })
+                return {
+                    text: Promise.reject(new Error('No output generated. Check the stream for errors.')),
+                    steps: Promise.resolve([]),
+                }
+            }
+            return workerResult(JSON.stringify(VALID_REVIEW))
+        })
+
+        await harness.service.runForQueue(REVIEW_ID, 'CODE', 'const a = 1', USER_ID, harness.conn)
+
+        expect(streamTextMock).toHaveBeenCalledTimes(2)
+        expect(harness.events).toContainEqual(expect.objectContaining({ type: 'complete', outcome: 'complete' }))
+    })
+
+    it('backs off and retries a worker when the provider rate-limits the stream', async () => {
+        const harness = createHarness()
+        harness.githubService.fetchPRSnapshot.mockResolvedValue(snapshot(3))
+        let call = 0
+        streamTextMock.mockImplementation((options: { onError?: (arg: { error: unknown }) => void }) => {
+            call++
+            if (call === 1) {
+                options.onError?.({
+                    error: { error: { code: 429, status: 'RESOURCE_EXHAUSTED', message: 'Quota exceeded' } },
+                })
+                return workerResult('')
+            }
+            return workerResult(JSON.stringify(VALID_REVIEW))
+        })
+
+        await harness.service.runForQueue(REVIEW_ID, 'PR', PR_URL, USER_ID, harness.conn)
+
+        expect(streamTextMock).toHaveBeenCalledTimes(2)
+        expect(harness.events.some((event) => event.type === 'thinking' && event.text.includes('rate-limited'))).toBe(true)
+        expect(harness.events).toContainEqual(expect.objectContaining({ type: 'complete', outcome: 'complete' }))
     })
 
     it('uses the same clustered path for a public-diff snapshot and never invokes the generic PR agent', async () => {

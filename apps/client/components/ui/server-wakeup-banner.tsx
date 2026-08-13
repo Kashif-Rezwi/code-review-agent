@@ -10,12 +10,9 @@ function formatElapsed(sec: number): string {
 }
 
 /**
- * Inline strip rendered inside AppHeader that appears only when the Render free-tier
- * server is sleeping. Shows nothing on fast connections — the first health ping has a
- * 3 s timeout before the banner is revealed, so awake servers produce zero visual noise.
- *
- * State is owned by ServerWakeupProvider in the root layout so the timer and dismissed
- * flag survive page navigations (AppHeader remounts on each route change).
+ * Inline strip inside AppHeader shown only when the Render free-tier server is sleeping — the first
+ * health ping has a 3s timeout before revealing, so awake servers produce zero visual noise. State lives
+ * in ServerWakeupProvider (root layout) so the timer/dismissed flag survive page navigations.
  */
 export function ServerWakeupBanner() {
     const { status, elapsedSec, dismissed } = useWakeupContext()

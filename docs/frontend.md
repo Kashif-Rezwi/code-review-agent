@@ -10,8 +10,8 @@ The client is a Next.js 16 application using the App Router. It is authenticatio
 
 ```
 apps/client/app/
-├── layout.tsx               # Root layout: font setup, SessionProvider, global CSS
-├── page.tsx                 # Redirect to /review/paste_code
+├── layout.tsx               # Root layout: font setup, SessionProvider, ServerWakeupProvider, global CSS
+├── page.tsx                 # Redirect to /review
 ├── session-provider.tsx     # NextAuth SessionProvider wrapper (client component)
 ├── error.tsx                # Route-level error boundary
 ├── global-error.tsx         # Root error boundary (catches layout errors)
@@ -21,7 +21,7 @@ apps/client/app/
 │   └── page.tsx             # "Sign in with GitHub" page (shown when unauthenticated)
 │
 ├── review/
-│   ├── page.tsx             # Redirect to /review/paste_code
+│   ├── page.tsx             # Renders ReviewPageClient directly (no redirect)
 │   ├── error.tsx            # Review-subtree error boundary
 │   └── [reviewType]/        # "paste_code" or "github_pr"
 │       ├── page.tsx         # New review (no reviewId)
@@ -41,6 +41,8 @@ apps/client/app/
 ```
 
 The `[reviewType]` segment is the string `"paste_code"` or `"github_pr"` — used to set the default mode in `ReviewPageClient` and to construct navigation URLs.
+
+`apps/client/proxy.ts` (the Next.js 16 "proxy" convention, successor to middleware) is the auth gate: for the matcher routes `/review/:path*`, `/history/:path*`, and `/standards/:path*` it reads the NextAuth JWT via `getToken` and redirects unauthenticated users to `/login`.
 
 ---
 
@@ -98,6 +100,7 @@ Internally, the hook:
 2. Uses an `AbortController` ref to manage the fetch lifecycle.
 3. When `initialReviewId` is provided (opening a past review), immediately opens the SSE stream to `GET /review/:id/stream`.
 4. Calls `consumeSSEStream` from `lib/sse.ts` to parse the raw SSE byte stream into typed `ReviewStreamEvent` objects and dispatches each to the reducer.
+5. Reconnects automatically when the stream drops: backoff of 500ms → 1000ms → 2000ms, resuming with a `Last-Event-ID` header set to the last received stream-entry id; already-seen event ids are deduplicated, and `heartbeat` frames are skipped (no state change).
 
 ### `reviewStreamReducer`
 
@@ -147,13 +150,13 @@ The parent component (`ReviewPageClient`) uses multiple `useEffect` hooks to tri
 
 ## SSE Consumption
 
-`lib/sse.ts` exports `consumeSSEStream<T>(reader, onEvent)`:
+`lib/sse.ts` exports `consumeSSEStream<T>(reader, onEvent)` — a full SSE frame parser:
 
-1. Reads the `ReadableStreamDefaultReader` chunk by chunk.
-2. Decodes bytes to text and splits on `\n\n` SSE delimiters.
-3. For each complete SSE message, strips the `data:` prefix and `JSON.parse`s the payload.
-4. Calls `onEvent(parsed)`.
-5. Returns when the stream closes (server sends `complete` or `error` and closes the connection).
+1. Reads the `ReadableStreamDefaultReader` chunk by chunk, decoding with a streaming `TextDecoder` and buffering partial frames.
+2. Splits complete frames on `\n\n`, tolerating CRLF line endings and ignoring comment (`:`) lines.
+3. Concatenates multi-line `data:` fields and captures the `id:` field (the stream-entry id used for `Last-Event-ID` resume).
+4. `JSON.parse`s the completed data payload and calls `onEvent({ id, event })` (`ParsedSSEEvent<T>`).
+5. Drains any trailing partial frame when the stream closes.
 
 ---
 
@@ -163,11 +166,16 @@ The parent component (`ReviewPageClient`) uses multiple `useEffect` hooks to tri
 
 - `reviewService.createSession(payload, token)` — `POST /review/session`
 - `reviewService.getSession(reviewId, token)` — `GET /review/:id`
+- `reviewService.cancelSession(reviewId, token)` — `DELETE /review/:id` (cancels a running review)
+- `historyService.getReviews(token)` — `GET /history`
+- `historyService.getStats(token)` — `GET /history/stats`
+- `historyService.getReview(id, token)` — `GET /history/:id`
+- `historyService.deleteReview(id, token)` — `DELETE /history/:id`
 - `ragService.getDocuments(token)` — `GET /rag/documents`
-- `ragService.uploadDocument(file, token)` — `POST /rag/upload` (multipart)
+- `ragService.uploadDocument(formData, token)` — `POST /rag/upload` (multipart; takes a `FormData` containing the file field, not a raw `File`)
 - `ragService.deleteDocument(id, token)` — `DELETE /rag/documents/:id`
 
-All calls include `Authorization: Bearer <github_token>` when a token is available.
+All calls include `Authorization: Bearer <github_token>` when a token is available. `apiFetch` throws the server's own error message on non-2xx responses, and throws immediately if `NEXT_PUBLIC_API_URL` is unconfigured (instead of issuing same-origin requests that 404).
 
 ---
 
@@ -182,6 +190,12 @@ Three error boundary levels:
 | Component-level | `components/ui/error-boundary.tsx` | `ReviewPanel` + `ChatThread` (client runtime errors) |
 
 `ReviewErrorBoundary` wraps the review panel and chat independently, so a crash in one does not unmount the other.
+
+---
+
+## Server Wakeup (Render cold starts)
+
+The API runs on Render's free tier, which sleeps after inactivity. To make cold starts feel intentional instead of broken, `ServerWakeupProvider` (`lib/server-wakeup-context.tsx`, mounted in `app/layout.tsx`) and `lib/use-server-wakeup.ts` ping `GET /health` on app load: while the server is unreachable, `components/ui/server-wakeup-banner.tsx` shows a "server is waking up" banner, and a recovery toast confirms when it becomes healthy.
 
 ---
 

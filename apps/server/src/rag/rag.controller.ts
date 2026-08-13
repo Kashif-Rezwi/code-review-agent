@@ -25,7 +25,6 @@ const MAX_FILE_SIZE = 5 * 1024 * 1024 // 5 MB
 export class RagController {
     constructor(private readonly ragService: RagService) {}
 
-    // POST /rag/upload
     @Post('upload')
     @HttpCode(HttpStatus.CREATED)
     @UseInterceptors(
@@ -40,20 +39,18 @@ export class RagController {
 
         if (!ALLOWED_MIME_TYPES.includes(file.mimetype)) {
             throw new BadRequestException(
-                `Unsupported file type "${file.mimetype}". Upload a .txt or .pdf file.`,
+                `Unsupported file type "${file.mimetype}". Upload a .txt, .md, or .pdf file.`,
             )
         }
 
         return this.ragService.ingest(file.buffer, file.mimetype, file.originalname, req.user!.userId)
     }
 
-    // GET /rag/documents
     @Get('documents')
     listDocuments(@Req() req: Request) {
         return this.ragService.listDocuments(req.user!.userId)
     }
 
-    // DELETE /rag/documents/:id
     @Delete('documents/:id')
     @HttpCode(HttpStatus.NO_CONTENT)
     async deleteDocument(@Param('id') id: string, @Req() req: Request) {

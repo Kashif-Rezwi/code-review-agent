@@ -18,9 +18,7 @@ export interface TraceReplayResult {
 }
 
 
-/**
- * Pure function to parse a stored trace log into UI state.
- */
+/** Pure function to parse a stored trace log into UI state. */
 export function parseTraceLog(
     traceLog: ReviewStreamEvent[] | null,
     reviewType?: 'CODE' | 'PR',
@@ -66,12 +64,8 @@ export function parseTraceLog(
 }
 
 /**
- * Replays a stored `ReviewStreamEvent[]` trace into the same data structures
- * that `useReviewStream` builds during live streaming.
- *
- * This is a pure synchronous computation wrapped in `useMemo` — it runs once
- * on mount and is never re-computed (the trace never changes after load).
- * The result can be fed directly into `<ReviewProgress phase="complete" …/>`.
+ * Replay a stored `ReviewStreamEvent[]` trace into the same structures `useReviewStream` builds live.
+ * Pure synchronous computation wrapped in `useMemo` — runs once on mount (the trace never changes after load).
  */
 export function useTraceReplay(
     traceLog: ReviewStreamEvent[] | null,

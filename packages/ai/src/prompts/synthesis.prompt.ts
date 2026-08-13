@@ -2,12 +2,8 @@ import type { ReviewData } from '@cra/types'
 import { UNTRUSTED_CONTENT_GUARD } from './review.prompt'
 
 /**
- * Dedicated system prompt for the synthesis agent.
- *
- * Unlike worker agents, synthesis does NOT write prose before JSON — it
- * receives structured partial reviews and must output JSON directly.
- * The synthesis prompt is intentionally independent from the pasted-code
- * prompt because synthesis must return JSON without analysis prose.
+ * Dedicated system prompt for the synthesis agent. Unlike workers, synthesis receives structured
+ * partial reviews and must output JSON directly — no analysis prose before it.
  */
 export function buildSynthesisSystemPrompt(): string {
     return `You are an expert senior software engineer synthesizing multiple partial code reviews into one unified review.
@@ -46,22 +42,15 @@ JSON OUTPUT FORMAT
 }
 
 /**
- * Build the user message for the synthesis agent.
- *
- * The synthesis agent receives all partial cluster reviews and:
- * 1. Produces the final unified score
- * 2. Merges and deduplicates issues
- * 3. Identifies cross-cluster issues (e.g. an auth guard trusting a value
- *    that a repository fetches unsafely)
- * 4. Writes a PR-level summary
+ * Build the user message for the synthesis agent, which merges all partial cluster reviews
+ * (dedupe issues, add cross-cluster findings, final PR-level score and summary).
  */
 export function buildSynthesisUserMessage(
     prUrl: string,
     partialReviews: Array<{ clusterId: string; label: string; review: ReviewData }>,
 ): string {
-    // Include full issue detail (description + recommendation) so synthesis can carry
-    // them through directly rather than re-generating them — reduces output size and
-    // lowers the chance of the model producing malformed or truncated JSON.
+    // Include full issue detail so synthesis can carry it through rather than re-generate it —
+    // reduces output size and lowers the chance of malformed or truncated JSON.
     const envelope = {
         pullRequest: prUrl,
         clusters: partialReviews,

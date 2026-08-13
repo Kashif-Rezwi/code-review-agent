@@ -25,10 +25,7 @@ export class RagRepository {
         this.hasDb = !!config.get('DATABASE_URL')
     }
 
-    /**
-     * Inserts the document and its chunked embeddings atomically via raw pgvector INSERTs.
-     * Raw $executeRaw is necessary because Prisma ORM lacks native vector column write support.
-     */
+    /** Insert the document and its chunked embeddings atomically — raw $executeRaw because Prisma lacks native vector column writes. */
     async insertDocumentWithEmbeddings(
         fileName: string,
         userId: string,
@@ -50,9 +47,7 @@ export class RagRepository {
         })
     }
 
-    /**
-     * Executes a cosine distance query using pgvector index against the provided embedding.
-     */
+    /** Cosine-distance similarity query against the pgvector index. */
     async querySimilarChunks(embedding: number[], userId: string): Promise<RetrievedStandards | null> {
         if (!this.hasDb) return null
 
@@ -92,7 +87,8 @@ export class RagRepository {
         })
     }
 
-    deleteDocument(id: string, userId: string) {
-        return this.prisma.document.delete({ where: { id, userId } })
+    async deleteDocument(id: string, userId: string): Promise<boolean> {
+        const { count } = await this.prisma.document.deleteMany({ where: { id, userId } })
+        return count > 0
     }
 }

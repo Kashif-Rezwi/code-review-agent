@@ -11,7 +11,6 @@ export default function ErrorPage({
     reset: () => void
 }) {
     useEffect(() => {
-        // Log application crash
         console.error('Unhandled Application Exception:', error)
     }, [error])
 

@@ -17,13 +17,15 @@ export async function apiErrorMessage(response: Response): Promise<string> {
 }
 
 /**
- * Typed fetch wrapper for the CRA API.
- * - Prepends API_URL automatically
- * - Merges an optional Bearer token into the Authorization header
- * - Throws an Error with the server's text message on non-2xx responses
- * - Returns the parsed JSON body on success
+ * Typed fetch wrapper for the CRA API: prepends API_URL, merges an optional Bearer token,
+ * throws the server's message on non-2xx, and returns the parsed JSON body on success.
  */
 export async function apiFetch<T>(path: string, init?: RequestInit, token?: string): Promise<T> {
+    if (!API_URL) {
+        // Without a configured API origin the request would go same-origin and 404
+        // against the Next.js server with a confusing error.
+        throw new Error('NEXT_PUBLIC_API_URL is not configured — set it to the API origin (e.g. http://localhost:4000) and rebuild the client.')
+    }
     const authHeader: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {}
     const res = await fetch(`${API_URL}${path}`, {
         ...init,

@@ -3,30 +3,22 @@ import { ReviewDataSchema } from '@cra/ai'
 import type { ReviewData } from '@cra/ai'
 
 /**
- * Extract ReviewData from the model's text output.
- *
- * Handles five real-world failure modes in priority order:
- *   ① Clean JSON (most common — workers and synthesis under normal conditions)
- *   ② Markdown-fenced JSON  (``` json … ```)
- *   ③ Balanced-brace extraction from every line-boundary `{` — handles prose before JSON
- *      AND prose after JSON (the `lastIndexOf('}')` strategy breaks when the model
- *      appends trailing commentary containing `}` characters)
- *   ④ First `{` to matching balanced `}` — final safety net for inline JSON
- *
- * Throws only if all candidates fail Zod validation — the caller should then retry.
+ * Extract ReviewData from model output, trying in priority order: clean JSON, markdown-fenced JSON,
+ * balanced-brace extraction from every line-boundary `{` (handles prose before/after the JSON — a
+ * naive lastIndexOf('}') breaks on trailing commentary), and first `{` to its balanced `}`.
+ * Throws only if every candidate fails Zod validation — the caller should then retry.
  */
 export function parseReviewText(text: string): ReviewData {
     const t = text.trim()
 
     const candidates: string[] = [t]
 
-    // ① Markdown fence — strip code fences the model adds despite instructions
+    // Strip markdown fences the model adds despite instructions
     const fenceMatch = t.match(/```(?:json)?\s*([\s\S]*?)```/)
     if (fenceMatch) candidates.push(fenceMatch[1].trim())
 
-    // ② & ③ All line-boundary `{` positions (last to first) using balanced extraction.
-    //   Processing last-to-first ensures we try the most recent JSON block first,
-    //   which is correct when the model outputs analysis prose before the JSON object.
+    // All line-boundary `{` positions, last-to-first — the most recent JSON block is
+    // the likeliest answer when the model writes analysis prose before the JSON object.
     const starts: number[] = []
     if (t.startsWith('{')) starts.push(0)
     let pos = 0
@@ -37,7 +29,7 @@ export function parseReviewText(text: string): ReviewData {
         if (end !== -1) candidates.push(t.slice(starts[i], end + 1))
     }
 
-    // ④ First `{` to its balanced `}` — handles JSON not at a line boundary
+    // First `{` to its balanced `}` — handles JSON not at a line boundary
     const firstBrace = t.indexOf('{')
     if (firstBrace !== -1) {
         const end = findBalancedBraceEnd(t, firstBrace)
@@ -56,9 +48,25 @@ export function parseReviewText(text: string): ReviewData {
 }
 
 /**
- * Walk `text` from `start` (which must be `{`) to find its balanced closing `}`.
- * Correctly skips `{` and `}` characters inside JSON string values.
- * Returns the index of the closing `}`, or -1 if the braces are unbalanced.
+ * Extract a review from an agent stream's settled output: final text first, then each step's
+ * text last-to-first (the most recent candidate is the likeliest answer). Throws only when nothing parses.
+ */
+export function parseReviewFromSteps(
+    finalText: string,
+    steps: ReadonlyArray<{ text: string }>,
+): ReviewData {
+    const candidates = [finalText, ...steps.map((step) => step.text).reverse()].filter((text) => text.trim())
+    for (const text of candidates) {
+        try {
+            return parseReviewText(text)
+        } catch { /* try next candidate */ }
+    }
+    throw new InternalServerErrorException('The model did not return a valid review. Please try again.')
+}
+
+/**
+ * Walk `text` from `start` (which must be `{`) to its balanced closing `}`, skipping braces
+ * inside JSON string values. Returns the closing index, or -1 if the braces are unbalanced.
  */
 export function findBalancedBraceEnd(text: string, start: number): number {
     let depth = 0

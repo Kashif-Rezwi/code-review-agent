@@ -10,8 +10,9 @@ export const authOptions: NextAuthOptions = {
             clientSecret: process.env.GITHUB_CLIENT_SECRET!,
             authorization: {
                 params: {
-                    // read:user + user:email for auth; repo for private PR access
-                    scope: 'read:user user:email repo',
+                    // Identity only — PR fetching uses the server's own GITHUB_TOKEN,
+                    // so the broad `repo` scope is intentionally NOT requested.
+                    scope: 'read:user user:email',
                 },
             },
         }),

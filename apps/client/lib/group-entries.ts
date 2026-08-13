@@ -1,11 +1,7 @@
 /**
- * Groups a flat list of TraceEntry items into logical RenderGroups for display.
- *
- * - Consecutive `thinking` entries are merged into a single ThinkingGroup so the
- *   UI can collapse them behind one expandable row.
- * - Consecutive `runLinter` tool calls are merged into a LinterGroup so multiple
- *   lint passes appear as one atomic step instead of a wall of individual rows.
- * - Every other tool call gets its own `tool` group entry.
+ * Group a flat list of TraceEntry items into logical RenderGroups: consecutive `thinking`
+ * entries merge into one collapsible ThinkingGroup, consecutive `runLinter` calls merge into
+ * one atomic LinterGroup, and every other tool call gets its own `tool` group entry.
  */
 
 import type { TraceEntry } from '@/lib/use-review-stream'

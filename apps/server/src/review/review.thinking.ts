@@ -1,14 +1,14 @@
 export class ThinkingStream {
     // ── Thinking stream state ─────────────────────────────────────────────
-    // fullAccumulated: every text-delta received, in order.
-    // lastThinkingEnd: index into fullAccumulated up to which we've already
-    //   emitted thinking events.  Everything at or after this that relates
-    //   to JSON output is permanently suppressed.
-    // jsonBoundary: index of the first standalone `{` line (-1 until found).
-    // Once jsonBoundary is set, no more thinking events are ever emitted.
+    // Thinking events cover fullAccumulated up to lastThinkingEnd; once jsonBoundary is found,
+    // everything from it on is permanently suppressed. searchFrom is an incremental scan offset
+    // (with a small lookbehind so a boundary split across two deltas, e.g. `\n` then `{`, isn't missed).
     private fullAccumulated = ''
     private lastThinkingEnd = 0
     private jsonBoundary = -1
+    private searchFrom = 0
+
+    private static readonly LOOKBEHIND = 16
 
     constructor(private readonly send: (event: { type: 'thinking'; text: string }) => void) { }
 
@@ -35,16 +35,11 @@ export class ThinkingStream {
         // Once we've found the JSON boundary, ignore all further deltas.
         if (this.jsonBoundary !== -1) return
 
-        // Locate the first standalone `{` line in the full accumulated text.
-        // Matches: text starting with { OR a newline immediately before {
-        // This is searched on the FULL string (not just the rolling buffer)
-        // so we never miss it due to buffer resets.
-        // Guard: skip if the `{` falls inside a markdown code fence.
-        const match = this.fullAccumulated.search(/(?:^|\n)\s*\{/)
-        if (match !== -1 && !this.isInsideCodeFence(this.fullAccumulated, match)) {
-            this.jsonBoundary = match
+        const boundary = this.findBoundary()
+        if (boundary !== -1) {
+            this.jsonBoundary = boundary
             // Emit any reasoning text that arrived before the JSON boundary.
-            const finalReasoning = this.fullAccumulated.slice(this.lastThinkingEnd, match)
+            const finalReasoning = this.fullAccumulated.slice(this.lastThinkingEnd, boundary)
             if (finalReasoning.trim()) this.send({ type: 'thinking', text: finalReasoning })
             this.lastThinkingEnd = this.fullAccumulated.length // nothing more to emit
             return
@@ -57,5 +52,27 @@ export class ThinkingStream {
             this.send({ type: 'thinking', text: pending })
             this.lastThinkingEnd = this.fullAccumulated.length
         }
+    }
+
+    /**
+     * Index where the JSON answer starts, or -1 while still in reasoning territory. Recognizes a
+     * standalone `{` line outside code fences, or a ``` / ```json fence immediately followed by `{`
+     * (common model drift — without it the whole JSON review would stream into the thinking feed).
+     */
+    private findBoundary(): number {
+        const from = Math.max(0, this.searchFrom - ThinkingStream.LOOKBEHIND)
+        this.searchFrom = this.fullAccumulated.length
+        const window = this.fullAccumulated.slice(from)
+
+        const bare = window.search(/(?:^|\n)\s*\{/)
+        if (bare !== -1) {
+            const absolute = from + bare
+            if (!this.isInsideCodeFence(this.fullAccumulated, absolute)) return absolute
+        }
+
+        const fenced = /(?:^|\n)```(?:json)?[ \t]*\r?\n\s*\{/.exec(window)
+        if (fenced) return from + fenced.index
+
+        return -1
     }
 }

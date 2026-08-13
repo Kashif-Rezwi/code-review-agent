@@ -25,9 +25,8 @@ const ClusterPlanSchema = z.object({
     })).min(1).max(4),
 })
 
-// AI SDK 6's generateObject overloads combined with Zod 3 can exceed
-// TypeScript's generic-instantiation depth in workspace type-checks. Keep the
-// runtime schema validation while presenting the small result shape we consume.
+// AI SDK 6's generateObject overloads + Zod 3 can exceed TypeScript's generic-instantiation
+// depth in workspace type-checks — keep runtime schema validation, present the small result shape.
 const runPlanner = generateObject as unknown as (options: {
     model: LanguageModel
     schema: typeof ClusterPlanSchema
@@ -54,7 +53,9 @@ export async function planClusters(files: PRFile[], model: LanguageModel, abortS
             schema: ClusterPlanSchema,
             temperature: 0,
             abortSignal,
-            maxOutputTokens: 2_000,
+            // 4,096 (not 2,000): thinking models burn hidden reasoning tokens against this cap
+            // before any visible output — truncation here silently degrades to deterministic clustering.
+            maxOutputTokens: 4_096,
             prompt: `You are a senior engineer planning a code review.
 Group the following changed files into 2-4 review clusters by domain.
 Each cluster should have a clear review focus.
@@ -145,9 +146,8 @@ export function buildDeterministicClusters(files: PRFile[]): ClusterPlan[] {
     }
     const components = [...componentMap.values()]
 
-    // Source/test affinity is preferred, but it must never collapse a larger
-    // PR to one worker. Split the largest component deterministically until
-    // the requested bucket count can be seeded.
+    // Source/test affinity is preferred, but must never collapse a larger PR to one
+    // worker — split the largest component deterministically until the bucket count can be seeded.
     while (components.length < targetCount) {
         const index = components
             .map((component, componentIndex) => ({ component, componentIndex }))

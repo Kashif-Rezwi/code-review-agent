@@ -64,11 +64,15 @@ At server startup, a status-only request to GitHub `/rate_limit` validates the c
 ```json
 {
   "status": "ok",
+  "database": "valid",
+  "databaseSchema": "valid",
+  "redis": "valid",
+  "redisStreams": "valid",
   "githubToken": "valid"
 }
 ```
 
-`githubToken` is one of `valid`, `invalid`, `missing`, or `unchecked`. Invalid tokens make the aggregate status `degraded`; secrets are never returned.
+`database`, `databaseSchema`, `redis`, and `redisStreams` are each `valid`, `invalid`, or `unchecked`; `githubToken` is one of `valid`, `invalid`, `missing`, or `unchecked`. If **any** dependency is not `valid`, the aggregate `status` becomes `degraded`; secrets are never returned. Dependency probes are cached for 30 seconds — see [queue-streaming.md](./queue-streaming.md).
 
 ## Failure Behavior
 
@@ -90,4 +94,4 @@ At server startup, a status-only request to GitHub `/rate_limit` validates the c
 | `apps/server/src/github/github.types.ts` | `PRSnapshot` and normalized file types |
 | `apps/server/src/github/unified-diff.parser.ts` | Application-owned parser adapter |
 | `apps/server/src/github/github.utils.ts` | URL validation and base64 helpers |
-| `packages/ai/src/tools/github.tool.ts` | Base GitHub file schema |
+| `packages/ai/src/schemas/pr-file.schema.ts` | `PRFileSchema` / `PRFile` — PR file validation |

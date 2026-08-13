@@ -15,9 +15,7 @@ export class QueueService {
         @InjectQueue('review-jobs') private readonly reviewQueue: Queue<ReviewJobPayload>,
     ) {}
 
-    /**
-     * Enqueues a review job.
-     */
+    /** Enqueue a review job; no-op if a job with the same reviewId already exists. */
     async enqueue(payload: ReviewJobPayload): Promise<void> {
         const existing = await this.reviewQueue.getJob(payload.reviewId)
         if (existing) return
@@ -29,10 +27,7 @@ export class QueueService {
         })
     }
 
-    /**
-     * Removes a queued job by its reviewId (= BullMQ jobId).
-     * No-ops silently if the job has already started or been removed.
-     */
+    /** Remove a queued job by reviewId (= BullMQ jobId); no-ops if the job already started or was removed. */
     async removeJob(reviewId: string): Promise<void> {
         try {
             const job = await this.reviewQueue.getJob(reviewId)

@@ -53,26 +53,29 @@ Reviews are saved to your history and you can follow up with a chat interface to
 │  │                                                     │  │     │
 │  │  RAG Retrieval ──► AI Pipeline ──► emit events      │  │     │
 │  │       ▲                │                  │         │  │     │
-│  │  pgvector         streamText()        Redis pub/sub │  │     │
-│  │  (Neon DB)    (OpenAI gpt-4o-mini)  replay list    │  │     │
+│  │  pgvector         streamText()        Redis Streams │  │     │
+│  │  (Neon DB)     (AI Gateway)       event log          │  │     │
 │  └──────────────────────────────────────┬──────────────┘  │     │
 │                                         │                 │     │
-│                                    Redis ◄────────────────┘     │
+│                                   Redis ◄─────────────────┘     │
 │                                         │                       │
 │  ReviewStreamerService ◄────────────────┘                       │
-│  (replays history + subscribes live)                            │
-└─────────────────────────────────────────────────────────────────┘
+│  (tails the Streams event log)                                  │
+└────────────────────────┴────────────────────────────────────────┘
                          │
               ┌──────────┴──────────┐
-         Neon PostgreSQL        Redis (Upstash / Render)
-         (pgvector)             (BullMQ + pub/sub + replay)
+              │                     │
+     ┌────────▼────────┐   ┌────────▼─────────┐
+     │ Neon PostgreSQL │   │ Redis            │
+     │ (pgvector)      │   │ BullMQ + Streams │
+     └─────────────────┘   └──────────────────┘
 ```
 
 **Flow in plain English:**
 1. User submits code or a PR URL → server creates a DB record and enqueues a job → returns `reviewId`.
 2. Client navigates to `/review/:type/:reviewId` and opens an SSE stream.
 3. BullMQ worker picks up the job, runs the AI pipeline (including optional RAG context and linting), and emits events to Redis.
-4. `ReviewStreamerService` replays any already-emitted events to the client, then subscribes live.
+4. `ReviewStreamerService` tails the Redis Stream from the client's last seen ID (reconnect-safe via `Last-Event-ID`) and forwards events over SSE.
 5. On completion, the final review is persisted to PostgreSQL and the SSE stream closes cleanly.
 
 ---
@@ -83,10 +86,10 @@ Reviews are saved to your history and you can follow up with a chat interface to
 |---|---|
 | **Frontend** | Next.js 16 (App Router), NextAuth.js, Tailwind CSS, Monaco Editor |
 | **Backend** | NestJS (Node.js), BullMQ, ioredis |
-| **AI** | OpenAI gpt-4o-mini via Vercel AI SDK (`streamText`, `generateText`, `generateObject`) |
-| **Embeddings** | `text-embedding-3-small` via Vercel AI SDK |
+| **AI** | Vercel AI Gateway (`deepseek/deepseek-v4-flash-0731` review tier · `deepseek/deepseek-v4-flash-0731` fast tier) via AI SDK (`streamText`, `generateText`, `generateObject`) |
+| **Embeddings** | `google/gemini-embedding-001` (truncated to 1,536 dims) via AI Gateway |
 | **Database** | PostgreSQL (Neon) with `pgvector` extension, Prisma ORM |
-| **Queue / Pub-Sub** | Redis (BullMQ jobs + pub/sub event channel + SSE replay list) |
+| **Queue / Streaming** | Redis (BullMQ jobs + Redis Streams event log + cancellation channel) |
 | **Auth** | GitHub OAuth (NextAuth on client, token validation via GitHub `/user` API on server) |
 | **Monorepo** | pnpm workspaces |
 | **Deployment** | Server → Render.com · Client → Vercel |
@@ -105,9 +108,9 @@ code-review-agent/
 │   │   └── lib/              # Hooks, SSE consumer, stream reducer, API client
 │   └── server/               # NestJS backend
 │       ├── src/
-│       │   ├── ai/           # OpenAI provider setup
+│       │   ├── ai/           # Vercel AI Gateway provider + tiered model selection
 │       │   ├── auth/         # GitHub token validation, AuthGuard, token cache
-│       │   ├── github/       # GitHub API client (diff, files, file content)
+│       │   ├── github/       # GitHub API client (PR snapshot: metadata, files, patches)
 │       │   ├── history/      # Review history, follow-up chat
 │       │   ├── linter/       # In-process ESLint tool
 │       │   ├── prisma/       # Prisma client service
@@ -157,15 +160,19 @@ cp apps/server/.env.example apps/server/.env
 |---|---|
 | `DATABASE_URL` | Neon (or any Postgres) pooled connection string |
 | `DIRECT_URL` | Neon direct connection string (for Prisma migrations) |
-| `OPENAI_API_KEY` | OpenAI API key (required) |
+| `AI_ROUTER` | *(Optional)* Chat router: `vercel-gateway` (default) or `openrouter` — restart to switch |
+| `AI_GATEWAY_API_KEY` | Vercel AI Gateway key (required — serves embeddings always, plus chat when `AI_ROUTER=vercel-gateway`) |
+| `OPENROUTER_API_KEY` | *(Optional)* OpenRouter key — required when `AI_ROUTER=openrouter` |
+| `AI_REVIEW_MODEL` | *(Optional)* Review tier model ID in the active router's catalog, e.g. `deepseek/deepseek-v4-flash-0731` |
+| `AI_FAST_MODEL` | *(Optional)* Fast tier (planner/chat) model ID in the active router's catalog |
 | `REDIS_URL` | Redis connection string, e.g. `redis://localhost:6379` |
-| `GITHUB_CLIENT_ID` | GitHub OAuth App client ID |
-| `GITHUB_CLIENT_SECRET` | GitHub OAuth App client secret |
 | `FRONTEND_URL` | Frontend origin for CORS, e.g. `http://localhost:3000` |
 | `PORT` | Server port (default `4000`) |
 | `GITHUB_TOKEN` | *(Optional)* Personal access token for private repo PR reviews |
-| `HELICONE_API_KEY` | *(Optional)* Observability via Helicone |
-| `GROQ_API_KEY` | *(Optional)* Alternative AI provider |
+| `HELICONE_API_KEY` | *(Not implemented — reserved)* |
+| `GROQ_API_KEY` | *(Not implemented — reserved)* |
+
+(`GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET` are client-only — the server never reads them; see the frontend table below.)
 
 **Frontend** — copy and fill in `apps/client/.env`:
 
@@ -201,7 +208,7 @@ The frontend runs at `http://localhost:3000` and the API at `http://localhost:40
 
 ## Running with Docker Compose
 
-Docker Compose runs Redis, the NestJS server, and the Next.js client together. Make sure both `.env` files are filled in first.
+Docker Compose runs Redis, the NestJS server, and the Next.js client together. Make sure both `.env` files are filled in first. Compose intentionally has no Postgres service — the API uses your external PostgreSQL (with pgvector, e.g. Neon) via `DATABASE_URL`/`DIRECT_URL`; run `cd apps/server && npx prisma migrate deploy` against it before starting the stack.
 
 ```bash
 # Build and start all services
@@ -239,7 +246,7 @@ Detailed design documents for each subsystem live in the [`docs/`](./docs/) dire
 | [docs/authentication.md](./docs/authentication.md) | GitHub OAuth, token validation, AuthGuard, user model |
 | [docs/review-code.md](./docs/review-code.md) | Code review pipeline (single-agent) |
 | [docs/review-pr.md](./docs/review-pr.md) | PR review pipeline (multi-agent clustered) |
-| [docs/queue-streaming.md](./docs/queue-streaming.md) | BullMQ, Redis pub/sub, SSE transport layer |
+| [docs/queue-streaming.md](./docs/queue-streaming.md) | BullMQ, dispatch outbox, Redis Streams, SSE transport layer |
 | [docs/github-integration.md](./docs/github-integration.md) | GitHub API usage, rate limits, pagination |
 | [docs/rag.md](./docs/rag.md) | Document ingestion, vector embeddings, retrieval |
 | [docs/history-chat.md](./docs/history-chat.md) | Review history, follow-up chat, stats |

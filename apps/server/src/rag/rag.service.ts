@@ -1,6 +1,5 @@
-import { Injectable, Logger, BadRequestException } from '@nestjs/common'
+import { Injectable, Logger, BadRequestException, NotFoundException } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
-import { embed, embedMany } from 'ai'
 import { chunkText } from '@cra/ai'
 import { RagRepository, RetrievedStandards } from './rag.repository'
 import { extractText } from './document-parser.util'
@@ -32,13 +31,10 @@ export class RagService {
         }
 
         this.logger.log(`[RAG Ingest] Extracted ${chunks.length} chunks. Generating embeddings...`)
-        // One batched API call for all chunks — far fewer round-trips than a loop
-        const { embeddings } = await embedMany({
-            model: this.aiService.embeddingModel,
-            values: chunks,
-        })
+        // One batched call for all chunks — far fewer round-trips than a loop.
+        // Dimensions/task typing live in AiService (the provider boundary).
+        const embeddings = await this.aiService.embedDocuments(chunks)
 
-        // Delegate persistence and SQL vectors to Repository
         this.logger.log(`[RAG Ingest SUCCESS] Persisting ${chunks.length} vector chunks to pgvector.`)
         return this.ragRepository.insertDocumentWithEmbeddings(fileName, userId, chunks, embeddings)
     }
@@ -46,9 +42,8 @@ export class RagService {
     // ── Retrieve ─────────────────────────────────────────────────────────────
 
     /**
-     * Returns the top-5 most relevant chunks for `queryText`.
-     * Returns null — never throws — so reviews degrade gracefully when
-     * no standards are uploaded or the DB is unavailable.
+     * Top-5 most relevant chunks for `queryText`, or null — never throws, so reviews
+     * degrade gracefully when no standards are uploaded or the DB is unavailable.
      */
     async retrieveForContext(queryText: string, userId: string): Promise<RetrievedStandards | null> {
         if (!this.hasDb) {
@@ -57,11 +52,12 @@ export class RagService {
         }
 
         try {
-            this.logger.log(`[RAG Retrieve] Encoding context query: \n\n"${queryText}"\n\n...`)
-            const { embedding } = await embed({
-                model: this.aiService.embeddingModel,
-                value: queryText,
-            })
+            // The query IS the user's source code — never log it verbatim (proprietary code/secrets
+            // would persist in log pipelines). Length + a short preview is enough to correlate requests.
+            const preview = queryText.replace(/\s+/g, ' ').trim()
+            const excerpt = preview.length > 120 ? `${preview.slice(0, 120)}…` : preview
+            this.logger.log(`[RAG Retrieve] Encoding context query (${queryText.length} chars): "${excerpt}"`)
+            const embedding = await this.aiService.embedQuery(queryText)
 
             const standards = await this.ragRepository.querySimilarChunks(embedding, userId)
 
@@ -86,7 +82,8 @@ export class RagService {
         return this.ragRepository.listDocuments(userId)
     }
 
-    deleteDocument(id: string, userId: string) {
-        return this.ragRepository.deleteDocument(id, userId)
+    async deleteDocument(id: string, userId: string): Promise<void> {
+        const deleted = await this.ragRepository.deleteDocument(id, userId)
+        if (!deleted) throw new NotFoundException(`Document ${id} not found.`)
     }
 }

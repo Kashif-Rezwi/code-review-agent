@@ -41,11 +41,8 @@ export type ReviewCoverage = z.infer<typeof ReviewCoverageSchema>
 export type ReviewAcquisitionSource = z.infer<typeof ReviewAcquisitionSourceSchema>
 
 /**
- * Events emitted by the /review/[analyze|from-pr]/stream SSE endpoints.
- * Each event is a JSON object on a `data:` line, delimited by \n\n.
- *
- * `clusterId` is present only when running the multi-agent clustered PR path.
- * All single-agent paths leave it undefined, preserving backward compatibility.
+ * Events emitted by the GET /review/:id/stream SSE endpoint (one JSON object per `data:` line).
+ * `clusterId` is present only on the multi-agent clustered PR path; single-agent paths leave it undefined.
  */
 export type ReviewStreamEvent =
     | { type: 'start' }

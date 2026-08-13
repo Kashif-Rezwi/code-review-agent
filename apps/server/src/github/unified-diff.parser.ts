@@ -9,9 +9,8 @@ export interface ParsedUnifiedDiff {
 }
 
 /**
- * Convert a GitHub/Git unified diff into the same per-file shape returned by
- * GitHub's pull-files endpoint. The adapter deliberately owns status/path
- * normalization so the rest of the review pipeline is acquisition-agnostic.
+ * Convert a unified diff into the same per-file shape as GitHub's pull-files endpoint,
+ * owning status/path normalization so the rest of the pipeline is acquisition-agnostic.
  */
 export function parseUnifiedDiff(input: string): ParsedUnifiedDiff {
     const parsed = parseDiff(input)

@@ -1,7 +1,9 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common'
+import type { ReviewStatus } from '@prisma/client'
 
 import { AiService } from '../ai/ai.service'
-import { streamText } from 'ai'
+import { ProviderStreamError, runChatStream, toProviderStreamError } from '../ai/ai-runtime.adapter'
+import { AI_POLICY } from '../ai/ai-policy'
 import { HistoryRepository, ReviewWithRelations } from './history.repository'
 
 @Injectable()
@@ -22,6 +24,11 @@ export class HistoryService {
         return review
     }
 
+    /** Status-only poll used by the SSE streamer loop; null means the review no longer exists. */
+    async getReviewStatus(id: string, userId: string): Promise<ReviewStatus | null> {
+        return this.historyRepository.getReviewStatus(id, userId)
+    }
+
     async getStats(userId: string) {
         return this.historyRepository.getStats(userId)
     }
@@ -32,10 +39,11 @@ export class HistoryService {
     }
 
     /**
-     * Streams the chat completion from the LLM, yielding text chunks.
-     * Persists the conversation securely to the database when the stream naturally completes.
+     * Stream the chat completion, yielding text chunks; persist the conversation when the stream
+     * completes naturally. Same provider-error contract as the review pipeline: a captured stream
+     * error is rethrown after the loop — never saved as a blank answer.
      */
-    async *chatGenerator(id: string, userId: string, message: string): AsyncGenerator<string, void, unknown> {
+    async *chatGenerator(id: string, userId: string, message: string, signal?: AbortSignal): AsyncGenerator<string, void, unknown> {
         const review = await this.getReview(id, userId)
         const system = this.buildChatSystem(review)
 
@@ -44,20 +52,28 @@ export class HistoryService {
             content: c.content,
         }))
 
-        const result = streamText({
-            model: this.aiService.defaultModel,
+        let providerError: ProviderStreamError | undefined
+        const result = runChatStream({
+            model: this.aiService.fastModel,
             system,
             messages: [...history, { role: 'user', content: message }],
-            temperature: 0.3,
+            temperature: AI_POLICY.temperature.chat,
+            maxOutputTokens: AI_POLICY.maxOutputTokens.chat,
+            abortSignal: signal,
+            onError: ({ error }: { error: unknown }) => {
+                providerError = toProviderStreamError(error)
+            },
         })
 
         let fullText = ''
-        
-        // Let any AI SDK errors throw naturally back to the controller
         for await (const chunk of result.textStream) {
             fullText += chunk
             yield chunk
         }
+
+        if (providerError) throw providerError
+        // A disconnected client aborts mid-stream — don't persist a partial answer.
+        if (signal?.aborted) return
 
         if (fullText) {
             await this.historyRepository.saveChatQuery(id, message, fullText)

@@ -1,5 +1,6 @@
 import { Injectable, Logger, type MessageEvent } from '@nestjs/common'
 import { ReviewDataSchema, type ReviewData, type ReviewStreamEvent } from '@cra/types'
+import type { ReviewStatus } from '@prisma/client'
 import type { Redis } from 'ioredis'
 import { Observable } from 'rxjs'
 
@@ -32,7 +33,9 @@ export class ReviewStreamerService {
 
             void (async () => {
                 try {
-                    let review = await this.historyService.getReview(reviewId, userId)
+                    // Full load once up front (ownership check + initial status); the poll loop
+                    // below uses the status-only query to avoid re-loading issues/conversations every cycle.
+                    let status: ReviewStatus = (await this.historyService.getReview(reviewId, userId)).status
                     reader = this.redisService.createConnection()
                     let lastId = isStreamId(suppliedLastId) ? suppliedLastId : '0-0'
                     let terminalDelivered = false
@@ -40,13 +43,19 @@ export class ReviewStreamerService {
                     while (!stopped && !subscriber.closed) {
                         // A terminal row should replay immediately rather than wait for
                         // an empty 15-second blocking read.
-                        const blockMs = TERMINAL_STATUSES.has(review.status) ? 0 : 15_000
+                        const blockMs = TERMINAL_STATUSES.has(status) ? 0 : 15_000
                         let entries: RedisStreamEvent[]
                         try {
                             entries = await this.redisService.readEvents(reader, reviewId, lastId, blockMs)
                         } catch (error) {
-                            review = await this.historyService.getReview(reviewId, userId)
-                            if (TERMINAL_STATUSES.has(review.status)) {
+                            const latest = await this.historyService.getReviewStatus(reviewId, userId)
+                            if (latest === null) {
+                                await finish()
+                                return
+                            }
+                            status = latest
+                            if (TERMINAL_STATUSES.has(status)) {
+                                const review = await this.historyService.getReview(reviewId, userId)
                                 const terminal = reconstructTerminal(review)
                                 subscriber.next({ type: terminal.type, data: terminal })
                                 await finish()
@@ -68,8 +77,15 @@ export class ReviewStreamerService {
                             return
                         }
 
-                        review = await this.historyService.getReview(reviewId, userId)
-                        if (TERMINAL_STATUSES.has(review.status)) {
+                        const latest = await this.historyService.getReviewStatus(reviewId, userId)
+                        if (latest === null) {
+                            // Review was deleted mid-stream — close quietly.
+                            await finish()
+                            return
+                        }
+                        status = latest
+                        if (TERMINAL_STATUSES.has(status)) {
+                            const review = await this.historyService.getReview(reviewId, userId)
                             const terminal = reconstructTerminal(review)
                             subscriber.next({ type: terminal.type, data: terminal })
                             await finish()
@@ -107,10 +123,17 @@ function parseEvent(message: string): ReviewStreamEvent | undefined {
 }
 
 function reconstructTerminal(review: ReviewWithRelations): ReviewStreamEvent {
+    // The persisted trace ends with the original terminal event — recover the
+    // real duration/step count (and failure message) instead of emitting zeros.
+    const traceTerminal = lastTerminalFromTrace(review.traceLog)
+
     if (review.status === 'FAILED' || review.status === 'CANCELLED') {
+        const traceMessage = traceTerminal?.type === 'error' && typeof traceTerminal.message === 'string'
+            ? traceTerminal.message
+            : undefined
         return {
             type: 'error',
-            message: review.summary || (review.status === 'CANCELLED' ? 'Review cancelled' : 'Review failed'),
+            message: traceMessage ?? (review.summary || (review.status === 'CANCELLED' ? 'Review cancelled' : 'Review failed')),
         }
     }
 
@@ -136,10 +159,25 @@ function reconstructTerminal(review: ReviewWithRelations): ReviewStreamEvent {
     return {
         type: 'complete',
         review: ReviewDataSchema.parse(candidate),
-        durationMs: 0,
-        stepCount: Array.isArray(review.traceLog) ? review.traceLog.length : 0,
+        durationMs: typeof traceTerminal?.durationMs === 'number' ? traceTerminal.durationMs : 0,
+        stepCount: typeof traceTerminal?.stepCount === 'number'
+            ? traceTerminal.stepCount
+            : Array.isArray(review.traceLog) ? review.traceLog.length : 0,
         outcome: review.status === 'PARTIAL' ? 'partial' : 'complete',
     }
+}
+
+/** Find the terminal event (`complete`/`error`) the pipeline appended to the trace. */
+function lastTerminalFromTrace(traceLog: unknown): Record<string, unknown> | undefined {
+    if (!Array.isArray(traceLog)) return undefined
+    for (let index = traceLog.length - 1; index >= 0; index--) {
+        const entry: unknown = traceLog[index]
+        if (entry !== null && typeof entry === 'object' && !Array.isArray(entry)) {
+            const type = (entry as Record<string, unknown>).type
+            if (type === 'complete' || type === 'error') return entry as Record<string, unknown>
+        }
+    }
+    return undefined
 }
 
 function isStreamId(value?: string): value is string {

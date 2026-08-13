@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Reads the pnpm version from the root package.json `packageManager` field.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build:packages
+
+      # Tests import @prisma/client; pnpm blocks dependency postinstalls,
+      # so the generated client must be produced explicitly.
+      - run: pnpm --filter server prisma:generate
+
+      - run: pnpm type-check
+
+      # Non-mutating (no --fix) — a red lint fails the build, it never rewrites it.
+      - run: pnpm lint
+
+      - run: pnpm --filter server test
+      - run: pnpm --filter client test
+
+  migration-smoke:
+    # Locks in reproducible provisioning: a completely empty database must accept
+    # every migration, and the migrated schema must match prisma/schema.prisma.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_PASSWORD: pg
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Apply all migrations to an empty database
+        working-directory: apps/server
+        env:
+          DATABASE_URL: postgresql://postgres:pg@localhost:5432/postgres
+          DIRECT_URL: postgresql://postgres:pg@localhost:5432/postgres
+        run: npx prisma migrate deploy
+
+      - name: Assert zero drift between the migrated database and schema.prisma
+        working-directory: apps/server
+        env:
+          DATABASE_URL: postgresql://postgres:pg@localhost:5432/postgres
+        run: npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --exit-code

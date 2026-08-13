@@ -22,10 +22,7 @@ export class RedisService implements OnModuleDestroy {
         return new Redis(this.redisUrl)
     }
 
-    /**
-     * Append an ordered event and refresh its replay window. Redis Streams avoid
-     * the history-read/subscription gap inherent in List + Pub/Sub delivery.
-     */
+    /** Append an ordered event and refresh its replay window — Redis Streams avoid the history-read/subscription gap of List + Pub/Sub. */
     async emitEvent(reviewId: string, message: string): Promise<string> {
         const key = this.eventKey(reviewId)
         const results = await this.publisher

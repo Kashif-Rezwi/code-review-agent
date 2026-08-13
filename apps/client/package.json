@@ -17,7 +17,6 @@
     "@cra/ai": "workspace:*",
     "@cra/types": "workspace:*",
     "@monaco-editor/react": "^4.7.0",
-    "@nanostores/react": "git+https://github.com/ai/react.git",
     "@radix-ui/react-slot": "^1.2.4",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -33,16 +32,16 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.0",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "@testing-library/jest-dom": "^6.9.1",
-    "@testing-library/react": "^16.3.0",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
+    "jsdom": "^26.1.0",
     "tailwindcss": "^4",
     "typescript": "^5",
-    "jsdom": "^26.1.0",
     "vitest": "^3.2.4"
   }
 }

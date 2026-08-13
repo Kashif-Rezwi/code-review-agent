@@ -1,5 +1,12 @@
 name: code-review-agent
 
+# NOTE: there is intentionally no Postgres service here. The API expects an
+# external PostgreSQL with pgvector (DATABASE_URL/DIRECT_URL in
+# apps/server/.env, e.g. Neon). Bundling pgvector would make compose much
+# heavier than it is worth for local parity.
+# Run migrations against your database before `docker compose up`:
+#   cd apps/server && npx prisma migrate deploy
+
 services:
   # ─────────────────────────────────────────────────────────
   # Redis Queue Broker
@@ -68,7 +75,10 @@ services:
       server:
         condition: service_started
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3000"]
+      # / redirects to /login behind auth — probe /login directly (returns 200).
+      # Use 127.0.0.1, not localhost: busybox wget tries ::1 first and never falls
+      # back, while the Next standalone server binds IPv4-only (0.0.0.0).
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/login"]
       interval: 15s
       timeout: 5s
       start_period: 30s

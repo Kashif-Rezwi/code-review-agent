@@ -1,9 +1,4 @@
-/**
- * Custom hook that manages the Standards page document list.
- *
- * Encapsulates all fetch / upload / delete logic so the page component
- * stays focused on presentation only.
- */
+/** Manage the Standards page document list — encapsulates fetch/upload/delete so the page stays presentational. */
 
 import { useCallback, useEffect, useState } from 'react'
 import { ragService } from '@/lib/api'
@@ -55,7 +50,7 @@ export function useStandardsDocuments(githubToken?: string): UseStandardsDocumen
 
     const uploadFile = useCallback(async (file: File) => {
         if (!ALLOWED_TYPES.includes(file.type)) {
-            setUploadError('Only .txt and .pdf files are supported.')
+            setUploadError('Only .txt, .md, and .pdf files are supported.')
             return
         }
         if (file.size > MAX_SIZE_BYTES) {

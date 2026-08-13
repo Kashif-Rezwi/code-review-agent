@@ -40,6 +40,15 @@ export class HistoryRepository {
         })
     }
 
+    /** Lightweight status probe for the SSE poll loop — avoids loading issues/conversations every cycle. */
+    async getReviewStatus(id: string, userId: string): Promise<ReviewStatus | null> {
+        const review = await this.prisma.review.findFirst({
+            where: { id, userId },
+            select: { status: true },
+        })
+        return review?.status ?? null
+    }
+
     async getStats(userId: string) {
         const terminalStatuses: ReviewStatus[] = ['COMPLETE', 'PARTIAL']
         const [totalReviews, partialReviews, byType, bySeverity] = await Promise.all([

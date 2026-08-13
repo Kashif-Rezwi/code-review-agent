@@ -13,6 +13,7 @@ HistoryController (src/history/history.controller.ts)
   GET  /history              → list all reviews for the user (summary view)
   GET  /history/stats        → aggregate stats (total reviews, issue counts)
   GET  /history/:id          → full review detail
+  DELETE /history/:id        → delete a review (204; ownership-checked)
   POST /history/:id/chat     → send a message; returns SSE stream of { type:"delta"|"done"|"error" }
 
 ReviewController (src/review/review.controller.ts)
@@ -29,9 +30,10 @@ ReviewController (src/review/review.controller.ts)
 
 | Method | Route | Description |
 |---|---|---|
-| `GET` | `/history` | List all reviews for the authenticated user |
+| `GET` | `/history` | List the authenticated user's reviews (**only `COMPLETE`/`PARTIAL` status** — in-progress/failed/cancelled reviews are excluded) |
 | `GET` | `/history/stats` | Aggregate stats for the dashboard |
 | `GET` | `/history/:id` | Full review detail |
+| `DELETE` | `/history/:id` | Delete a review — 204 on success, 404 when missing or owned by another user |
 | `POST` | `/history/:id/chat` | Send a chat message; returns SSE stream of events |
 
 The chat endpoint is decorated with `@Sse()` and returns an `Observable<MessageEvent>`. Each token is emitted as `{ data: { type: 'delta', text: chunk } }`. A `{ data: { type: 'done' } }` event is sent when the stream completes, or `{ data: { type: 'error', message } }` on failure.
