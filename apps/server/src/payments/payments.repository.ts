@@ -16,6 +16,7 @@ export class PaymentsRepository {
         packageId: string
         amountPaise: number
         currency: string
+        creditsGranted: number // R-02: persisted at creation time, read at capture time
     }) {
         return this.prisma.paymentOrder.create({ data })
     }
@@ -38,15 +39,14 @@ export class PaymentsRepository {
     async captureOrder(params: {
         razorpayOrderId: string
         razorpayPaymentId: string
-        creditsGranted: number
         razorpayEventId: string
         payload: Prisma.InputJsonValue
         /** Amount paid in paise from Razorpay payload — used for cross-check (F-09). */
         amountPaidPaise: number | null
         /** Currency from Razorpay payload — used for cross-check (S-05). */
         currency: string | null
-    }): Promise<'captured' | 'already_captured' | 'not_found' | 'amount_mismatch'> {
-        const { razorpayOrderId, razorpayPaymentId, creditsGranted, razorpayEventId, payload, amountPaidPaise, currency } = params
+    }): Promise<'captured' | 'already_captured' | 'not_found' | 'amount_mismatch' | 'zero_credits'> {
+        const { razorpayOrderId, razorpayPaymentId, razorpayEventId, payload, amountPaidPaise, currency } = params
 
         return this.prisma.$transaction(async (tx) => {
             // Step 1: Insert PaymentEvent — unique constraint on razorpayEventId is the idempotency key.
@@ -63,6 +63,27 @@ export class PaymentsRepository {
             // Step 2: Load local order to cross-check amount (F-09).
             const localOrder = await tx.paymentOrder.findUnique({ where: { razorpayOrderId } })
             if (!localOrder) return 'not_found'
+
+            // Step 2b: Fail-closed on zero/negative credits (R-02).
+            // creditsGranted was persisted at order creation time. If it is <= 0,
+            // the package was removed/renamed between creation and webhook delivery,
+            // or the order predates the fix. Do NOT capture — leave the order CREATED
+            // for manual reconciliation and record a zero_credits event.
+            if (localOrder.creditsGranted <= 0) {
+                this.logger.error(
+                    `[R-02] Order ${razorpayOrderId} has creditsGranted = ${localOrder.creditsGranted} (<= 0). ` +
+                    'Credits NOT granted. Recording zero_credits event for reconciliation.',
+                )
+                await tx.paymentEvent.create({
+                    data: {
+                        razorpayEventId: `${razorpayEventId}_zero_credits`,
+                        razorpayOrderId,
+                        eventType: 'order.paid.zero_credits',
+                        payload,
+                    },
+                })
+                return 'zero_credits'
+            }
 
             // Step 3: Amount + currency cross-check (F-09, S-02, S-05).
             // Fail-closed: a missing amount_paid is treated as a mismatch, not skipped (S-02).
@@ -90,14 +111,14 @@ export class PaymentsRepository {
             // Step 4: Status-guard transition CREATED → CAPTURED (idempotency layer 2).
             const result = await tx.paymentOrder.updateMany({
                 where: { razorpayOrderId, status: 'CREATED' },
-                data: { status: 'CAPTURED', razorpayPaymentId, creditsGranted },
+                data: { status: 'CAPTURED', razorpayPaymentId, creditsGranted: localOrder.creditsGranted },
             })
             if (result.count === 0) return 'already_captured'
 
             // Step 5: Increment creditBalance.
             await tx.user.updateMany({
                 where: { id: localOrder.userId },
-                data: { creditBalance: { increment: creditsGranted } },
+                data: { creditBalance: { increment: localOrder.creditsGranted } },
             })
 
             // Step 6: Read balanceAfter from DB — never compute it (F-04).
@@ -111,10 +132,10 @@ export class PaymentsRepository {
                 data: {
                     userId: localOrder.userId,
                     type: 'PURCHASE',
-                    amount: creditsGranted,
+                    amount: localOrder.creditsGranted,
                     balanceAfter: updatedUser.creditBalance,
                     orderId: localOrder.id,
-                    description: `Purchased ${creditsGranted} credits`,
+                    description: `Purchased ${localOrder.creditsGranted} credits`,
                 },
             })
 

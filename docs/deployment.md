@@ -104,7 +104,8 @@ The Vercel project's **Root Directory is `apps/client`** — `vercel.json` overr
 | `GITHUB_CLIENT_ID` | Same GitHub OAuth App as the server |
 | `GITHUB_CLIENT_SECRET` | Same GitHub OAuth App as the server |
 | `NEXT_PUBLIC_API_URL` | The Render.com API URL, e.g. `https://code-review-agent-api.onrender.com` |
-| `NEXT_PUBLIC_RAZORPAY_KEY_ID` | Razorpay Key ID (publishable, safe for browser) |
+
+> **Razorpay note:** The publishable Razorpay `key_id` is delivered to the browser via the `POST /payments/order` response (server-returned `keyId`). No client-side `NEXT_PUBLIC_RAZORPAY_KEY_ID` environment variable is required (R-06 — removed as dead configuration).
 
 ---
 

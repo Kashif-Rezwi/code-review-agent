@@ -160,7 +160,7 @@ model PaymentOrder {
   packageId         String                    // credit package key, e.g. "50", "200", "500"
   amountPaise       Int                       // Razorpay amounts are always integer paise
   currency          String      @default("INR")
-  creditsGranted    Int         @default(0)   // 0 until CAPTURED; set atomically during transition
+  creditsGranted    Int         @default(0)   // persisted at order creation (R-02); read atomically during CREATED → CAPTURED transition
   status            OrderStatus @default(CREATED)
   createdAt         DateTime    @default(now())
   updatedAt         DateTime    @updatedAt

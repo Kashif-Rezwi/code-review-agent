@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Post, Req, UseGuards, Logger, Sse, MessageEvent } from '@nestjs/common'
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Post, Req, UseGuards, UseInterceptors, Logger, Sse, MessageEvent } from '@nestjs/common'
 import type { Request } from 'express'
 import { Observable } from 'rxjs'
 import { HistoryService } from './history.service'
@@ -12,6 +12,7 @@ import { CreditGuard } from '../payments/credit.guard'
 import { CreditCost } from '../payments/credit-cost.decorator'
 import { CREDIT_COSTS } from '../payments/credit-cost.policy'
 import { PaymentsService } from '../payments/payments.service'
+import { CreditRefundInterceptor } from '../payments/credit-refund.interceptor'
 
 @UseGuards(AuthGuard)
 @Controller('history')
@@ -49,6 +50,7 @@ export class HistoryController {
     @Post(':id/chat')
     @Sse()
     @UseGuards(UserThrottlerGuard, CreditGuard)
+    @UseInterceptors(CreditRefundInterceptor)
     @CreditCost(CREDIT_COSTS.CHAT)
     @Throttle({ default: { limit: 60, ttl: 3_600_000 } })
     chat(@Param('id') id: string, @Body() dto: ChatMessageDto, @Req() req: Request): Observable<MessageEvent> {
@@ -79,6 +81,9 @@ export class HistoryController {
                                 `Failed to refund chat credits: ${refundErr instanceof Error ? refundErr.message : String(refundErr)}`,
                             )
                         })
+                        // R-01: Clear markers so CreditRefundInterceptor doesn't double-refund.
+                        creditReq.creditDeducted = undefined
+                        creditReq.creditUserId = undefined
                     }
                     const message = err instanceof ProviderStreamError
                         ? 'The AI provider returned an error. Please try again later.'

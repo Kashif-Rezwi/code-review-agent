@@ -1,4 +1,4 @@
-import { Body, Controller, Post, Get, Delete, Param, HttpCode, Req, UseGuards, Sse, MessageEvent, BadRequestException, Logger } from '@nestjs/common'
+import { Body, Controller, Post, Get, Delete, Param, HttpCode, Req, UseGuards, UseInterceptors, Sse, MessageEvent, BadRequestException, Logger } from '@nestjs/common'
 import { Request } from 'express'
 import { Observable } from 'rxjs'
 import { Throttle } from '@nestjs/throttler'
@@ -12,6 +12,7 @@ import { CreditGuard } from '../payments/credit.guard'
 import { CreditCost } from '../payments/credit-cost.decorator'
 import { CREDIT_COSTS } from '../payments/credit-cost.policy'
 import { PaymentsService } from '../payments/payments.service'
+import { CreditRefundInterceptor } from '../payments/credit-refund.interceptor'
 
 @UseGuards(AuthGuard)
 @Controller('review')
@@ -30,6 +31,7 @@ export class ReviewController {
     // Paid endpoint (LLM calls) — 10 reviews per user per hour.
     // Guard runs after the controller-level AuthGuard, so it keys on req.user.userId.
     @UseGuards(UserThrottlerGuard, CreditGuard)
+    @UseInterceptors(CreditRefundInterceptor)
     @CreditCost((req: Request) => {
         const type = (req.body as { type?: unknown } | undefined)?.type
         if (type === 'PR') return CREDIT_COSTS.PR_REVIEW
@@ -56,6 +58,10 @@ export class ReviewController {
                         `Failed to refund credits after handler error: ${refundErr instanceof Error ? refundErr.message : String(refundErr)}`,
                     )
                 })
+                // R-01: Clear markers so CreditRefundInterceptor doesn't double-refund
+                // when the re-thrown exception propagates through its catchError.
+                creditReq.creditDeducted = undefined
+                creditReq.creditUserId = undefined
             }
             throw err
         }

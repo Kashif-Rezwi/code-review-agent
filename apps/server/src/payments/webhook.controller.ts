@@ -8,7 +8,9 @@ import {
     Post,
     Req,
     UnauthorizedException,
+    UseGuards,
 } from '@nestjs/common'
+import { Throttle, ThrottlerGuard } from '@nestjs/throttler'
 import type { RawBodyRequest } from '@nestjs/common'
 import type { Request } from 'express'
 import { PaymentsService } from './payments.service'
@@ -28,6 +30,8 @@ export class WebhookController {
 
     @Post('webhook')
     @HttpCode(200)
+    @UseGuards(ThrottlerGuard)
+    @Throttle({ default: { limit: 100, ttl: 60_000 } }) // R-03: 100/min per IP — far above legitimate Razorpay delivery rates
     async handleWebhook(
         @Req() req: RawBodyRequest<Request>,
         @Headers('x-razorpay-signature') signatureHeader: string | undefined,

@@ -37,7 +37,6 @@ describe('PaymentsRepository security hardening', () => {
     const baseParams = {
         razorpayOrderId: 'order_123',
         razorpayPaymentId: 'pay_123',
-        creditsGranted: 50,
         razorpayEventId: 'evt_123',
         payload: {} as any,
     }
@@ -48,6 +47,7 @@ describe('PaymentsRepository security hardening', () => {
         razorpayOrderId: 'order_123',
         amountPaise: 9900,
         currency: 'INR',
+        creditsGranted: 50, // R-02: persisted at order creation time, read during capture
     }
 
     describe('captureOrder — amount + currency cross-check (S-02, S-05)', () => {
@@ -121,6 +121,25 @@ describe('PaymentsRepository security hardening', () => {
             const result = await repo.captureOrder({ ...baseParams, amountPaidPaise: 9900, currency: 'INR' })
 
             expect(result).toBe('not_found')
+        })
+
+        it('R-02: returns zero_credits when localOrder.creditsGranted <= 0 (fail-closed)', async () => {
+            mockTx.paymentOrder.findUnique.mockResolvedValue({ ...localOrder, creditsGranted: 0 })
+
+            const result = await repo.captureOrder({ ...baseParams, amountPaidPaise: 9900, currency: 'INR' })
+
+            expect(result).toBe('zero_credits')
+            // Credits must NOT be granted.
+            expect(mockTx.user.updateMany).not.toHaveBeenCalled()
+            expect(mockTx.creditLedger.create).not.toHaveBeenCalled()
+            // A zero_credits event must be recorded for reconciliation.
+            expect(mockTx.paymentEvent.create).toHaveBeenCalledTimes(2)
+            expect(mockTx.paymentEvent.create).toHaveBeenNthCalledWith(
+                2,
+                expect.objectContaining({
+                    data: expect.objectContaining({ eventType: 'order.paid.zero_credits' }),
+                }),
+            )
         })
     })
 

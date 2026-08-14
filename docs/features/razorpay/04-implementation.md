@@ -154,3 +154,33 @@ A focused security-hardening pass was performed on the implemented payment-criti
 - **`payments.service.spec.ts`** (+1 test): currency extraction from webhook payload.
 - **`review.controller.spec.ts`** (+1 test): handler-failure propagation (S-03).
 - Updated `review.controller.spec.ts` and `review.throttle.spec.ts` to provide `PaymentsService` mock.
+
+---
+
+## Security Review Remediation (R-01 through R-08)
+
+> **Date:** 2026-08-14
+> **Source:** Independent security review ([`06-security-review.md`](./06-security-review.md)), findings R-01 through R-08.
+> **Full record:** [`07-remediation.md`](./07-remediation.md)
+
+### Changes applied
+
+- **R-01 (Medium):** Created `CreditRefundInterceptor` (`apps/server/src/payments/credit-refund.interceptor.ts`) — catches pipe-level 400s and any pre-handler error after `CreditGuard` deduction, refunds `req.creditDeducted` via RxJS `catchError`. Applied via `@UseInterceptors()` on `POST /review/session` and `POST /history/:id/chat`. Handler catch blocks (S-03/S-04) now clear `creditDeducted`/`creditUserId` markers to prevent double-refund. Registered in `PaymentsModule`.
+- **R-02 (Medium):** `creditsGranted` now persisted at order creation (`PaymentsService.createOrder` → `PaymentsRepository.createOrder`). `captureOrder` reads `creditsGranted` from `localOrder` instead of re-resolving the package at webhook time. Fail-closed: `≤ 0` returns `'zero_credits'`, records `order.paid.zero_credits` event, leaves order `CREATED`. Removed `resolvePackageForOrder` from `PaymentsService`. Updated `schema.prisma` comment.
+- **R-03 (Low):** Added `@UseGuards(ThrottlerGuard)` + `@Throttle({ default: { limit: 100, ttl: 60_000 } })` to `POST /payments/webhook` (`webhook.controller.ts`). Updated `webhook.controller.spec.ts` to import `ThrottlerModule`.
+- **R-04 (Low):** Elevated `not_found` log to `error` level. Added `zero_credits` case with `error`-level logging in `handleOrderPaid` switch. External alerting = remaining limitation.
+- **R-05 (Informational):** Added `@UseGuards(UserThrottlerGuard)` + `@Throttle({ default: { limit: 60, ttl: 60_000 } })` to `GET /payments/wallet` (`payments.controller.ts`) — implements F-12.
+- **R-06 (Informational):** Removed dead `NEXT_PUBLIC_RAZORPAY_KEY_ID` from `apps/client/.env.example` and `docs/deployment.md`. Updated `apps/server/.env.example` comment.
+- **R-07 (Informational):** Excluded `/payments/` routes from the deprecated `?token=` auth fallback in `auth.guard.ts`.
+- **R-08 (Informational):** Added type guard (`typeof parsed !== 'object' || parsed === null`) after `JSON.parse` in `handleWebhook` (`payments.service.ts`).
+
+### Tests added
+
+- **`review.controller.spec.ts`** (+2 tests): R-01 pipe-level 400 credit refund, R-01 valid-201 no-refund.
+- **`payments.service.spec.ts`** (+2 tests): R-08 non-object JSON body (null), R-08 non-object JSON body (string).
+- **`payments.repository.spec.ts`** (+1 test): R-02 zero-credit fail-closed.
+- Updated `review.controller.spec.ts`, `review.throttle.spec.ts`, `webhook.controller.spec.ts` for new providers/imports.
+
+### Verification
+
+All green: `pnpm build:packages` ✓, `pnpm type-check` ✓ (4 projects, 0 errors), `pnpm --filter server test` ✓ (31 suites, 152 tests), `pnpm --filter client test` ✓ (10 files, 16 tests), `pnpm lint` ✓ (exit 0).

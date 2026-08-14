@@ -82,6 +82,7 @@ export class PaymentsService {
             packageId,
             amountPaise: pkg.amountPaise,
             currency: pkg.currency,
+            creditsGranted: pkg.credits, // R-02: persist at creation time, read at capture time
         })
 
         return {
@@ -123,7 +124,15 @@ export class PaymentsService {
         // Parse body only after signature is verified.
         let event: { event: string; payload?: Record<string, unknown> }
         try {
-            event = JSON.parse(rawBody.toString('utf8')) as typeof event
+            const parsed: unknown = JSON.parse(rawBody.toString('utf8'))
+            // R-08: Guard against non-object JSON (e.g. null, "str", 123) that would
+            // cause a TypeError when reading event.event — Razorpay always delivers
+            // object payloads, but a defensive check avoids an unhandled 500.
+            if (typeof parsed !== 'object' || parsed === null) {
+                this.logger.warn(`Webhook body is valid JSON but not an object (eventId: ${eventId})`)
+                return
+            }
+            event = parsed as typeof event
         } catch {
             this.logger.warn(`Webhook body is not valid JSON (eventId: ${eventId})`)
             return
@@ -160,13 +169,13 @@ export class PaymentsService {
             return
         }
 
-        const pkg = await this.resolvePackageForOrder(razorpayOrderId)
-        const creditsGranted = pkg?.credits ?? 0
-
+        // R-02: creditsGranted is read from the local order (persisted at creation time)
+        // inside captureOrder — no longer re-resolved from the package table here.
+        // This prevents a zero-credit capture if the package was removed/renamed
+        // between order creation and webhook delivery.
         const result = await this.repo.captureOrder({
             razorpayOrderId,
             razorpayPaymentId: razorpayPaymentId ?? '',
-            creditsGranted,
             razorpayEventId: eventId,
             payload: rawBody.toString('utf8') as unknown as Prisma.InputJsonValue,
             amountPaidPaise,
@@ -179,16 +188,22 @@ export class PaymentsService {
 
         switch (result) {
             case 'captured':
-                this.logger.log(`order.paid: captured order ${razorpayOrderId} (+${creditsGranted} credits)`)
+                this.logger.log(`order.paid: captured order ${razorpayOrderId}`)
                 break
             case 'already_captured':
                 this.logger.warn(`order.paid: order ${razorpayOrderId} was already captured — idempotent no-op`)
                 break
             case 'not_found':
-                this.logger.warn(`order.paid: no local order found for ${razorpayOrderId} — may be from a different environment`)
+                // R-04: elevated to error — a paid order with no local row is revenue-impacting.
+                this.logger.error(`order.paid: no local order found for ${razorpayOrderId} — may be from a different environment`)
                 break
             case 'amount_mismatch':
                 // Error already logged in the repository with full context.
+                break
+            case 'zero_credits':
+                // R-02/R-04: order paid but creditsGranted <= 0 — entitlement missing,
+                // revenue-impacting. Order left CREATED for reconciliation.
+                this.logger.error(`order.paid: order ${razorpayOrderId} has zero credits — entitlement missing, left CREATED for reconciliation`)
                 break
             case 'duplicate':
                 this.logger.debug(`order.paid: duplicate event ${eventId} — no-op`)
@@ -223,13 +238,6 @@ export class PaymentsService {
         } else {
             this.logger.debug(`payment.failed: order ${razorpayOrderId} already terminal — no-op`)
         }
-    }
-
-    /** Resolve the credit package for a given Razorpay order ID by looking up the local order. */
-    private async resolvePackageForOrder(razorpayOrderId: string) {
-        const localOrder = await this.repo.findOrderByRazorpayId(razorpayOrderId)
-        if (!localOrder) return null
-        return CREDIT_PACKAGES[localOrder.packageId] ?? null
     }
 
     /** Return wallet response (balance + ledger + available packages). */

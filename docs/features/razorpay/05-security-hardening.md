@@ -309,7 +309,7 @@ All 134 pre-existing tests continue to pass unchanged. The two controller spec f
 | **Render cold-start during webhook delivery** | Medium | Low | Razorpay retries; harmless with idempotent handler |
 | **Log aggregator capturing full webhook body** | Medium | High | Handler does not log raw body. Future logging middleware must skip the webhook route. |
 | **Checkout.js CDN unavailability** | Low | Medium | User cannot pay; Account page shows error. No credit-safety risk. |
-| **`creditsGranted` divergence if packages change** | Very low | Low | `amountPaise` cross-check (S-02) catches price changes. Credit-count changes need future schema fix. |
+| **`creditsGranted` divergence if packages change** | Very low | Low | **R-02 (fixed):** `creditsGranted` is now persisted at order creation and read from the local order at capture time — package removal/renaming no longer causes a zero-credit capture. Fail-closed guard on `≤ 0`. |
 | **`timingSafeEqual` API change in future Node.js** | Very low | Low | Pinned Node.js version; monitor changelog |
 
 ---
@@ -332,3 +332,35 @@ All 134 pre-existing tests continue to pass unchanged. The two controller spec f
 | `apps/server/src/review/review.controller.spec.ts` | Updated — S-03 test + PaymentsService mock |
 | `apps/server/src/review/review.throttle.spec.ts` | Updated — PaymentsService mock |
 
+
+---
+
+## 7. Security review remediation (R-01 through R-08)
+
+> **Date:** 2026-08-14
+> **Source:** Independent security review — [`06-security-review.md`](./06-security-review.md)
+> **Full record:** [`07-remediation.md`](./07-remediation.md)
+
+An independent security review (R-01 through R-08) was performed on the hardened code. All findings were remediated:
+
+| Finding | Severity | Remediation |
+|---|---|---|
+| **R-01** — Credits lost when `ValidationPipe` rejects body after `CreditGuard` deduction | Medium | `CreditRefundInterceptor` (new) wraps `next.handle()` with `catchError`; refunds `req.creditDeducted` if markers are present. Handler catch blocks (S-03/S-04) clear markers to prevent double-refund. |
+| **R-02** — `creditsGranted` resolves to 0 when package removed; order still captured | Medium | `creditsGranted` persisted at order creation; `captureOrder` reads from `localOrder`; fail-closed on `≤ 0` → `'zero_credits'` outcome. |
+| **R-03** — Webhook endpoint unthrottled | Low | `ThrottlerGuard` (100/min per IP) added to webhook route. |
+| **R-04** — No alerting for `amount_mismatch` / `not_found` | Low | `not_found` elevated to `error`; `zero_credits` case added with `error` log. External alerting = remaining limitation. |
+| **R-05** — F-12 wallet throttle (60/min) not implemented | Info | `UserThrottlerGuard` + `@Throttle` added to `getWallet`. |
+| **R-06** — `NEXT_PUBLIC_RAZORPAY_KEY_ID` dead config | Info | Removed from `.env.example` and `docs/deployment.md`. |
+| **R-07** — `?token=` fallback on payment routes | Info | `/payments/` routes excluded from `?token=` fallback in `AuthGuard`. |
+| **R-08** — Non-object webhook body causes unhandled 500 | Info | Type guard after `JSON.parse` in `handleWebhook`. |
+
+### Additional files from remediation
+
+| File | Role |
+|---|---|
+| `apps/server/src/payments/credit-refund.interceptor.ts` | NEW — R-01 credit refund interceptor |
+| `apps/server/src/payments/webhook.controller.ts` | R-03 (rate limit) |
+| `apps/server/src/payments/payments.controller.ts` | R-05 (wallet throttle) |
+| `apps/server/src/auth/auth.guard.ts` | R-07 (exclude payment routes from ?token=) |
+| `apps/server/src/payments/webhook.controller.spec.ts` | Updated — ThrottlerModule import |
+| `apps/client/.env.example` | R-06 (remove dead env var) |

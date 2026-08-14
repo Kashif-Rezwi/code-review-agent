@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/unbound-method */
 import { Test, TestingModule } from '@nestjs/testing'
+import { ThrottlerModule } from '@nestjs/throttler'
 import { WebhookController } from './webhook.controller'
 import { PaymentsService } from './payments.service'
 import { UnauthorizedException, PayloadTooLargeException, BadRequestException } from '@nestjs/common'
@@ -14,6 +15,12 @@ describe('WebhookController', () => {
         }
 
         const module: TestingModule = await Test.createTestingModule({
+            imports: [
+                // R-03: the webhook route now uses ThrottlerGuard — throttler providers must be in scope.
+                ThrottlerModule.forRoot({
+                    throttlers: [{ name: 'default', ttl: 60_000, limit: 100 }],
+                }),
+            ],
             controllers: [WebhookController],
             providers: [{ provide: PaymentsService, useValue: mockService }],
         }).compile()

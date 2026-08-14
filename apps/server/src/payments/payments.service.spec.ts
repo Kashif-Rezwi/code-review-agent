@@ -82,10 +82,14 @@ describe('PaymentsService & Webhook handling', () => {
                 expect.objectContaining({
                     razorpayOrderId: 'order_123',
                     razorpayPaymentId: 'pay_123',
-                    creditsGranted: 50,
                     razorpayEventId: 'evt_123',
                     amountPaidPaise: 9900,
                 }),
+            )
+            // R-02: creditsGranted is no longer passed to captureOrder — it is read
+            // from the local order inside the repository method.
+            expect(captureOrder).not.toHaveBeenCalledWith(
+                expect.objectContaining({ creditsGranted: expect.anything() }),
             )
         })
 
@@ -152,6 +156,23 @@ describe('PaymentsService & Webhook handling', () => {
                     currency: 'INR',
                 }),
             )
+        })
+
+        it('R-08: valid JSON but non-object body (null) -> returns gracefully without 500', async () => {
+            const bodyBuffer = Buffer.from('null')
+            const sig = signPayload(bodyBuffer)
+
+            await expect(service.handleWebhook(bodyBuffer, sig, 'evt_null')).resolves.not.toThrow()
+            // captureOrder should NOT be called — the body is not an object.
+            expect(repo.captureOrder).not.toHaveBeenCalled()
+        })
+
+        it('R-08: valid JSON but non-object body (string) -> returns gracefully without 500', async () => {
+            const bodyBuffer = Buffer.from('"hello"')
+            const sig = signPayload(bodyBuffer)
+
+            await expect(service.handleWebhook(bodyBuffer, sig, 'evt_str')).resolves.not.toThrow()
+            expect(repo.captureOrder).not.toHaveBeenCalled()
         })
     })
 

@@ -4,6 +4,7 @@ import { PaymentsController } from './payments.controller'
 import { WebhookController } from './webhook.controller'
 import { PaymentsService } from './payments.service'
 import { PaymentsRepository } from './payments.repository'
+import { CreditRefundInterceptor } from './credit-refund.interceptor'
 
 @Module({
     // AuthModule is required to make AuthGuard injectable in PaymentsController.
@@ -14,9 +15,10 @@ import { PaymentsRepository } from './payments.repository'
     // PrismaModule is @Global so PaymentsRepository can access PrismaService without re-importing.
     imports: [forwardRef(() => AuthModule)],
     controllers: [PaymentsController, WebhookController],
-    providers: [PaymentsService, PaymentsRepository],
-    // Export PaymentsService so ReviewModule, HistoryModule, and UsersModule
-    // can inject CreditGuard and grantFreeCredits without a circular dependency.
-    exports: [PaymentsService],
+    providers: [PaymentsService, PaymentsRepository, CreditRefundInterceptor],
+    // Export PaymentsService and CreditRefundInterceptor so ReviewModule, HistoryModule,
+    // and UsersModule can inject CreditGuard, grantFreeCredits, and the refund interceptor
+    // without a circular dependency.
+    exports: [PaymentsService, CreditRefundInterceptor],
 })
 export class PaymentsModule {}

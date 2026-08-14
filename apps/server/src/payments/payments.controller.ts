@@ -31,6 +31,8 @@ export class PaymentsController {
 
     /** Return the authenticated user's credit balance, recent ledger, and available packages. */
     @Get('wallet')
+    @UseGuards(UserThrottlerGuard)
+    @Throttle({ default: { limit: 60, ttl: 60_000 } }) // F-12: 60/min per user
     getWallet(@Req() req: Request) {
         return this.paymentsService.getWallet(req.user!.userId)
     }

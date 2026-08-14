@@ -6,6 +6,7 @@ import request from 'supertest'
 import { AuthGuard } from '../auth/auth.guard'
 import { CreditGuard } from '../payments/credit.guard'
 import { PaymentsService } from '../payments/payments.service'
+import { CreditRefundInterceptor } from '../payments/credit-refund.interceptor'
 import { HistoryService } from '../history/history.service'
 import { ReviewController } from './review.controller'
 import { ReviewService } from './review.service'
@@ -26,6 +27,7 @@ describe('POST /review/session rate limiting', () => {
             ],
             controllers: [ReviewController],
             providers: [
+                CreditRefundInterceptor,
                 { provide: ReviewService, useValue: reviewService },
                 { provide: ReviewStreamerService, useValue: {} },
                 { provide: HistoryService, useValue: {} },
