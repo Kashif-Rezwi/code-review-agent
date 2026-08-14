@@ -145,7 +145,7 @@ export class PaymentsService {
         eventId: string,
         rawBody: Buffer,
     ): Promise<void> {
-        const orderEntity = (payload as { order?: { entity?: { id?: string; amount_paid?: number } } })
+        const orderEntity = (payload as { order?: { entity?: { id?: string; amount_paid?: number; currency?: string } } })
             .order?.entity
         const paymentEntity = (payload as { payment?: { entity?: { id?: string } } })
             .payment?.entity
@@ -153,6 +153,7 @@ export class PaymentsService {
         const razorpayOrderId = orderEntity?.id
         const razorpayPaymentId = paymentEntity?.id
         const amountPaidPaise = orderEntity?.amount_paid ?? null
+        const currency = orderEntity?.currency ?? null
 
         if (!razorpayOrderId) {
             this.logger.warn(`order.paid webhook missing order.entity.id (eventId: ${eventId})`)
@@ -169,6 +170,7 @@ export class PaymentsService {
             razorpayEventId: eventId,
             payload: rawBody.toString('utf8') as unknown as Prisma.InputJsonValue,
             amountPaidPaise,
+            currency,
         }).catch((err: unknown) => {
             // P2002 = unique constraint on razorpayEventId — duplicate event delivery.
             if ((err as { code?: string })?.code === 'P2002') return 'duplicate' as const
@@ -275,6 +277,20 @@ export class PaymentsService {
         params: { userId: string; cost: number; reviewId: string; description: string },
     ): Promise<void> {
         return this.repo.refundCreditsInTx(tx, params)
+    }
+
+    /**
+     * Refund credits after a handler failure (guard-level refund, S-03/S-04).
+     * Creates its own transaction — used when there is no existing transaction context
+     * (e.g. when the review-creation handler throws synchronously, or the chat stream errors).
+     */
+    async refundCredits(params: {
+        userId: string
+        cost: number
+        reviewId: string | null
+        description: string
+    }): Promise<void> {
+        return this.repo.refundCredits(params)
     }
 
     /**

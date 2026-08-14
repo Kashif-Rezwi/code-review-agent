@@ -43,8 +43,10 @@ export class PaymentsRepository {
         payload: Prisma.InputJsonValue
         /** Amount paid in paise from Razorpay payload — used for cross-check (F-09). */
         amountPaidPaise: number | null
+        /** Currency from Razorpay payload — used for cross-check (S-05). */
+        currency: string | null
     }): Promise<'captured' | 'already_captured' | 'not_found' | 'amount_mismatch'> {
-        const { razorpayOrderId, razorpayPaymentId, creditsGranted, razorpayEventId, payload, amountPaidPaise } = params
+        const { razorpayOrderId, razorpayPaymentId, creditsGranted, razorpayEventId, payload, amountPaidPaise, currency } = params
 
         return this.prisma.$transaction(async (tx) => {
             // Step 1: Insert PaymentEvent — unique constraint on razorpayEventId is the idempotency key.
@@ -62,11 +64,16 @@ export class PaymentsRepository {
             const localOrder = await tx.paymentOrder.findUnique({ where: { razorpayOrderId } })
             if (!localOrder) return 'not_found'
 
-            // Step 3: Amount cross-check (F-09) — mismatch means data integrity issue.
-            if (amountPaidPaise !== null && localOrder.amountPaise !== amountPaidPaise) {
+            // Step 3: Amount + currency cross-check (F-09, S-02, S-05).
+            // Fail-closed: a missing amount_paid is treated as a mismatch, not skipped (S-02).
+            // Currency is checked when present — defense-in-depth; amount is the primary control (S-05).
+            const amountMismatch = amountPaidPaise === null || localOrder.amountPaise !== amountPaidPaise
+            const currencyMismatch = currency !== null && localOrder.currency !== currency
+            if (amountMismatch || currencyMismatch) {
                 this.logger.error(
-                    `[F-09] Amount mismatch on order ${razorpayOrderId}: ` +
-                    `expected ${localOrder.amountPaise} paise, got ${amountPaidPaise} paise. ` +
+                    `[F-09] Mismatch on order ${razorpayOrderId}: ` +
+                    `expected ${localOrder.amountPaise} paise / ${localOrder.currency}, ` +
+                    `got ${amountPaidPaise ?? 'missing'} paise / ${currency ?? 'missing'}. ` +
                     'Credits NOT granted. Recording mismatch event.',
                 )
                 await tx.paymentEvent.create({
@@ -282,6 +289,51 @@ export class PaymentsRepository {
             })
 
             return true
+        }).catch((err: unknown) => {
+            // P2002 = unique constraint on (userId, type='FREE_GRANT') — concurrent grant
+            // race (S-01). The partial unique index ensures only one transaction wins;
+            // the other rolls back entirely (including the balance increment).
+            if ((err as { code?: string })?.code === 'P2002') return false
+            throw err
+        })
+    }
+
+    /**
+     * Atomically refund credits after a handler failure (guard-level refund, S-03/S-04).
+     * Creates its own $transaction — unlike refundCreditsInTx which must be called
+     * within an existing transaction. The reviewId is null for guard/chat refunds
+     * (the review may not have been created yet), so the CONSUMPTION_REFUND unique
+     * index (which requires reviewId IS NOT NULL) does not apply.
+     */
+    async refundCredits(params: {
+        userId: string
+        cost: number
+        reviewId: string | null
+        description: string
+    }): Promise<void> {
+        const { userId, cost, reviewId, description } = params
+
+        await this.prisma.$transaction(async (tx) => {
+            await tx.user.updateMany({
+                where: { id: userId },
+                data: { creditBalance: { increment: cost } },
+            })
+
+            const updatedUser = await tx.user.findUniqueOrThrow({
+                where: { id: userId },
+                select: { creditBalance: true },
+            })
+
+            await tx.creditLedger.create({
+                data: {
+                    userId,
+                    type: 'CONSUMPTION_REFUND',
+                    amount: cost,
+                    balanceAfter: updatedUser.creditBalance,
+                    reviewId,
+                    description,
+                },
+            })
         })
     }
 

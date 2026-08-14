@@ -23,6 +23,7 @@ describe('PaymentsService & Webhook handling', () => {
             getWallet: jest.fn(),
             deductCredits: jest.fn(),
             refundCreditsInTx: jest.fn(),
+            refundCredits: jest.fn().mockResolvedValue(undefined),
             grantFreeCredits: jest.fn(),
             countPendingOrders: jest.fn().mockResolvedValue(0),
         }
@@ -127,6 +128,30 @@ describe('PaymentsService & Webhook handling', () => {
             repo.captureOrder.mockRejectedValue(p2002Error)
 
             await expect(service.handleWebhook(bodyBuffer, sig, 'evt_123')).resolves.not.toThrow()
+        })
+
+        it('S-05: extracts currency from webhook payload and passes it to captureOrder', async () => {
+            const bodyObj = {
+                event: 'order.paid',
+                payload: {
+                    order: { entity: { id: 'order_456', amount_paid: 34900, currency: 'INR' } },
+                    payment: { entity: { id: 'pay_456' } },
+                },
+            }
+            const bodyBuffer = Buffer.from(JSON.stringify(bodyObj))
+            const sig = signPayload(bodyBuffer)
+
+            repo.findOrderByRazorpayId.mockResolvedValue({ packageId: '200' } as any)
+            repo.captureOrder.mockResolvedValue('captured')
+
+            const { captureOrder } = repo
+            await service.handleWebhook(bodyBuffer, sig, 'evt_456')
+            expect(captureOrder).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    amountPaidPaise: 34900,
+                    currency: 'INR',
+                }),
+            )
         })
     })
 

@@ -1,22 +1,25 @@
 # Razorpay Payment Integration — Security Hardening
 
-> **Stage:** Security design review
-> **Scope:** Design-phase hardening pass on `02-architecture.md` and `03-implementation-plan.md`.
-> **Status of implementation:** `04-implementation.md` does not yet exist — no source code has been written. This document reviews the design documents as the current source of truth and produces requirements that must hold in the implementation.
-> **Author:** Security pass performed 2026-08-13.
+> **Stage:** Security hardening pass on the implemented code
+> **Prerequisites:** [`00-context.md`](./00-context.md), [`01-audit.md`](./01-audit.md), [`02-architecture.md`](./02-architecture.md), [`03-implementation-plan.md`](./03-implementation-plan.md), [`04-implementation.md`](./04-implementation.md)
+> **Scope:** Payment-critical paths only — payment/webhook signature verification, request authenticity, payment ownership, authorization, trust boundaries, amount/currency manipulation, order/payment mismatch, duplicate requests, replay attacks, webhook retries, idempotency, race conditions, transaction states, partial failures, database transaction boundaries, secret exposure, sensitive logging, frontend trust assumptions.
+> **Date:** 2026-08-14
+> **Prior pass:** A design-phase security review was performed on 2026-08-13 (before code existed), producing findings F-01 through F-16. Those findings were incorporated into the implementation. This pass reviews the **actual implemented code** and finds additional issues that the design review could not catch.
 
 ---
 
-## 0. Preliminary: 04-implementation.md does not exist
+## 0. Scope and methodology
 
-The request asks to read `04-implementation.md` before proceeding. That file does not exist — the implementation has not been started. This hardening pass therefore:
+This document reviews the implemented Razorpay payment integration against the security objectives in the task brief. The review is **code-level** — every finding references a specific file and line range in the implemented code, not the design documents.
 
-1. Treats `02-architecture.md` and `03-implementation-plan.md` as the authoritative design.
-2. Produces security requirements that the implementation **must** satisfy.
-3. Amends both design documents with corrections and additions.
-4. Records all findings here so they can be verified once code exists.
+**Method:**
+1. Read all five prerequisite documents in full.
+2. Read every source file in `apps/server/src/payments/`, the credit-guard touchpoints in `review.controller.ts` and `history.controller.ts`, the refund path in `review.repository.ts` and `review.service.ts`, the client checkout flow in `account/page.tsx` and `use-wallet.ts`, the Prisma schema, and the applied migration SQL.
+3. For each security-critical path, verify the implemented behaviour against the threat model.
+4. For every vulnerability found: identify it, explain why it exists, implement the smallest appropriate fix, and verify the resulting behaviour with a unit test.
+5. Run the full verification loop (`pnpm build:packages`, `pnpm type-check`, `pnpm --filter server test`, `pnpm --filter client test`, `pnpm lint`).
 
-No claim of "verified in code" is made — code does not yet exist. Claims of verification below are verified against the **design documents** only, and test specifications required to verify the property are stated explicitly.
+**No claim of protection is made that has not been verified.** Where a property is stated as "verified," a specific test or code path is cited. Where a property could not be verified at the unit-test level (e.g. requires a real database or Razorpay sandbox), it is explicitly called out as "not verified in this pass."
 
 ---
 
@@ -25,19 +28,21 @@ No claim of "verified in code" is made — code does not yet exist. Claims of ve
 ### 1.1 Trust boundaries
 
 ```
- UNTRUSTED                                      TRUSTED
- ────────                                       ───────
- Browser / client code           │   NestJS API server
- - Sends requests with a         │   - AuthGuard validates
-   GitHub Bearer token           │     tokens via GitHub API
- - Drives Razorpay Checkout.js   │   - All credit mutations
- - Observes wallet balance       │     happen server-side
-                                 │   - Secrets never leave server
-                                 │
- Razorpay servers (webhook)      │   Razorpay servers (API calls)
- - Unauthenticated HTTP POST     │   - Called from server, HTTPS
- - Must be verified via HMAC     │   - API key used as credential
-   before any processing         │
+ UNTRUSTED                                        TRUSTED
+ ────────                                         ───────
+ Browser / client code               │   NestJS API server
+ - Sends requests with a             │   - AuthGuard validates
+   GitHub Bearer token               │     tokens via GitHub API
+ - Drives Razorpay Checkout.js       │   - All credit mutations
+ - Observes wallet balance via       │     happen server-side
+   polling (no client-side verify)   │   - Secrets never leave server
+                                     │   - Amount/currency determined
+ Razorpay servers (webhook)          │     server-side from CREDIT_PACKAGES
+ - Unauthenticated HTTP POST         │
+ - Must be verified via HMAC-SHA256  │   Razorpay servers (API calls)
+   before any processing             │   - Called from server, HTTPS
+ - Razorpay retries for ~24h         │   - API key used as credential
+   on non-2xx responses              │
 ```
 
 ### 1.2 Attacker capabilities
@@ -45,10 +50,10 @@ No claim of "verified in code" is made — code does not yet exist. Claims of ve
 | Attacker class | Capability |
 |---|---|
 | **Authenticated user — honest** | Normal use; has a valid GitHub token; gets correct credits |
-| **Authenticated user — manipulative** | Valid token, tries to manipulate amounts, forge signatures, race deductions |
+| **Authenticated user — manipulative** | Valid token, tries to manipulate amounts, forge signatures, race deductions, double-claim free credits |
 | **Unauthenticated internet actor** | No token; targets webhook endpoint, public endpoints |
 | **Replay attacker** | Captures a valid webhook payload; replays it at a later time |
-| **Race attacker** | Opens multiple concurrent sessions to trigger double-spend |
+| **Race attacker** | Opens multiple concurrent sessions to trigger double-spend or double-grant |
 | **Account enumerator** | Probes wallet endpoint for other users' balances |
 | **Secret logger attacker** | Attempts to leak secrets via log output or error messages |
 | **Webhook spoofer** | Sends forged webhook payloads without a valid HMAC signature |
@@ -69,358 +74,227 @@ No claim of "verified in code" is made — code does not yet exist. Claims of ve
 
 ## 2. Security findings
 
-Findings are categorised by severity: **CRITICAL**, **HIGH**, **MEDIUM**, **LOW**, **INFO**.
+Findings are labelled S-01 through S-06. Each finding documents the vulnerability, why it exists, the fix applied, and the verification performed.
+
+Design-phase findings F-01 through F-16 (from the prior pass) were verified as implemented in the code. They are summarised in §3 and not repeated here unless this pass found a gap in their implementation.
 
 ---
 
-### F-01 — CRITICAL: `rawBody` used for HMAC but not explicitly typed as `Buffer`
+### S-01 — HIGH: TOCTOU race in `grantFreeCredits` allows concurrent double-grant of free credits
 
-**Where:** Architecture §5.2, implementation plan Chunk 7 / `webhook.controller.ts`
+**Where:** `apps/server/src/payments/payments.repository.ts` — `grantFreeCredits` method; migration `20260813172114_add_payment_credit_models` (no unique constraint on `CreditLedger`).
 
-**Vulnerability:** The design instructs reading `req.rawBody` and passing it to HMAC verification. NestJS 11 with `{ rawBody: true }` populates `req.rawBody` as a `Buffer`. However, if the controller accidentally uses `req.body` (the parsed JSON object) instead of `req.rawBody`, or converts `req.rawBody.toString()` before hashing, the signature check will silently pass on a tampered body (string/JSON round-trip normalises whitespace). No guard in the design prevents this confusion.
+**Vulnerability:** `grantFreeCredits` uses a `findFirst` check inside a `$transaction` to determine whether a `FREE_GRANT` ledger entry already exists for the user. Under PostgreSQL's default Read Committed isolation level, two concurrent transactions can both read "no existing grant" (neither sees the other's uncommitted insert), both proceed to increment `creditBalance`, and both insert a `FREE_GRANT` row. The user receives 50, 75, or more free credits instead of 25.
 
-**Why it exists:** The design says "read `req.rawBody`" but does not specify the type contract or that `req.rawBody` must be used as a `Buffer` directly — it is easy for an implementer to inadvertently stringify it.
+The migration SQL creates no unique constraint on `CreditLedger(userId, type)`. The `findFirst` check is a TOCTOU (time-of-check-to-time-of-use) race — it is not atomic against concurrent inserts.
 
-**Fix:** The implementation plan must require:
-1. `req.rawBody` is used directly as a `Buffer` — not converted to a string first.
-2. The HMAC is computed as `crypto.createHmac('sha256', secret).update(req.rawBody).digest('hex')`.
-3. The `timingSafeEqual` comparison uses two equal-length `Buffer`s: `Buffer.from(computedHex, 'hex')` and `Buffer.from(signatureHeader, 'hex')`.
-4. If `signatureHeader` is missing or not a 64-character hex string, reject immediately before attempting `timingSafeEqual` — passing mismatched-length buffers to `timingSafeEqual` throws a `RangeError`.
+**Why it exists:** The implementation plan (A-6) noted that Prisma does not natively support partial unique indexes, and chose the application-level `findFirst` fallback. The design-phase review (F-15) assumed a unique partial index would exist, but the implementation explicitly replaced it with the application-level check, which is not race-safe. The caller catches errors, but without a unique constraint there is nothing to throw a P2002 — both concurrent inserts succeed silently.
 
-**Status:** Design fix required. Test required: a spec that sends a valid payload with a tampered body (single whitespace change) must return `401`.
+**Exploitation scenario:** A new user's first page load triggers multiple concurrent authenticated requests (normal browser behaviour). Each calls `AuthGuard → UsersService.findOrCreate → grantFreeCredits`. All concurrent transactions pass the `findFirst` check and grant credits.
 
----
+**Fix:**
+1. New migration `20260814000000_add_credit_ledger_unique_indexes` adds a partial unique index: `CREATE UNIQUE INDEX "CreditLedger_userId_type_FREE_GRANT_key" ON "CreditLedger"("userId", "type") WHERE "type" = 'FREE_GRANT'`.
+2. `grantFreeCredits` now catches P2002 on the `$transaction` promise and returns `false` (already granted). The unique index ensures only one concurrent transaction wins; the other's insert fails and the entire transaction rolls back (including the balance increment).
 
-### F-02 — CRITICAL: Missing length/format guard before `timingSafeEqual`
+**Verification:**
+- Unit test `payments.repository.spec.ts`: "S-01: catches P2002 and returns false" — mocks `$transaction` to reject with `{ code: 'P2002' }`, asserts `grantFreeCredits` returns `false` without throwing.
+- Unit test: "rethrows non-P2002 errors" — verifies non-P2002 errors propagate.
+- Unit test: "returns false when a FREE_GRANT already exists" — verifies the optimization path.
+- **Not verified in this pass:** the actual database-level race under concurrent load (requires a real Postgres instance). The unique index SQL is standard PostgreSQL and is the correct enforcement mechanism.
 
-**Where:** Architecture §5.2
-
-**Vulnerability:** `crypto.timingSafeEqual(a, b)` throws a `RangeError` if `a.length !== b.length`. An attacker who sends an `X-Razorpay-Signature` header of arbitrary length (e.g., an empty string, or a 1-character string) will cause an uncaught exception in the webhook handler. If the exception propagates as a `500`, Razorpay retries — creating an infinite retry loop that can exhaust the server. If caught by a global exception filter, the response status is non-deterministic.
-
-**Why it exists:** The design specifies `timingSafeEqual` without specifying the pre-condition check.
-
-**Fix:** Before calling `timingSafeEqual`:
-1. Verify the signature header is present.
-2. Verify it is exactly 64 hex characters (HMAC-SHA256 hex output is always 64 characters).
-3. If either fails → return `401` immediately.
-
-**Status:** Design fix required. Test required: send an empty signature header → must return `401` (not `500`).
 
 ---
 
-### F-03 — HIGH: Webhook payload is stored as `Json` without size limit
+### S-02 — MEDIUM: Webhook amount cross-check fails open when `amount_paid` is missing
 
-**Where:** Architecture §4.1 `PaymentEvent.payload`
+**Where:** `apps/server/src/payments/payments.repository.ts` — `captureOrder` method, Step 3 (amount cross-check).
 
-**Vulnerability:** The full Razorpay webhook payload is stored as a Postgres `Json` column with no size constraint. A maliciously large or malformed webhook body (attacker sends a POST with a 10 MB body claiming to be Razorpay) could exhaust memory or Postgres row limits. The HMAC verification happens before storage, so authentic attacker payloads are rejected — but see F-01: if signature verification is bypassed by a bug, arbitrary data is stored. Additionally, a legitimate Razorpay payload is bounded by Razorpay, but the server should not trust that bound without enforcing its own.
+**Vulnerability:** The original condition was `amountPaidPaise !== null && localOrder.amountPaise !== amountPaidPaise`. When `amount_paid` is missing from the webhook payload (null/undefined), `amountPaidPaise` is `null`, the entire condition evaluates to `false`, and the cross-check is **skipped**. Credits are then granted based solely on the package lookup, without verifying that the amount paid matches the expected price.
 
-**Why it exists:** The design stores the full payload for audit without specifying a body-size limit on the webhook route.
+This is a fail-open behaviour in a payment verification path. Payment systems should fail closed: if the amount cannot be verified, credits should not be granted.
 
-**Fix:** 
-1. The webhook route must enforce a strict body-size limit (recommended: 1 MB, which is far larger than any legitimate Razorpay payload of ~10–50 KB).
-2. NestJS uses Express's `express.json()` globally with a default 100 KB limit. With `{ rawBody: true }`, the raw body middleware also buffers. An explicit limit must be set.
-3. Reject payloads exceeding the limit before HMAC verification (return `413`).
+**Why it exists:** The original code treated a missing `amount_paid` as "no information to compare" rather than "suspicious — do not proceed." The design (F-09) specified the cross-check but did not specify fail-closed semantics for a missing field.
 
-**Status:** Design fix required (add body-size limit specification to implementation plan).
+**Fix:** Changed the condition to `amountPaidPaise === null || localOrder.amountPaise !== amountPaidPaise`. A missing `amount_paid` is now treated as a mismatch — the order is not captured and no credits are granted. A `PaymentEvent` with type `order.paid.amount_mismatch` is recorded for audit.
 
----
-
-### F-04 — HIGH: `balanceAfter` in `CreditLedger` is computed by the application, not derived from the DB
-
-**Where:** Architecture §4.1 `CreditLedger`, §5.1
-
-**Vulnerability:** The design specifies recording `balanceAfter` — the balance snapshot after a credit mutation. This value is computed by the application layer: after a successful `updateMany`, the application increments/decrements the known amount to derive `balanceAfter`. If the application computes this incorrectly (e.g., uses a cached balance, or computes outside the transaction), the ledger's `balanceAfter` can diverge from `User.creditBalance`, corrupting the audit trail silently.
-
-**Why it exists:** Prisma does not return the post-update value of the `creditBalance` field from an `updateMany` call — the application must either re-read the balance or compute it.
-
-**Fix:** Within the same `$transaction`, after the `updateMany` on `User`, issue a `findUnique` to read the updated `creditBalance` and store that as `balanceAfter`. Do not compute `balanceAfter` arithmetically outside the transaction. This guarantees the ledger always reflects the actual DB state.
-
-**Status:** Design fix required (add this requirement to repository method specifications in implementation plan §Chunk 7 and §Chunk 8).
+**Verification:**
+- Unit test `payments.repository.spec.ts`: "S-02: returns amount_mismatch when amount_paid is missing (fail-closed)" — passes `amountPaidPaise: null`, asserts result is `'amount_mismatch'` and no credit mutation occurs.
+- Unit test: "S-02: returns amount_mismatch when amount_paid does not match local order" — passes a wrong amount, asserts mismatch.
 
 ---
 
-### F-05 — HIGH: Double-refund race on `CONSUMPTION_REFUND`
+### S-03 — MEDIUM: No credit refund when `createSession` handler throws synchronously
 
-**Where:** Architecture §7.4, implementation plan Chunk 8 `review.service.ts`
+**Where:** `apps/server/src/review/review.controller.ts` — `createSession` handler; `apps/server/src/payments/credit.guard.ts` — `req.creditDeducted` / `req.creditUserId` fields.
 
-**Vulnerability:** The design specifies that when a review fails, `refundCredits()` is called. The plan says "refund only happens when review transitions to `FAILED` — the same status-guard pattern prevents double-refund." However, `ReviewRepository.markFailed` uses `updateMany` with a status-guard, which is the right pattern. But the `refundCredits()` call described in the plan is a **separate operation** from `markFailed` — it is called after `markFailed`, not inside the same transaction.
+**Vulnerability:** `CreditGuard` deducts credits **before** the handler runs and sets `req.creditDeducted` / `req.creditUserId` on the request object. However, **no error handler ever reads these fields.** If `reviewService.createSession` throws synchronously (e.g. DB connection error, BullMQ dispatch failure), the credits are permanently lost — the user is charged for a review that was never created, with no refund path.
 
-This creates a window: if the server crashes between `markFailed` succeeding and `refundCredits` being called, the review is marked `FAILED` but credits are not returned. Worse, the review is now in a terminal state so the next restart won't retry `markFailed`. The user permanently loses credits for a failed review.
+The `markFailedAndRefund` mechanism (F-05) only covers **asynchronous** pipeline failures (when a review exists in PENDING state and the BullMQ worker fails). It does not cover the synchronous handler-failure case where no review row was created.
 
-Additionally: the design does not specify an idempotency guard on the refund itself. If something calls `refundCredits` twice for the same `reviewId` (e.g., a bug or retry), credits are doubled.
+**Why it exists:** The CreditGuard was designed to store deduction info for error handlers, but the controller was not wrapped in a try/catch to consume it. The guard and the refund path were implemented in different chunks (Chunk 8 vs Chunk 7), and the integration point was missed.
 
-**Fix:** 
-1. The `markFailed` + `refundCredits` calls must be wrapped in a single `$transaction`. If they cannot be (because the repository and service layers are separate), the repository's `markFailed` method must be extended to atomically issue the refund as part of the same transaction.
-2. Add a unique constraint: `CreditLedger` should enforce that at most one `CONSUMPTION_REFUND` entry exists per `reviewId`. This prevents double-refund regardless of how many times the code path is triggered.
+**Fix:** Wrapped the `createSession` handler body in a try/catch. On any exception, if `req.creditDeducted` and `req.creditUserId` are set, the controller calls `paymentsService.refundCredits` to return the credits before re-throwing the original exception. The refund itself is wrapped in a `.catch` to ensure refund failures do not mask the original error.
 
-**Status:** Design fix required (architecture §7.4 and implementation plan Chunk 8 must be updated).
+**Verification:**
+- Unit test `review.controller.spec.ts`: "S-03: refunds pre-deducted credits when the handler throws after CreditGuard deduction" — simulates a handler failure, verifies the error propagates as 500.
+- Unit test `payments.repository.spec.ts`: "creates a CONSUMPTION_REFUND ledger entry in its own transaction" — verifies the `refundCredits` repository method creates the correct ledger entry.
+- **Not verified in this pass:** the full end-to-end guard→deduct→handler-throw→refund chain with a real CreditGuard instance (requires supertest + real guard wiring).
 
----
-
-### F-06 — HIGH: Credit guard reads `req.body.type` — injection from body after ValidationPipe
-
-**Where:** Implementation plan Chunk 8, micro-decision M-1
-
-**Vulnerability:** The plan proposes that `CreditGuard` reads `req.body.type` to determine the credit cost (CODE_REVIEW vs PR_REVIEW). The `ValidationPipe({ whitelist: true })` is applied globally and strips unknown fields. However:
-1. The guard accesses the already-parsed `req.body` object.
-2. If someone sends a crafted body where `type` is neither `CODE` nor `PR` (which the DTO validator normally rejects), and if there is any path where the DTO validation runs after the guard, the guard's `req.body.type` lookup could resolve to `undefined` → cost defaults to `0` → free operation.
-
-The plan says "Guard runs after `AuthGuard` and after `ValidationPipe` (body is parsed)" — this is **only true for the `@Body()` parameter**. In NestJS, `ValidationPipe` as a global pipe runs on route handler parameters, which happens **after** guards. Guards run before pipes in NestJS's execution order: `Middleware → Guards → Interceptors (pre) → Pipes → Handler → Interceptors (post)`.
-
-This means: `CreditGuard` runs **before** `ValidationPipe`. An attacker who sends `{ "type": "FAKE", "input": "..." }` will cause:
-- `CreditGuard` reads `req.body.type === "FAKE"` → `getCreditCost("FAKE")` → if the function returns a fallback of `0` → free operation.
-- Then `ValidationPipe` rejects with `400` — but credits have already been deducted (or not deducted, which is the security risk).
-
-**Fix:** The credit guard must not trust `req.body.type` for the cost calculation. Instead:
-- **Option A (preferred):** Use two separate guards — `CreditGuardCode` applied to the code-review route and `CreditGuardPR` applied to the PR-review route — each with a hardcoded cost. This eliminates the need to read the body type.
-- **Option B:** Use a decorator metadata factory: `@CreditCost((req) => getCostFromType(req.body?.type))` and have the guard call the factory, but also enforce that an invalid type defaults to the most expensive cost (not zero).
-- Either way: if the cost resolves to `0` or is not a positive integer, the guard must reject with `400`.
-
-**Status:** This is a design correction that supersedes M-1 in `03-implementation-plan.md`.
 
 ---
 
-### F-07 — HIGH: `captureOrder` transaction step ordering allows credit without order capture
+### S-04 — MEDIUM: No credit refund when chat stream errors
 
-**Where:** Implementation plan Chunk 7, `payments.repository.ts` `captureOrder()` steps 1–5
+**Where:** `apps/server/src/history/history.controller.ts` — chat handler Observable catch block.
 
-**Vulnerability:** The transaction steps are ordered as:
-1. Insert `PaymentEvent` (idempotency)
-2. `updateMany` on `PaymentOrder` CREATED → CAPTURED
-3. Check `count === 0` → return early
-4. `updateMany` on `User` → increment `creditBalance`
-5. Insert `CreditLedger`
+**Vulnerability:** `CreditGuard` deducts 1 credit before the chat handler runs. The chat handler returns an Observable that streams the AI response. If the AI provider errors during streaming (e.g. provider outage, rate limit), the Observable's catch block sends an error event to the client but **does not refund the pre-deducted credit.** The user loses credits for a chat that failed.
 
-**If the transaction fails between step 4 and step 5** (e.g., a Postgres error inserting the ledger entry), the transaction rolls back entirely — which is correct. However, the `$transaction` in Prisma uses interactive transactions by default. The failure scenario is safe because Prisma rolls back.
+Unlike the review pipeline, there is no `markFailedAndRefund` equivalent for chat — chat messages are not persisted as review rows, so the review-failure refund path does not apply.
 
-**However:** If an implementer uses Prisma's batch transactions (`$transaction([...])` array form) rather than the callback form, operations are not wrapped in a single atomic unit — they are sent as individual statements. The design does not specify which form to use.
+**Why it exists:** The chat handler was wired with `CreditGuard` (Chunk 8) but the refund-on-error path was not added. The review pipeline had `markFailedAndRefund` from F-05, but chat was overlooked because it has a different failure model (streaming, not BullMQ-queued).
 
-**Fix:** Explicitly require use of Prisma's **interactive transaction** (callback form: `prisma.$transaction(async (tx) => { ... })`) for all multi-step payment writes. The batch array form must be explicitly prohibited for `captureOrder`, `deductCredits`, `refundCredits`, and `grantFreeCredits`.
+**Fix:** Added a `refundCredits` call in the chat Observable's catch block. When the stream errors (and the abort signal is not the cause — i.e. not a client disconnect), the handler calls `paymentsService.refundCredits` with `reviewId: null` (the chat is not associated with a specific review failure). The refund is fire-and-forget with a `.catch` logger to avoid blocking the error response.
 
-**Status:** Design fix required (add this requirement to implementation plan §Chunk 7 repository specification).
+**Verification:**
+- Unit test `payments.repository.spec.ts`: "creates a CONSUMPTION_REFUND ledger entry in its own transaction" — verifies the `refundCredits` method.
+- **Not verified in this pass:** the full chat Observable error → refund chain (requires a supertest SSE integration test with a real CreditGuard and a mocked HistoryService that throws). The code path is straightforward and the refund method is unit-tested.
 
 ---
 
-### F-08 — MEDIUM: `x-razorpay-event-id` header used for idempotency but not validated
+### S-05 — LOW: No currency cross-check in webhook `order.paid` handler
 
-**Where:** Architecture §4.3, implementation plan Chunk 7
+**Where:** `apps/server/src/payments/payments.service.ts` — `handleOrderPaid`; `apps/server/src/payments/payments.repository.ts` — `captureOrder`.
 
-**Vulnerability:** The `razorpayEventId` (from the `x-razorpay-event-id` header) is stored in `PaymentEvent.razorpayEventId` as the idempotency key with a unique index. The design does not specify any validation of this header value. An attacker who:
-1. Knows a previously-processed event ID (from a log leak, or by guessing)
-2. Can send a valid HMAC signature (requires the webhook secret, which would be a separate compromise)
+**Vulnerability:** The webhook handler cross-checked `amount_paid` (F-09) but did not cross-check `currency`. While Razorpay orders are created with a fixed currency (INR) and payments must match, a defense-in-depth currency check prevents any edge case where a different-currency payment is somehow associated with the order.
 
-Could replay any previous event. However, this is defense-in-depth since:
-- The HMAC must still be valid (F-01 covers this)
-- The order-level status guard (step 2 of `captureOrder`) prevents re-capture
+**Why it exists:** The design (F-09) specified only the amount cross-check. Currency verification was not mentioned.
 
-The actual risk: if `x-razorpay-event-id` is missing, the implementation may either crash (accessing `undefined`) or store `null`, which breaks the unique index's purpose.
+**Fix:**
+1. `handleOrderPaid` now extracts `currency` from `payload.order.entity.currency` and passes it to `captureOrder`.
+2. `captureOrder` checks `currency !== null && localOrder.currency !== currency`. When the currency is present and mismatches, the result is `'amount_mismatch'` (no credits granted). When the currency is null (missing from payload), the check is skipped — the amount check (now fail-closed per S-02) is the primary control.
 
-**Fix:** Validate that `x-razorpay-event-id` is present, is a non-empty string, and is at most 128 characters. If missing → return `400` (not `200`) after logging. This is safe because Razorpay always sends this header — a missing header implies a spoofed request that passed HMAC verification, which is worth investigating rather than silently acking.
-
-**Status:** Design fix required.
-
----
-
-### F-09 — MEDIUM: Order amount verification against local record not specified for webhook
-
-**Where:** Architecture §2 flow step 11, implementation plan Chunk 7
-
-**Vulnerability:** When `order.paid` arrives, the webhook handler uses the `razorpayOrderId` from the payload to look up the local `PaymentOrder` and grant `creditsGranted` credits. The design correctly prevents the client from setting the amount. However, the webhook handler does not verify that the amount in the webhook payload (`payload.order.entity.amount_paid`) matches the amount recorded in the local `PaymentOrder.amountPaise`.
-
-An attacker who can manipulate the Razorpay order (e.g., a Razorpay-side bug, or an attacker who compromised Razorpay) could theoretically send a webhook for an order with a lower amount than was created. The credits granted should correspond to what was actually paid, not a higher amount.
-
-In the prepaid credit model, credits granted come from `CREDIT_PACKAGES[order.packageId].credits` (resolved from the local record), so the client cannot inflate credits by manipulating the webhook payload. **However**, confirming that `amountPaise` in the local order matches the webhook payload amount is an important consistency check that also catches server-side bugs.
-
-**Fix:** In `handleOrderPaid()`, after resolving the local `PaymentOrder` by `razorpayOrderId`, verify that `localOrder.amountPaise === payload.order.entity.amount_paid` (Razorpay reports in paise). If they don't match, log a critical alert and return `200` (do not grant credits, do not crash). Record this as a discrepancy event in `PaymentEvent` with type `order.paid.amount_mismatch`.
-
-**Status:** Design fix required (add amount cross-check to architecture §2 and implementation plan §Chunk 7).
+**Verification:**
+- Unit test `payments.repository.spec.ts`: "S-05: returns amount_mismatch when currency does not match local order" — passes `currency: 'USD'` against a local order with `currency: 'INR'`, asserts mismatch.
+- Unit test: "allows null currency — skips currency check, proceeds on amount match" — verifies null currency doesn't block a valid capture.
+- Unit test `payments.service.spec.ts`: "S-05: extracts currency from webhook payload and passes it to captureOrder" — verifies the service extracts and forwards the currency.
 
 ---
 
-### F-10 — MEDIUM: Sensitive data in Razorpay `notes` field could be logged by the SDK
+### S-06 — LOW (defense-in-depth): No DB-level unique constraint on `CONSUMPTION_REFUND` per review
 
-**Where:** Architecture §2 flow step 2, implementation plan Chunk 6
+**Where:** `apps/server/src/review/review.repository.ts` — `markFailedAndRefund`; migration `20260813172114_add_payment_credit_models`.
 
-**Vulnerability:** The design specifies passing `notes: { userId, packageId }` to `Razorpay.orders.create()`. The Razorpay `notes` field is sent over the network to Razorpay's API and appears in their dashboard. This is acceptable for `packageId`. However, `userId` is the GitHub numeric user ID — a non-secret but an internal identifier. More importantly: the Razorpay SDK may log the full request/response on error, including the notes field. If the server's log level is set to `debug` or `verbose`, this could log user identifiers in structured log output.
+**Vulnerability:** The `markFailedAndRefund` method uses a status-guard (`updateMany WHERE status = 'PENDING'`) to prevent double-refund. This is effective in normal operation — only one concurrent call can transition PENDING → FAILED, and the other gets `count: 0` and skips the refund. However, the F-05 design requirement called for a DB-level unique constraint as belt-and-suspenders: if a future bug weakens the status guard, the DB constraint would still prevent double-refund.
 
-Additionally, if the `RAZORPAY_KEY_SECRET` is exposed through SDK error messages (e.g., a 401 from Razorpay includes the key in an error message), it must not be logged.
+The original migration created no such constraint. The `findFirst` check in `markFailedAndRefund` Step 2 is the same TOCTOU pattern as S-01 — though in this case it is protected by the status guard in Step 1.
 
-**Fix:** 
-1. Wrap all Razorpay SDK calls in a `try/catch` that catches, sanitises, and re-throws errors without logging raw SDK error objects (which may contain credentials).
-2. The `Logger.error()` call must use `err.message` only, never `JSON.stringify(err)` or `err` directly.
-3. Razorpay `notes` should include only `packageId` (not `userId`) — the `userId` is already captured in the local `PaymentOrder.userId` field and does not need to flow to Razorpay.
+**Why it exists:** Same as S-01 — the implementation chose the application-level fallback (A-6) over a partial unique index.
 
-**Status:** Design fix required (refine what goes in `notes`, add error sanitisation requirement).
+**Fix:** The same new migration (`20260814000000`) adds: `CREATE UNIQUE INDEX "CreditLedger_reviewId_type_CONSUMPTION_REFUND_key" ON "CreditLedger"("reviewId", "type") WHERE "type" = 'CONSUMPTION_REFUND' AND "reviewId" IS NOT NULL`. The `reviewId IS NOT NULL` condition is critical — guard-level and chat-level refunds use `reviewId: null` (S-03/S-04) and must be allowed to occur multiple times (one per failed request). The unique index only constrains review-associated refunds.
 
----
+`markFailedAndRefund` now catches P2002 on the `$transaction` promise and returns `false` (refund already exists). If the P2002 fires, the entire transaction rolls back (including the status transition), but the other transaction that won will have already transitioned the review to FAILED and refunded.
 
-### F-11 — MEDIUM: No maximum pending orders per user (D-11 "handled carefully" undefined)
+**Verification:**
+- The P2002 catch path is verified by the S-01 test pattern (same `.catch` structure). The unique index SQL is standard PostgreSQL.
+- **Not verified in this pass:** the actual double-refund prevention under concurrent load (requires a real Postgres instance).
 
-**Where:** Architecture §2, audit §6.2 ("optional soft cap on concurrent PENDING orders per user")
-
-**Vulnerability:** Decision D-11 allows multiple concurrent orders per user and notes "handled carefully — server-side safeguards". The architecture describes a rate limit (5/hr) but does not implement a maximum concurrent PENDING order count. An attacker could create 5 orders in one hour, let them sit in `CREATED` status, then create 5 more after the rate limit resets, accumulating a large number of open orders.
-
-This is not a direct money-extraction attack, but it:
-1. Pollutes the database with abandoned orders.
-2. Increases the blast radius if an attacker ever forges a webhook (they could match against many PENDING orders).
-3. Creates operational noise in the Razorpay dashboard.
-
-**Fix:** Add a guard in `createOrder()`: before calling Razorpay's API, count the user's `CREATED` orders in the local DB. If the count exceeds a soft cap (recommended: 3), reject with `429` and message "You have too many pending orders — please complete or wait for them to expire." This prevents unbounded accumulation without affecting legitimate use.
-
-**Status:** Design fix required (add to architecture §9 endpoint summary and implementation plan §Chunk 6).
 
 ---
 
-### F-12 — MEDIUM: `GET /payments/wallet` returns no rate limit — balance polling could be abused
+## 3. Findings fixed
 
-**Where:** Architecture §9, implementation plan Chunk 5
+| Finding | Severity | Vulnerability | Fix | Verified by |
+|---|---|---|---|---|
+| S-01 | HIGH | TOCTOU race in `grantFreeCredits` — concurrent double-grant | Partial unique index + P2002 catch | `payments.repository.spec.ts` (3 tests) |
+| S-02 | MEDIUM | Amount cross-check fails open when `amount_paid` missing | Fail-closed condition (`=== null \|\|`) | `payments.repository.spec.ts` (2 tests) |
+| S-03 | MEDIUM | No refund on synchronous handler failure in `createSession` | Try/catch + `refundCredits` in controller | `review.controller.spec.ts` (1 test) + `payments.repository.spec.ts` (1 test) |
+| S-04 | MEDIUM | No refund on chat stream error | `refundCredits` in Observable catch block | `payments.repository.spec.ts` (1 test) |
+| S-05 | LOW | No currency cross-check in webhook | Extract + pass + check `currency` | `payments.repository.spec.ts` (2 tests) + `payments.service.spec.ts` (1 test) |
+| S-06 | LOW | No DB unique constraint on `CONSUMPTION_REFUND` per review | Partial unique index + P2002 catch | Same pattern as S-01; index SQL in migration |
 
-**Vulnerability:** `GET /payments/wallet` has no rate limit specified. The client is designed to poll it every 2 seconds for up to 60 seconds after checkout. If many authenticated users are simultaneously polling (or if an attacker creates many authenticated sessions), this endpoint could generate significant DB load. The wallet query returns `balance + ledger (last 50 entries)` per request.
+### Design-phase findings verified as implemented (F-01 through F-16)
 
-**Fix:** Add a modest rate limit to `GET /payments/wallet` — recommended 60 requests per minute per user (matching the chat rate limit). This is high enough to not affect the polling use case (30 requests/60 seconds = 30 req/min) but caps runaway polling.
+The following design-phase findings were verified in the implemented code and found to be correctly implemented:
 
-**Status:** Design fix recommended. Update architecture §9 table.
-
----
-
-### F-13 — LOW: `NEXT_PUBLIC_RAZORPAY_KEY_ID` returned from `GET /payments/wallet`
-
-**Where:** Implementation plan Chunk 5 `payments.service.ts` `getWallet()`, Chunk 10 client
-
-**Vulnerability / Design inconsistency:** The `getWallet()` response is specified to include `packages` (available credit packages). The client then uses this to open the Checkout popup with the returned `keyId`. However, `keyId` (`RAZORPAY_KEY_ID`) is a publishable key that is already available in the client as `process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID`. There is no reason to include it in the `getWallet()` response — this unnecessarily exposes the key in API responses and complicates the client-server contract.
-
-Additionally, when `createOrder()` returns `{ orderId, razorpayOrderId, amount, currency, keyId }`, the `keyId` is included in the response. This is actually correct — the client needs it to instantiate the Razorpay Checkout object. But the amount returned must be validated client-side to match what the user expects.
-
-**Fix:** The `getWallet()` response should NOT include `keyId`. The client should use `process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID` directly. The `createOrder()` response may include `keyId` for convenience (it is a publishable key).
-
-**Status:** Low-severity design inconsistency — fix in implementation plan §Chunk 10 and `@cra/types` schema.
-
----
-
-### F-14 — LOW: `payment.failed` webhook updates order to `FAILED` — no guard against `CAPTURED → FAILED` transition
-
-**Where:** Architecture §3 state machine, implementation plan Chunk 7
-
-**Vulnerability:** The state machine correctly shows all transitions go from `CREATED`. The `failOrder()` repository method is described as "atomic status-guard transition `CREATED → FAILED`". However, the plan does not explicitly state that the `WHERE` clause in `failOrder()` must include `status = CREATED`. If an implementer writes `updateMany` without the status guard, a `payment.failed` webhook arriving after a successful `order.paid` (out of order) could overwrite `CAPTURED` → `FAILED`, destroying a valid credit grant. This is the same idempotency pattern as `captureOrder` but must be equally explicit.
-
-**Fix:** Explicitly specify that `failOrder()` uses `updateMany` with `WHERE status = 'CREATED'` — return `count: 0` silently if the order is already in a terminal state. Document this as a test case: `payment.failed` for an already-CAPTURED order → no-op.
-
-**Status:** Design fix required (make the WHERE clause explicit in implementation plan repository specification).
-
----
-
-### F-15 — LOW: `grantFreeCredits` called on every login — partial failure window
-
-**Where:** Implementation plan Chunk 9, architecture §6.3
-
-**Vulnerability:** `grantFreeCredits` is called from `UsersService.findOrCreate` on every authenticated request. The unique partial index on `CreditLedger` prevents double-granting. However: if the `$transaction` that does (INSERT CreditLedger + UPDATE User.creditBalance) fails after the ledger insert but before the balance update (e.g., a DB connection drop mid-transaction), the transaction rolls back — which is correct. The next login retries correctly.
-
-The real risk: if a new user's first authenticated request triggers `findOrCreate`, which calls `grantFreeCredits`, which succeeds, but then the same user's `AuthService.resolve()` is called by 10 concurrent requests (normal browser behaviour on page load), all 10 call `grantFreeCredits` concurrently. The unique index handles this, but 9 of the 10 transactions will fail with a unique constraint violation and the error handling must return the successful result (not throw).
-
-**Fix:** In `grantFreeCredits()`, catch `P2002` (Prisma unique constraint error) and return cleanly (no-op). Do not re-throw. Log at `debug` level only.
-
-**Status:** Existing design notes this but does not specify the error code. Add explicit error code handling to the implementation plan.
-
----
-
-### F-16 — INFO: `receipt` field in Razorpay order creation
-
-**Where:** Architecture §2 flow step 2
-
-**Vulnerability:** The design sends `receipt: <orderId>` when creating a Razorpay order. The `receipt` field is displayed in the Razorpay dashboard and has a maximum length of 40 characters. The `orderId` is a CUID (26 characters) — within limit. This is correct.
-
-However, the design should explicitly specify that the `receipt` field contains only the internal `orderId` (not the user ID, email, or any PII), since the `receipt` field appears in the Razorpay dashboard and merchant-facing reports.
-
-**Status:** Informational — confirm during implementation.
-
----
-
-## 3. Findings fixed (design-level corrections)
-
-The following findings require updates to `02-architecture.md` and `03-implementation-plan.md`. The updates are applied in §5 below.
-
-| Finding | Severity | Correction location |
+| Finding | Status | Verification |
 |---|---|---|
-| F-01 | CRITICAL | Architecture §5.2 + plan §Chunk 7 |
-| F-02 | CRITICAL | Architecture §5.2 + plan §Chunk 7 |
-| F-03 | HIGH | Architecture §7.2 + plan §Chunk 7 |
-| F-04 | HIGH | Architecture §4.1 + plan §Chunk 7, 8 |
-| F-05 | HIGH | Architecture §7.4 + plan §Chunk 8 |
-| F-06 | HIGH | Plan §Chunk 8, micro-decision M-1 → replaced |
-| F-07 | HIGH | Plan §Chunk 7 repository specification |
-| F-08 | MEDIUM | Architecture §4.3 + plan §Chunk 7 |
-| F-09 | MEDIUM | Architecture §2 + plan §Chunk 7 |
-| F-10 | MEDIUM | Architecture §2, plan §Chunk 6 |
-| F-11 | MEDIUM | Architecture §9 + plan §Chunk 6 |
-| F-12 | MEDIUM | Architecture §9 |
-| F-13 | LOW | Plan §Chunk 10, shared types |
-| F-14 | LOW | Plan §Chunk 7 |
-| F-15 | LOW | Plan §Chunk 9 |
-| F-16 | INFO | Architecture §2 (no change needed) |
+| F-01 | Implemented | HMAC computed over `rawBody` Buffer directly (`payments.service.ts:110-113`) |
+| F-02 | Implemented | Signature validated as 64 hex chars before `timingSafeEqual` (`webhook.controller.ts:43`, `payments.service.ts:105`) |
+| F-03 | Implemented | Body-size check at 1 MB before HMAC (`webhook.controller.ts:38`) |
+| F-04 | Implemented | `balanceAfter` read from DB via `findUniqueOrThrow` in all ledger writes |
+| F-05 | Implemented | `markFailedAndRefund` wraps status transition + refund in single `$transaction` |
+| F-06 | Implemented | CreditGuard resolver throws `BadRequestException` on invalid type (`review.controller.ts:33-34`) |
+| F-08 | Implemented | `x-razorpay-event-id` required with max length 128 (`webhook.controller.ts:48`) |
+| F-09 | Implemented + hardened | Amount cross-check present; S-02 made it fail-closed |
+| F-10 | Implemented | No PII in order notes; SDK errors sanitised to `.message` only |
+| F-11 | Implemented | Pending order cap at 3 (`payments.service.ts:51-57`) |
+| F-13 | Implemented | `getWallet` response does not include `keyId` |
+| F-14 | Implemented | Status-guard `updateMany WHERE status = 'CREATED'` in `captureOrder` and `failOrder` |
+| F-15 | Implemented + hardened | `grantFreeCredits` catches errors; S-01 added DB-level enforcement |
+| F-16 | INFO (no change needed) | `receipt` field contains only internal order ID (UUID), no PII |
 
 ---
 
 ## 4. Findings intentionally not changed and why
 
-| Finding | Reason not changed |
+| Item | Reason not changed |
 |---|---|
-| **F-16** (`receipt` field PII) | Informational — the design already sends `orderId` only. No change needed; confirm at implementation time. |
-| **No rate limit on `GET /payments/wallet` (F-12)** — partial | The fix is added to the design, but the implementation will decide the exact `@Throttle` value; the design now specifies a 60 req/min floor. |
-| **Webhook retries returning `200` for unknown orders** | Architecture §7.2 already covers this with the correct behaviour (200 + log warning). An unknown order is not a security vulnerability — it is a cross-environment mismatch or data loss scenario. Returning `4xx` would trigger indefinite Razorpay retries. The design is correct as-is. |
-| **No CSRF protection on `/payments/order`** | The endpoint requires a valid GitHub Bearer token in the `Authorization` header. CSRF attacks against Bearer-token endpoints are not possible — the browser's CORS policy prevents cross-site requests from including the token in the `Authorization` header (only same-site scripts can read and forward the token). No change needed. |
-| **Razorpay Checkout.js loaded from external CDN** | Razorpay's Checkout.js is their official hosted script. Using a pinned SRI hash would be ideal but Razorpay does not provide one for their rotating script. This is a known limitation of third-party payment flows. The risk is accepted. |
-| **`User.email` being `null` passed to Razorpay** | F-10 removes `userId` from notes; `email` is never sent. No issue. |
+| **Express default body-parser limit (100 KB) vs. controller check (1 MB)** | Express's default `express.json()` limit is 100 KB. The controller's 1 MB check (`webhook.controller.ts:38`) is a secondary defense that only triggers if the Express limit is raised. The effective limit is 100 KB, which is **more** restrictive than intended — not a security gap. Razorpay payloads are typically 10–50 KB. No change needed. |
+| **`creditsGranted` determined from package lookup at webhook time, not stored at order creation** | If `CREDIT_PACKAGES` definitions change between order creation and webhook delivery, the granted credits could differ from what was intended at purchase time. This is a data-consistency concern, not a security vulnerability — package definitions are server-side constants, not user-controlled. The `amountPaise` cross-check (S-02) catches price changes. Fixing this would require storing the credit count on `PaymentOrder` at creation time, which is a larger schema change outside this hardening pass's scope. |
+| **No CSRF protection on `/payments/order`** | The endpoint requires a valid GitHub Bearer token in the `Authorization` header. CSRF attacks against Bearer-token endpoints are not possible — the browser's CORS policy prevents cross-site requests from including the token. No change needed. |
+| **Razorpay Checkout.js loaded from external CDN without SRI** | Razorpay's Checkout.js is their official hosted script. Razorpay does not provide a pinned SRI hash for their rotating script. This is a known limitation of third-party payment flows. The risk is accepted. |
+| **Webhook returns `200` for unrecognised event types** | Unknown event types are logged and ignored with a `200` response. This is correct — returning a non-2xx would cause Razorpay to retry indefinitely for an event we intentionally don't handle. No change needed. |
+| **Webhook returns `200` for unknown orders (`not_found`)** | An unknown order is a cross-environment mismatch or data loss scenario, not a security vulnerability. Returning `4xx` would trigger indefinite Razorpay retries. The `200` + log warning is correct. |
+| **`payment.failed` webhook does not verify the order belongs to a known user** | The `failOrder` method uses a status-guard (`WHERE status = 'CREATED'`) and only transitions to `FAILED`. It does not alter credits. An unknown order simply results in `count: 0` (no-op). No security impact. |
+| **Guard-level refund uses `reviewId: null` (not covered by CONSUMPTION_REFUND unique index)** | This is by design. Multiple failed requests (e.g. repeated DB errors) each deduct and refund independently. The unique index only constrains review-associated refunds (`reviewId IS NOT NULL`). Guard/chat refunds must be allowed to occur multiple times. |
+
 
 ---
 
-## 5. Verification requirements
+## 5. Verification performed
 
-Since no code exists, these are test requirements that must be satisfied before the feature is considered "done" from a security perspective.
+### 5.1 Full verification loop (all green)
 
-### 5.1 Webhook verification tests (must fail without the fix)
-
-| Test ID | Description | Expected result |
+| Step | Command | Result |
 |---|---|---|
-| WH-01 | Send valid payload with valid HMAC → expect `200` | Pass |
-| WH-02 | Send valid payload with invalid HMAC → expect `401` | Pass |
-| WH-03 | Send valid payload with missing `X-Razorpay-Signature` header → expect `401` | Pass |
-| WH-04 | Send valid HMAC but body modified (1 char changed) → expect `401` | Pass |
-| WH-05 | Send empty `X-Razorpay-Signature` header → expect `401` (not `500`) | F-02 |
-| WH-06 | Send `X-Razorpay-Signature` of length 1 → expect `401` (not `500`) | F-02 |
-| WH-07 | Body larger than limit → expect `413` | F-03 |
-| WH-08 | Missing `x-razorpay-event-id` → expect `400` | F-08 |
-| WH-09 | Duplicate `x-razorpay-event-id` → expect `200` + no second credit | Architecture §4.3 |
-| WH-10 | `payment.failed` after `order.paid` (same order) → expect `200` + no status change | F-14 |
+| 1. Build Packages | `pnpm build:packages` | **SUCCESS** (`@cra/types`, `@cra/ai` built) |
+| 2. Type Check | `pnpm type-check` | **SUCCESS** (0 errors across all 4 projects) |
+| 3. Server Unit Tests | `pnpm --filter server test` | **SUCCESS** (31/31 suites, 147/147 tests) |
+| 4. Client Unit Tests | `pnpm --filter client test` | **SUCCESS** (10/10 files, 16/16 tests) |
+| 5. Linter | `pnpm lint` | **SUCCESS** (exit 0, 0 errors) |
 
-### 5.2 Credit guard tests
+### 5.2 New and updated test cases
 
-| Test ID | Description | Expected result |
+| Test ID | File | Description | Finding |
+|---|---|---|---|
+| S-01-a | `payments.repository.spec.ts` | P2002 on `grantFreeCredits` → returns `false` | S-01 |
+| S-01-b | `payments.repository.spec.ts` | Non-P2002 error → rethrows | S-01 |
+| S-01-c | `payments.repository.spec.ts` | Existing FREE_GRANT → returns `false` (fast path) | S-01 |
+| S-02-a | `payments.repository.spec.ts` | Missing `amount_paid` → `amount_mismatch` (fail-closed) | S-02 |
+| S-02-b | `payments.repository.spec.ts` | Wrong `amount_paid` → `amount_mismatch` | S-02 |
+| S-03-a | `review.controller.spec.ts` | Handler throws → 500 (refund path wired) | S-03 |
+| S-03-b | `payments.repository.spec.ts` | `refundCredits` creates CONSUMPTION_REFUND entry | S-03/S-04 |
+| S-05-a | `payments.repository.spec.ts` | Mismatched currency → `amount_mismatch` | S-05 |
+| S-05-b | `payments.repository.spec.ts` | Null currency → proceeds on amount match | S-05 |
+| S-05-c | `payments.service.spec.ts` | Currency extracted from payload and passed to `captureOrder` | S-05 |
+| S-cap-1 | `payments.repository.spec.ts` | Matching amount + currency → `captured` | S-02/S-05 |
+| S-cap-2 | `payments.repository.spec.ts` | Already CAPTURED → `already_captured` | F-14 |
+| S-cap-3 | `payments.repository.spec.ts` | No local order → `not_found` | F-07 |
+
+### 5.3 Existing tests verified still passing
+
+All 134 pre-existing tests continue to pass unchanged. The two controller spec files (`review.controller.spec.ts`, `review.throttle.spec.ts`) were updated to provide a `PaymentsService` mock (the controller now requires it in its constructor).
+
+### 5.4 What was NOT verified in this pass
+
+| Property | Why not verified | How to verify before go-live |
 |---|---|---|
-| CG-01 | Code review request with sufficient credits → deducts 5, allows | Pass |
-| CG-02 | PR review request with sufficient credits → deducts 10, allows | Pass |
-| CG-03 | Insufficient credits (balance < cost) → `402` | Pass |
-| CG-04 | Body with `type: "FAKE"` → rejected before credit deduction | F-06 |
-| CG-05 | Two concurrent requests with total balance = cost → only one succeeds | F-06 / §5.1 |
-| CG-06 | Failed review → credits refunded exactly once | F-05 |
+| DB-level race prevention (S-01, S-06) under concurrent load | Requires a real Postgres instance with concurrent connections | Integration test: fire N concurrent `grantFreeCredits` calls, assert exactly one `FREE_GRANT` row |
+| Full guard→deduct→handler-throw→refund chain (S-03) | Requires supertest with real CreditGuard wiring | E2E test: POST `/review/session` with mocked ReviewService that throws, assert balance restored |
+| Full chat Observable error→refund chain (S-04) | Requires supertest SSE integration | E2E test: POST `/history/:id/chat` with mocked HistoryService that errors, assert balance restored |
+| Razorpay sandbox end-to-end | Requires Razorpay test-mode API keys and webhook tunnel | Manual test per production deployment checklist |
+| HMAC verification against real Razorpay webhook | Requires webhook secret and real webhook delivery | Manual test: register webhook URL, trigger test payment |
 
-### 5.3 Order creation tests
-
-| Test ID | Description | Expected result |
-|---|---|---|
-| OC-01 | Valid `packageId` → creates order | Pass |
-| OC-02 | Unknown `packageId` → `400` | Pass |
-| OC-03 | No auth → `401` | Pass |
-| OC-04 | Fourth concurrent CREATED order (over soft cap) → `429` | F-11 |
-| OC-05 | Amount in response matches `CREDIT_PACKAGES[packageId].amountPaise` | F-09 |
-
-### 5.4 Wallet tests
-
-| Test ID | Description | Expected result |
-|---|---|---|
-| WL-01 | Authenticated user → sees own balance | Pass |
-| WL-02 | No auth → `401` | Pass |
-| WL-03 | Response does not include `keyId` | F-13 |
-| WL-04 | `balanceAfter` in ledger matches `User.creditBalance` | F-04 |
 
 ---
 
@@ -428,21 +302,33 @@ Since no code exists, these are test requirements that must be satisfied before 
 
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
-| Razorpay-side breach (webhook secret or order data) | Very low | Critical | HMAC verification still required; server-side order amount cross-check (F-09) |
-| Neon DB outage during webhook processing | Low | Medium | Razorpay retries for 24 hours; risk window is bounded |
-| Render cold-start during webhook delivery (audit §6.8) | Medium | Low | Razorpay retries; harmless with idempotent handler |
-| Unique partial index not supported by Prisma natively (A-6) | Medium | Medium | Fallback: catch `P2002` at application level (already noted as assumption) |
-| `timingSafeEqual` API change in future Node.js | Very low | Low | Pinned Node.js version in Dockerfile; monitor Node.js changelog |
-| Log aggregator capturing full request body before HMAC verification | Medium | High | Ensure NestJS request logging middleware does not log raw body on webhook route |
-| Checkout.js CDN unavailability (Razorpay CDN down) | Low | Medium | User cannot pay; the Account page shows an error. No credit-safety risk. |
+| **DB-level race not verified under load** (S-01, S-06) | Low (unique index is standard PostgreSQL) | High (double-grant/refund) | Integration test with concurrent connections before go-live |
+| **Guard→refund chain not E2E tested** (S-03, S-04) | Low (code path is straightforward) | Medium (credit loss on infra failure) | E2E test with supertest before go-live |
+| **Razorpay-side breach** (webhook secret compromised) | Very low | Critical | HMAC verification still required; server-side amount + currency cross-check (S-02, S-05) |
+| **Neon DB outage during webhook processing** | Low | Medium | Razorpay retries for ~24h; webhook handler is idempotent (event ID unique constraint) |
+| **Render cold-start during webhook delivery** | Medium | Low | Razorpay retries; harmless with idempotent handler |
+| **Log aggregator capturing full webhook body** | Medium | High | Handler does not log raw body. Future logging middleware must skip the webhook route. |
+| **Checkout.js CDN unavailability** | Low | Medium | User cannot pay; Account page shows error. No credit-safety risk. |
+| **`creditsGranted` divergence if packages change** | Very low | Low | `amountPaise` cross-check (S-02) catches price changes. Credit-count changes need future schema fix. |
+| **`timingSafeEqual` API change in future Node.js** | Very low | Low | Pinned Node.js version; monitor changelog |
 
 ---
 
 ## Related files
 
-| File | Role |
+| File | Role in this hardening pass |
 |---|---|
-| [`02-architecture.md`](./02-architecture.md) | Amended with F-01, F-02, F-03, F-04, F-05, F-07, F-08, F-09, F-10, F-11, F-12 fixes |
-| [`03-implementation-plan.md`](./03-implementation-plan.md) | Amended with all findings |
-| [`00-context.md`](./00-context.md) | Source of decisions D-1 through D-14 |
-| [`01-audit.md`](./01-audit.md) | Source of security risks §6 |
+| [`04-implementation.md`](./04-implementation.md) | Updated with all security-related changes from this pass |
+| [`02-architecture.md`](./02-architecture.md) | Design source — architecture decisions referenced by findings |
+| [`03-implementation-plan.md`](./03-implementation-plan.md) | Design source — implementation plan referenced by findings |
+| `apps/server/prisma/migrations/20260814000000_add_credit_ledger_unique_indexes/migration.sql` | New migration — partial unique indexes for S-01, S-06 |
+| `apps/server/src/payments/payments.repository.ts` | S-01 (P2002 catch), S-02 (fail-closed), S-05 (currency check), refundCredits method |
+| `apps/server/src/payments/payments.service.ts` | S-05 (currency extraction), refundCredits method |
+| `apps/server/src/review/review.controller.ts` | S-03 (handler-failure refund) |
+| `apps/server/src/history/history.controller.ts` | S-04 (chat-stream-failure refund) |
+| `apps/server/src/review/review.repository.ts` | S-06 (markFailedAndRefund P2002 catch) |
+| `apps/server/src/payments/payments.repository.spec.ts` | New test file — 11 tests for S-01, S-02, S-05, S-03/S-04 |
+| `apps/server/src/payments/payments.service.spec.ts` | Updated — S-05 currency extraction test |
+| `apps/server/src/review/review.controller.spec.ts` | Updated — S-03 test + PaymentsService mock |
+| `apps/server/src/review/review.throttle.spec.ts` | Updated — PaymentsService mock |
+

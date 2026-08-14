@@ -1,4 +1,4 @@
-import { Body, Controller, Post, Get, Delete, Param, HttpCode, Req, UseGuards, Sse, MessageEvent, BadRequestException } from '@nestjs/common'
+import { Body, Controller, Post, Get, Delete, Param, HttpCode, Req, UseGuards, Sse, MessageEvent, BadRequestException, Logger } from '@nestjs/common'
 import { Request } from 'express'
 import { Observable } from 'rxjs'
 import { Throttle } from '@nestjs/throttler'
@@ -11,14 +11,18 @@ import { CreateSessionDto } from './dto/create-session.dto'
 import { CreditGuard } from '../payments/credit.guard'
 import { CreditCost } from '../payments/credit-cost.decorator'
 import { CREDIT_COSTS } from '../payments/credit-cost.policy'
+import { PaymentsService } from '../payments/payments.service'
 
 @UseGuards(AuthGuard)
 @Controller('review')
 export class ReviewController {
+    private readonly logger = new Logger(ReviewController.name)
+
     constructor(
         private readonly reviewService: ReviewService,
         private readonly reviewStreamerService: ReviewStreamerService,
         private readonly historyService: HistoryService,
+        private readonly paymentsService: PaymentsService,
     ) { }
 
     @Post('session')
@@ -34,8 +38,27 @@ export class ReviewController {
     })
     @Throttle({ default: { limit: 10, ttl: 3_600_000 } })
     async createSession(@Body() dto: CreateSessionDto, @Req() req: Request) {
-        const review = await this.reviewService.createSession(dto.type, dto.input, req.user!.userId)
-        return { reviewId: review.id }
+        try {
+            const review = await this.reviewService.createSession(dto.type, dto.input, req.user!.userId)
+            return { reviewId: review.id }
+        } catch (err) {
+            // S-03: Refund pre-deducted credits if the handler failed after CreditGuard deduction.
+            // CreditGuard sets req.creditDeducted / req.creditUserId only on successful deduction.
+            const creditReq = req as Request & { creditDeducted?: number; creditUserId?: string }
+            if (creditReq.creditDeducted && creditReq.creditUserId) {
+                await this.paymentsService.refundCredits({
+                    userId: creditReq.creditUserId,
+                    cost: creditReq.creditDeducted,
+                    reviewId: null,
+                    description: 'Refund: review session creation failed',
+                }).catch((refundErr: unknown) => {
+                    this.logger.error(
+                        `Failed to refund credits after handler error: ${refundErr instanceof Error ? refundErr.message : String(refundErr)}`,
+                    )
+                })
+            }
+            throw err
+        }
     }
 
     @Sse(':reviewId/stream')

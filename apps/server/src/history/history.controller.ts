@@ -11,13 +11,17 @@ import { Throttle } from '@nestjs/throttler'
 import { CreditGuard } from '../payments/credit.guard'
 import { CreditCost } from '../payments/credit-cost.decorator'
 import { CREDIT_COSTS } from '../payments/credit-cost.policy'
+import { PaymentsService } from '../payments/payments.service'
 
 @UseGuards(AuthGuard)
 @Controller('history')
 export class HistoryController {
     private readonly logger = new Logger(HistoryController.name)
 
-    constructor(private readonly historyService: HistoryService) { }
+    constructor(
+        private readonly historyService: HistoryService,
+        private readonly paymentsService: PaymentsService,
+    ) { }
 
     @Get()
     listReviews(@Req() req: Request) {
@@ -62,6 +66,20 @@ export class HistoryController {
                 } catch (err) {
                     if (abort.signal.aborted) return
                     this.logger.error(`Failed to stream chat answer: ${err instanceof Error ? err.message : err}`)
+                    // S-04: Refund pre-deducted credits if the chat stream failed after CreditGuard deduction.
+                    const creditReq = req as Request & { creditDeducted?: number; creditUserId?: string }
+                    if (creditReq.creditDeducted && creditReq.creditUserId) {
+                        void this.paymentsService.refundCredits({
+                            userId: creditReq.creditUserId,
+                            cost: creditReq.creditDeducted,
+                            reviewId: null,
+                            description: 'Refund: chat stream failed',
+                        }).catch((refundErr: unknown) => {
+                            this.logger.error(
+                                `Failed to refund chat credits: ${refundErr instanceof Error ? refundErr.message : String(refundErr)}`,
+                            )
+                        })
+                    }
                     const message = err instanceof ProviderStreamError
                         ? 'The AI provider returned an error. Please try again later.'
                         : 'Stream interrupted'

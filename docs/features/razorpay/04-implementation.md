@@ -82,7 +82,7 @@ All verification steps pass cleanly:
 |---|---|---|
 | 1. Build Packages | `pnpm build:packages` | **SUCCESS** (`@cra/types`, `@cra/ai` built) |
 | 2. Type Check | `pnpm type-check` | **SUCCESS** (0 errors across all 4 projects) |
-| 3. Server Unit Tests | `pnpm --filter server test` | **SUCCESS** (30/30 suites passed, 134/134 tests passed) |
+| 3. Server Unit Tests | `pnpm --filter server test` | **SUCCESS** (31/31 suites passed, 147/147 tests passed) |
 | 4. Client Unit Tests | `pnpm --filter client test` | **SUCCESS** (10/10 suites passed, 16/16 tests passed) |
 | 5. Linter | `pnpm lint` | **SUCCESS** (Exit code 0, 0 errors across monorepo) |
 
@@ -102,3 +102,48 @@ All verification steps pass cleanly:
 - **F-11**: Pending orders capped at maximum 3 per user.
 - **F-14**: Status transitions use strict status-guard `updateMany` queries (`where: { status: 'CREATED' }`).
 - **F-15**: Signup free credit grant handles idempotency gracefully without throwing exceptions.
+
+---
+
+## Security Hardening Pass (2026-08-14)
+
+A focused security-hardening pass was performed on the implemented payment-critical paths. Full details are in [`05-security-hardening.md`](./05-security-hardening.md). The following code changes were made:
+
+### Database migration: credit ledger unique indexes
+
+- **New migration**: `20260814000000_add_credit_ledger_unique_indexes`
+- Added partial unique index on `CreditLedger(userId, type) WHERE type = 'FREE_GRANT'` — enforces at-most-one free credit grant per user at the DB level (S-01). The application-level `findFirst` check in `grantFreeCredits` was a TOCTOU race under Read Committed isolation; concurrent signup requests could both pass the check and double-grant.
+- Added partial unique index on `CreditLedger(reviewId, type) WHERE type = 'CONSUMPTION_REFUND' AND reviewId IS NOT NULL` — defense-in-depth against double-refund for the same review (S-06). The status-guard in `markFailedAndRefund` provides the primary protection; the DB constraint is belt-and-suspenders.
+
+### `payments.repository.ts` — fail-closed amount check + currency cross-check
+
+- **S-02**: Changed `captureOrder` amount cross-check from fail-open (`amountPaidPaise !== null && ...`) to fail-closed (`amountPaidPaise === null || ...`). A missing `amount_paid` in the webhook payload now results in `amount_mismatch` (no credits granted) instead of silently skipping the check.
+- **S-05**: Added `currency` parameter to `captureOrder` and a currency cross-check (`currency !== null && localOrder.currency !== currency`). When the webhook payload includes a currency that doesn't match the local order, credits are not granted.
+- **S-01**: Added `.catch` on `grantFreeCredits`'s `$transaction` to handle P2002 (unique constraint violation from the new partial index). Returns `false` (already granted) instead of throwing.
+- Added `refundCredits` method — a standalone-transaction refund for guard-level credit recovery (S-03/S-04).
+
+### `payments.service.ts` — currency extraction + refund method
+
+- Extracts `currency` from `payload.order.entity.currency` in `handleOrderPaid` and passes it to `captureOrder`.
+- Added `refundCredits` method that delegates to the repository.
+
+### `review.controller.ts` — handler-failure credit refund (S-03)
+
+- Injected `PaymentsService` into `ReviewController`.
+- Wrapped `createSession` handler in a try/catch that refunds pre-deducted credits (`req.creditDeducted`) if the handler throws synchronously (e.g. DB error during review creation). The original exception is re-thrown after the refund.
+
+### `history.controller.ts` — chat-stream-failure credit refund (S-04)
+
+- Injected `PaymentsService` into `HistoryController`.
+- Added a `refundCredits` call in the chat Observable's catch block. If the AI stream errors (e.g. provider outage), pre-deducted chat credits are refunded.
+
+### `review.repository.ts` — markFailedAndRefund P2002 catch (S-06)
+
+- Added `.catch` on `markFailedAndRefund`'s `$transaction` to handle P2002 from the new `CONSUMPTION_REFUND` unique index. Returns `false` (refund already exists) instead of throwing.
+
+### Tests added
+
+- **`payments.repository.spec.ts`** (new file, 11 tests): fail-closed amount check, currency mismatch, successful capture, already-captured, not-found, null currency, P2002 race protection, non-P2002 rethrow, findFirst fast path, guard-level refund.
+- **`payments.service.spec.ts`** (+1 test): currency extraction from webhook payload.
+- **`review.controller.spec.ts`** (+1 test): handler-failure propagation (S-03).
+- Updated `review.controller.spec.ts` and `review.throttle.spec.ts` to provide `PaymentsService` mock.

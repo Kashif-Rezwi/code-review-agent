@@ -112,6 +112,12 @@ export class ReviewRepository {
             })
 
             return true
+        }).catch((err: unknown) => {
+            // P2002 = unique constraint on (reviewId, type='CONSUMPTION_REFUND') —
+            // defense-in-depth (S-06). The status guard in Step 1 prevents this in
+            // normal operation; the catch ensures a bug in the guard cannot double-refund.
+            if ((err as { code?: string })?.code === 'P2002') return false
+            throw err
         })
     }
 
