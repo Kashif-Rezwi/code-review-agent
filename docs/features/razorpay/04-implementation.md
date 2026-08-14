@@ -141,6 +141,13 @@ A focused security-hardening pass was performed on the implemented payment-criti
 
 - Added `.catch` on `markFailedAndRefund`'s `$transaction` to handle P2002 from the new `CONSUMPTION_REFUND` unique index. Returns `false` (refund already exists) instead of throwing.
 
+### `payments.module.ts` — circular dependency fix (runtime)
+
+- Added `forwardRef(() => AuthModule)` to break the 3-way circular module dependency: `AuthModule → UsersModule → PaymentsModule → AuthModule`.
+- **Why it existed:** `AuthModule` imports `UsersModule` (AuthService needs UsersService), `UsersModule` imports `PaymentsModule` (UsersService needs PaymentsService for free credit grant), and `PaymentsModule` imports `AuthModule` (PaymentsController needs AuthGuard). In the compiled CommonJS output (swc), this caused a `ReferenceError: Cannot access 'AuthModule' before initialization` at module load time.
+- **Why tests passed but Docker failed:** Jest (ts-jest/swc) resolves modules differently from Node.js CommonJS runtime. TypeScript's type-checker doesn't execute module loading. The error only manifested in the compiled `dist/` output.
+- **Verified by:** `node -e "require('./dist/app.module.js')"` — loads without error; NestJS bootstrap confirms all modules (`UsersModule`, `AuthModule`, `PaymentsModule`) initialize successfully.
+
 ### Tests added
 
 - **`payments.repository.spec.ts`** (new file, 11 tests): fail-closed amount check, currency mismatch, successful capture, already-captured, not-found, null currency, P2002 race protection, non-P2002 rethrow, findFirst fast path, guard-level refund.
