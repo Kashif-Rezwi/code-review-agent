@@ -1,6 +1,7 @@
 'use client'
 
-import { Code2, GitPullRequest } from 'lucide-react'
+import Link from 'next/link'
+import { Code2, GitPullRequest, Wallet } from 'lucide-react'
 import { PageHeader } from '@/components/layout/page-header'
 
 type Mode = 'code' | 'pr'
@@ -8,16 +9,30 @@ type Mode = 'code' | 'pr'
 interface ReviewHeaderProps {
     mode: Mode
     isLocked: boolean
+    balance?: number
     onModeSwitch: (m: Mode) => void
 }
 
-export function ReviewHeader({ mode, isLocked, onModeSwitch }: ReviewHeaderProps) {
+export function ReviewHeader({ mode, isLocked, balance, onModeSwitch }: ReviewHeaderProps) {
     return (
         <header className="space-y-6">
-            <PageHeader
-                title="Review your code"
-                description="Paste code directly or provide a GitHub PR URL."
-            />
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <PageHeader
+                    title="Review your code"
+                    description="Paste code directly or provide a GitHub PR URL."
+                />
+
+                {balance !== undefined && (
+                    <Link
+                        href="/account"
+                        className="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold bg-blue-500/10 text-blue-400 border border-blue-500/20 hover:bg-blue-500/20 transition-all duration-200 w-fit self-start sm:self-auto"
+                        title="Click to recharge credits"
+                    >
+                        <Wallet className="w-3.5 h-3.5" />
+                        <span>Wallet: {balance} credits</span>
+                    </Link>
+                )}
+            </div>
 
             {/* Mode tabs */}
             <div className="flex gap-1 bg-gray-900 border border-gray-800 rounded-lg p-1 w-fit">
@@ -34,11 +49,15 @@ export function ReviewHeader({ mode, isLocked, onModeSwitch }: ReviewHeaderProps
                     >
                         {m === 'code' ? (
                             <>
-                                <Code2 className="w-4 h-4" /> Paste Code
+                                <Code2 className="w-4 h-4" />
+                                <span>Paste Code</span>
+                                <span className="text-xs opacity-70 bg-white/5 px-1.5 py-0.5 rounded">5 cr</span>
                             </>
                         ) : (
                             <>
-                                <GitPullRequest className="w-4 h-4" /> GitHub PR
+                                <GitPullRequest className="w-4 h-4" />
+                                <span>GitHub PR</span>
+                                <span className="text-xs opacity-70 bg-white/5 px-1.5 py-0.5 rounded">10 cr</span>
                             </>
                         )}
                     </button>
@@ -47,3 +66,4 @@ export function ReviewHeader({ mode, isLocked, onModeSwitch }: ReviewHeaderProps
         </header>
     )
 }
+

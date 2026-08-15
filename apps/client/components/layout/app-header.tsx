@@ -21,7 +21,7 @@ const NAV = [
 export function AppHeader() {
     const pathname = usePathname()
     const { data: session } = useSession()
-    const token = (session as unknown as { accessToken?: string })?.accessToken
+    const token = session?.githubToken
     const { balance } = useWallet(token)
     const [menuOpen, setMenuOpen] = useState(false)
     const menuRef = useRef<HTMLDivElement>(null)

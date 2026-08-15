@@ -20,7 +20,7 @@ declare global {
 
 export default function AccountPage() {
     const { data: session } = useSession()
-    const token = (session as unknown as { accessToken?: string })?.accessToken
+    const token = session?.githubToken
 
     const { balance, ledger, packages, isLoading, isPolling, error: walletError, refresh, startPolling } = useWallet(token)
     const [buyingPackageId, setBuyingPackageId] = useState<string | null>(null)
