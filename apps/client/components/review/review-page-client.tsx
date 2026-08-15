@@ -170,7 +170,6 @@ export function ReviewPageClient({ initialReviewType, initialReviewId }: { initi
                 <ReviewHeader
                     mode={mode}
                     isLocked={isLocked}
-                    balance={session?.user ? balance : undefined}
                     onModeSwitch={handleModeSwitch}
                 />
 
@@ -209,12 +208,11 @@ export function ReviewPageClient({ initialReviewType, initialReviewId }: { initi
                     outcome={outcome}
                     canSubmit={canSubmit}
                     hasAnyInput={!!(displayedCode || displayedPrUrl || review || isLocked)}
-                    creditCost={creditCost}
-                    balance={balance}
                     hasSufficientCredits={hasSufficientCredits}
                     handleReview={handleReview}
                     handleClear={handleClear}
                 />
+
 
 
                 {error && <ErrorBanner message={error} />}

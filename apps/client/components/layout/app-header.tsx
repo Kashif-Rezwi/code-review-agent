@@ -14,7 +14,6 @@ const NAV = [
     { href: '/review', label: 'Review', icon: Code2 },
     { href: '/standards', label: 'Standards', icon: BookOpen },
     { href: '/history', label: 'History', icon: History },
-    { href: '/account', label: 'Account', icon: Wallet },
 ] as const
 
 /** Shared top navigation header — identical across every page. */
@@ -124,7 +123,15 @@ export function AppHeader() {
                                                 <p className="text-xs text-slate-400 truncate mt-0.5">{session.user.email}</p>
                                             </div>
                                         )}
-                                        <div className="p-1.5">
+                                        <div className="p-1.5 space-y-1">
+                                            <Link
+                                                href="/account"
+                                                onClick={() => setMenuOpen(false)}
+                                                className="w-full flex items-center gap-3 px-3.5 py-2.5 text-sm font-medium text-slate-300 hover:text-white hover:bg-white/5 rounded-xl transition-colors cursor-pointer"
+                                            >
+                                                <Wallet className="w-4 h-4 text-blue-400" />
+                                                Account & Credits
+                                            </Link>
                                             <button
                                                 id="signout-btn"
                                                 onClick={() => signOut({ callbackUrl: '/login' })}
@@ -149,3 +156,4 @@ export function AppHeader() {
         </>
     )
 }
+
