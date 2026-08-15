@@ -21,6 +21,7 @@ import { ReviewActionContainer } from '@/components/review/review-action-contain
 import { ReviewErrorBoundary } from '@/components/ui/error-boundary'
 import { useReviewScroll } from '@/lib/hooks/use-review-scroll'
 import { useSession } from 'next-auth/react'
+import { useWallet } from '@/lib/use-wallet'
 
 type Mode = 'code' | 'pr'
 
@@ -33,11 +34,19 @@ export function ReviewPageClient({ initialReviewType, initialReviewId }: { initi
 
     const { data: session } = useSession()
     const githubToken = session?.githubToken
+    const { balance, refresh: refreshWallet } = useWallet(githubToken)
 
     const {
         phase, taskItems, traceEntries, clusterMap, sessionData, review, error,
         totalDurationMs, acquisition, outcome, synthesisStarted, submit, reset,
     } = useReviewStream(initialReviewId, githubToken)
+
+    // Refresh wallet on complete or error to reflect deductions/refunds
+    useEffect(() => {
+        if (phase === 'complete' || phase === 'error') {
+            void refreshWallet()
+        }
+    }, [phase, refreshWallet])
 
     const isStreaming = phase === 'connecting' || phase === 'streaming'
     const { bottomRef, contentRef, scrollToBottom, isAtBottom, isAtBottomRef } = useReviewScroll({ isStreaming })
@@ -59,10 +68,13 @@ export function ReviewPageClient({ initialReviewType, initialReviewId }: { initi
     // Lock inputs if there's an initial ID or if we are streaming/complete/error
     const isLocked = !!initialReviewId || isStreaming || phase === 'complete' || phase === 'error'
 
+    const creditCost = mode === 'code' ? 5 : 10
+    const hasSufficientCredits = session?.user ? balance >= creditCost : true
+
     const canSubmit =
-        mode === 'code'
+        (mode === 'code'
             ? displayedCode.trim().length > 0 && !isOverLimit
-            : isValidPrUrl(displayedPrUrl)
+            : isValidPrUrl(displayedPrUrl)) && hasSufficientCredits
 
     const handleEditorChange = useCallback((value: string | undefined) => {
         setCode(value ?? '')
@@ -196,9 +208,12 @@ export function ReviewPageClient({ initialReviewType, initialReviewId }: { initi
                     outcome={outcome}
                     canSubmit={canSubmit}
                     hasAnyInput={!!(displayedCode || displayedPrUrl || review || isLocked)}
+                    hasSufficientCredits={hasSufficientCredits}
                     handleReview={handleReview}
                     handleClear={handleClear}
                 />
+
+
 
                 {error && <ErrorBanner message={error} />}
 

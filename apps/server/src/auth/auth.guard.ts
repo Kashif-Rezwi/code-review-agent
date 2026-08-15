@@ -30,9 +30,14 @@ export class AuthGuard implements CanActivate {
 
         if (authHeader?.startsWith('Bearer ')) {
             token = authHeader.slice(7).trim()
-        } else if (req.query.token && typeof req.query.token === 'string') {
+        } else if (
+            req.query.token && typeof req.query.token === 'string' &&
+            !(req.path ?? '').startsWith('/payments/')
+        ) {
             // Deprecated fallback: query-param tokens leak into proxy/access logs,
             // browser history and referrer headers. Removal candidate once logs show zero usage.
+            // R-07: Payment routes are excluded — token-transmission via query param is
+            // unacceptable for payment operations, even as a deprecated fallback.
             this.logger.warn('Auth via ?token= query parameter is deprecated — use the Authorization: Bearer header instead.')
             token = req.query.token
         }

@@ -50,3 +50,10 @@ services:
           type: redis
           name: code-review-agent-redis
           property: connectionString
+      # Razorpay (Prepaid Credits) — set in the Render dashboard; never commit actual values.
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      - key: RAZORPAY_WEBHOOK_SECRET
+        sync: false

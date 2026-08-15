@@ -40,6 +40,7 @@ import { pickArgs, toolStartLabel, toolDoneLabel } from './review.formatter'
 import { ThinkingStream } from './review.thinking'
 import { runReviewAgent } from './review.agent'
 import type { NormalizedPRFile, PRSnapshot } from '../github/github.types'
+import { getReviewCreditCost } from '../payments/credit-cost.policy'
 
 type StandardsContext = Awaited<ReturnType<RagService['retrieveForContext']>>
 
@@ -75,9 +76,10 @@ export class ReviewService {
     ) {}
 
     async createSession(type: 'CODE' | 'PR', input: string, userId: string) {
-        const session = await this.reviewRepository.createSession(type, input, userId)
+        const cost = getReviewCreditCost(type)
+        const session = await this.reviewRepository.createSession(type, input, userId, cost)
         if (!session) throw new InternalServerErrorException('Database not configured or failed to create session')
-        // The review and dispatch intent were committed atomically. The kick is
+        // The review, dispatch intent, and credit consumption were committed atomically. The kick is
         // opportunistic; the two-second poller guarantees eventual handoff.
         void this.reviewDispatcher.kick()
         return session
@@ -85,10 +87,21 @@ export class ReviewService {
 
     /**
      * Cancels an in-progress review: removes the queued BullMQ job, marks the DB record
-     * CANCELLED (no-op if already terminal), and emits a terminal Redis event so live SSE clients close.
+     * CANCELLED and refunds pre-deducted credits (RZP-010), and emits a terminal Redis event so live SSE clients close.
      */
-    async cancelReview(reviewId: string): Promise<void> {
-        const wasCancelled = await this.reviewRepository.markCancelled(reviewId)
+    async cancelReview(reviewId: string, userId?: string, type?: 'CODE' | 'PR'): Promise<void> {
+        let wasCancelled = false
+        if (userId && type) {
+            const cost = getReviewCreditCost(type)
+            wasCancelled = await this.reviewRepository.markCancelledAndRefund(reviewId, {
+                userId,
+                cost,
+                description: 'Refund: review cancelled by user',
+            })
+        } else {
+            wasCancelled = await this.reviewRepository.markCancelled(reviewId)
+        }
+
         // Only push the terminal event when we actually flipped the status — a second event
         // on a COMPLETE/FAILED review would corrupt the Redis replay list for future SSE connections.
         if (wasCancelled) {
@@ -131,7 +144,15 @@ export class ReviewService {
             if (err instanceof ReviewCancelledError || signal?.reason instanceof ReviewCancelledError) return
             const message = this.publicErrorMessage(err)
             const event = { type: 'error' as const, message }
-            const transitioned = await this.reviewRepository.markFailed(reviewId, message, [...conn.getTrace(), event])
+            // Atomically mark the review FAILED and refund the deducted credits (F-05).
+            // markFailedAndRefund runs both operations in a single $transaction.
+            const creditCost = getReviewCreditCost(type)
+            const transitioned = await this.reviewRepository.markFailedAndRefund(
+                reviewId,
+                message,
+                { userId, cost: creditCost, description: `Refund: ${type === 'PR' ? 'PR' : 'Code'} review failed` },
+                [...conn.getTrace(), event],
+            )
             // A cancelled or already-terminal review must not receive a second,
             // contradictory terminal event.
             if (transitioned) conn.send(event)

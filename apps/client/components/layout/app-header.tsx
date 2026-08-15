@@ -3,11 +3,12 @@
 import Link from 'next/link'
 import Image from 'next/image'
 import { usePathname } from 'next/navigation'
-import { Code2, BookOpen, History } from 'lucide-react'
+import { Code2, BookOpen, History, Wallet } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useSession, signOut } from 'next-auth/react'
 import { useState, useRef, useEffect } from 'react'
 import { ServerWakeupBanner } from '@/components/ui/server-wakeup-banner'
+import { useWallet } from '@/lib/use-wallet'
 
 const NAV = [
     { href: '/review', label: 'Review', icon: Code2 },
@@ -19,6 +20,8 @@ const NAV = [
 export function AppHeader() {
     const pathname = usePathname()
     const { data: session } = useSession()
+    const token = session?.githubToken
+    const { balance } = useWallet(token)
     const [menuOpen, setMenuOpen] = useState(false)
     const menuRef = useRef<HTMLDivElement>(null)
 
@@ -67,6 +70,18 @@ export function AppHeader() {
                             })}
                         </nav>
 
+                        {/* Credit Balance Badge */}
+                        {session?.user && (
+                            <Link
+                                href="/account"
+                                className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-500/10 text-blue-400 border border-blue-500/20 hover:bg-blue-500/20 transition-all duration-200"
+                                title="Click to view wallet and recharge credits"
+                            >
+                                <Wallet className="w-3.5 h-3.5" />
+                                <span>{balance} credits</span>
+                            </Link>
+                        )}
+
                         {/* Profile menu */}
                         {session?.user && (
                             <div className="relative" ref={menuRef}>
@@ -108,7 +123,15 @@ export function AppHeader() {
                                                 <p className="text-xs text-slate-400 truncate mt-0.5">{session.user.email}</p>
                                             </div>
                                         )}
-                                        <div className="p-1.5">
+                                        <div className="p-1.5 space-y-1">
+                                            <Link
+                                                href="/account"
+                                                onClick={() => setMenuOpen(false)}
+                                                className="w-full flex items-center gap-3 px-3.5 py-2.5 text-sm font-medium text-slate-300 hover:text-white hover:bg-white/5 rounded-xl transition-colors cursor-pointer"
+                                            >
+                                                <Wallet className="w-4 h-4 text-blue-400" />
+                                                Account & Credits
+                                            </Link>
                                             <button
                                                 id="signout-btn"
                                                 onClick={() => signOut({ callbackUrl: '/login' })}
@@ -133,3 +156,4 @@ export function AppHeader() {
         </>
     )
 }
+

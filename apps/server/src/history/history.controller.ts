@@ -7,13 +7,18 @@ import { ProviderStreamError } from '../ai/ai-runtime.adapter'
 import { AuthGuard } from '../auth/auth.guard'
 import { UserThrottlerGuard } from '../throttle/user-throttler.guard'
 import { Throttle } from '@nestjs/throttler'
+import { CREDIT_COSTS } from '../payments/credit-cost.policy'
+import { PaymentsService } from '../payments/payments.service'
 
 @UseGuards(AuthGuard)
 @Controller('history')
 export class HistoryController {
     private readonly logger = new Logger(HistoryController.name)
 
-    constructor(private readonly historyService: HistoryService) { }
+    constructor(
+        private readonly historyService: HistoryService,
+        private readonly paymentsService: PaymentsService,
+    ) { }
 
     @Get()
     listReviews(@Req() req: Request) {
@@ -43,23 +48,67 @@ export class HistoryController {
     @UseGuards(UserThrottlerGuard)
     @Throttle({ default: { limit: 60, ttl: 3_600_000 } })
     chat(@Param('id') id: string, @Body() dto: ChatMessageDto, @Req() req: Request): Observable<MessageEvent> {
+        const userId = req.user!.userId
+
         return new Observable((subscriber) => {
-            // Teardown aborts the model call so a disconnected client stops spending tokens.
             const abort = new AbortController()
-            const stream = this.historyService.chatGenerator(id, req.user!.userId, dto.message, abort.signal)
 
             void (async () => {
+                let creditDeducted = false
+                let emittedChunkCount = 0
+
                 try {
+                    // PRD-003: Verify review existence and ownership BEFORE deducting credits
+                    await this.historyService.getReview(id, userId)
+
+                    // Atomically deduct 1 credit linked to this reviewId before starting the stream
+                    const balanceAfter = await this.paymentsService.deductCredits({
+                        userId,
+                        cost: CREDIT_COSTS.CHAT,
+                        reviewId: id,
+                        description: 'Follow-up chat query',
+                    })
+
+                    if (balanceAfter === null) {
+                        subscriber.next({
+                            data: {
+                                type: 'error',
+                                message: 'Insufficient credits. Please top up your balance.',
+                            },
+                        })
+                        subscriber.complete()
+                        return
+                    }
+
+                    creditDeducted = true
+                    const stream = this.historyService.chatGenerator(id, userId, dto.message, abort.signal)
+
                     for await (const chunk of stream) {
+                        emittedChunkCount++
                         subscriber.next({ data: { type: 'delta', text: chunk } })
                     }
                     subscriber.next({ data: { type: 'done' } })
                 } catch (err) {
                     if (abort.signal.aborted) return
                     this.logger.error(`Failed to stream chat answer: ${err instanceof Error ? err.message : err}`)
+
+                    // RZC-011: Refund if the stream failed before yielding complete response or on early provider error
+                    if (creditDeducted && emittedChunkCount === 0) {
+                        await this.paymentsService.refundCredits({
+                            userId,
+                            cost: CREDIT_COSTS.CHAT,
+                            reviewId: id,
+                            description: 'Refund: chat stream failed',
+                        }).catch((refundErr: unknown) => {
+                            this.logger.error(
+                                `Failed to refund chat credits: ${refundErr instanceof Error ? refundErr.message : String(refundErr)}`,
+                            )
+                        })
+                    }
+
                     const message = err instanceof ProviderStreamError
                         ? 'The AI provider returned an error. Please try again later.'
-                        : 'Stream interrupted'
+                        : (err instanceof Error ? err.message : 'Stream interrupted')
                     subscriber.next({ data: { type: 'error', message } })
                 } finally {
                     subscriber.complete()

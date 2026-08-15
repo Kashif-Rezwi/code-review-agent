@@ -48,6 +48,7 @@ interface Harness {
     reviewRepository: {
         saveReview: jest.Mock
         markFailed: jest.Mock
+        markFailedAndRefund: jest.Mock
     }
 }
 
@@ -98,6 +99,10 @@ function createHarness(): Harness {
         }),
         markFailed: jest.fn().mockImplementation(() => {
             operations.push('markFailed')
+            return Promise.resolve(true)
+        }),
+        markFailedAndRefund: jest.fn().mockImplementation(() => {
+            operations.push('markFailedAndRefund')
             return Promise.resolve(true)
         }),
         markCancelled: jest.fn(),
@@ -185,9 +190,10 @@ describe('ReviewService coverage-safe PR orchestration', () => {
         expect(errorEvent).toMatchObject({
             message: 'The AI provider returned an error. Please try again later.',
         })
-        expect(harness.reviewRepository.markFailed).toHaveBeenCalledWith(
+        expect(harness.reviewRepository.markFailedAndRefund).toHaveBeenCalledWith(
             REVIEW_ID,
             'The AI provider returned an error. Please try again later.',
+            expect.objectContaining({ userId: USER_ID }),
             expect.any(Array),
         )
     })
@@ -363,7 +369,7 @@ describe('ReviewService coverage-safe PR orchestration', () => {
         expect(harness.events.filter((event) => event.type === 'cluster_failed')).toHaveLength(2)
         expect(harness.events.filter((event) => event.type === 'error')).toHaveLength(1)
         expect(harness.events.filter((event) => event.type === 'complete')).toHaveLength(0)
-        expect(harness.reviewRepository.markFailed).toHaveBeenCalledTimes(1)
+        expect(harness.reviewRepository.markFailedAndRefund).toHaveBeenCalledTimes(1)
         expect(harness.reviewRepository.saveReview).not.toHaveBeenCalled()
     })
 
@@ -393,9 +399,10 @@ describe('ReviewService coverage-safe PR orchestration', () => {
 
         expect(generateObjectMock).not.toHaveBeenCalled()
         expect(streamTextMock).not.toHaveBeenCalled()
-        expect(harness.reviewRepository.markFailed).toHaveBeenCalledWith(
+        expect(harness.reviewRepository.markFailedAndRefund).toHaveBeenCalledWith(
             REVIEW_ID,
             expect.stringMatching(/no usable text diff/i),
+            expect.objectContaining({ userId: USER_ID }),
             expect.any(Array),
         )
     })

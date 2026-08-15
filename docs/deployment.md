@@ -80,9 +80,12 @@ A managed Redis instance. The `REDIS_URL` environment variable is automatically 
 | `OPENROUTER_API_KEY` | Required only when `AI_ROUTER=openrouter` — chat calls fail without it |
 | `DATABASE_URL` | Neon pooled connection string |
 | `DIRECT_URL` | Neon direct connection string (for Prisma) |
+| `RAZORPAY_KEY_ID` | Razorpay Key ID (publishable) |
+| `RAZORPAY_KEY_SECRET` | Razorpay Key Secret (server-only) |
+| `RAZORPAY_WEBHOOK_SECRET` | Razorpay Webhook Secret (server-only, for HMAC validation) |
 | `GITHUB_TOKEN` | *(Optional)* For private repo PR reviews; declared as a secret in `render.yaml` |
 
-> `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` are **client-only** (NextAuth reads them in `apps/client`) — set them in Vercel, not Render; the server never reads them. `GROQ_API_KEY`, `HELICONE_API_KEY`, and `STRIPE_*` appear in `.env.example` under "Not implemented (reserved)" and have no code support — do not configure them.
+> `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` are **client-only** (NextAuth reads them in `apps/client`) — set them in Vercel, not Render; the server never reads them. `GROQ_API_KEY` and `HELICONE_API_KEY` appear in `.env.example` under "Not implemented (reserved)" and have no code support — do not configure them.
 
 ---
 
@@ -101,7 +104,8 @@ The Vercel project's **Root Directory is `apps/client`** — `vercel.json` overr
 | `GITHUB_CLIENT_ID` | Same GitHub OAuth App as the server |
 | `GITHUB_CLIENT_SECRET` | Same GitHub OAuth App as the server |
 | `NEXT_PUBLIC_API_URL` | The Render.com API URL, e.g. `https://code-review-agent-api.onrender.com` |
-| `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` | *(Optional)* Stripe publishable key |
+
+> **Razorpay note:** The publishable Razorpay `key_id` is delivered to the browser via the `POST /payments/order` response (server-returned `keyId`). No client-side `NEXT_PUBLIC_RAZORPAY_KEY_ID` environment variable is required (R-06 — removed as dead configuration).
 
 ---
 
