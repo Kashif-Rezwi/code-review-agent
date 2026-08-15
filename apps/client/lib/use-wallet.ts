@@ -1,123 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { paymentsService } from '@/lib/api'
-import type { CreditPackage, LedgerEntry, WalletResponse } from '@cra/types'
+import { useWalletContext } from '@/context/wallet-context'
+import type { WalletContextValue } from '@/context/wallet-context'
 
-interface UseWallet {
-    balance: number
-    ledger: LedgerEntry[]
-    packages: CreditPackage[]
-    isLoading: boolean
-    isPolling: boolean
-    error: string | null
-    refresh: () => Promise<void>
-    startPolling: (targetOrderId?: string) => void
-    stopPolling: () => void
+export type UseWallet = WalletContextValue
+
+/**
+ * Hook to access the shared wallet state and actions.
+ * Delegates to the root WalletContext so all components share the same balance cache.
+ */
+export function useWallet(_token?: string): UseWallet {
+    void _token
+    return useWalletContext()
 }
 
-const POLLING_INTERVAL_MS = 2000
-const MAX_POLLING_ATTEMPTS = 25
 
-export function useWallet(githubToken?: string): UseWallet {
-    const [balance, setBalance] = useState<number>(0)
-    const [ledger, setLedger] = useState<LedgerEntry[]>([])
-    const [packages, setPackages] = useState<CreditPackage[]>([])
-    const [isLoading, setIsLoading] = useState<boolean>(true)
-    const [isPolling, setIsPolling] = useState<boolean>(false)
-    const [error, setError] = useState<string | null>(null)
-
-    const initialBalanceRef = useRef<number | null>(null)
-    const pollingAttemptsRef = useRef<number>(0)
-    const pollingTimerRef = useRef<NodeJS.Timeout | null>(null)
-    const targetOrderIdRef = useRef<string | null>(null)
-
-    const fetchWallet = useCallback(async () => {
-        if (!githubToken) {
-            setIsLoading(false)
-            return
-        }
-        try {
-            const data = await paymentsService.getWallet<WalletResponse>(githubToken)
-            setBalance(data.balance)
-            setLedger(data.ledger)
-            setPackages(data.packages)
-            setError(null)
-            return data
-        } catch (err) {
-            setError(err instanceof Error ? err.message : 'Failed to fetch wallet data.')
-        } finally {
-            setIsLoading(false)
-        }
-    }, [githubToken])
-
-    useEffect(() => {
-        void fetchWallet()
-    }, [fetchWallet])
-
-    const stopPolling = useCallback(() => {
-        if (pollingTimerRef.current) {
-            clearInterval(pollingTimerRef.current)
-            pollingTimerRef.current = null
-        }
-        targetOrderIdRef.current = null
-        setIsPolling(false)
-        pollingAttemptsRef.current = 0
-    }, [])
-
-    const startPolling = useCallback((targetOrderId?: string) => {
-        stopPolling()
-        initialBalanceRef.current = balance
-        targetOrderIdRef.current = targetOrderId ?? null
-        pollingAttemptsRef.current = 0
-        setIsPolling(true)
-
-        pollingTimerRef.current = setInterval(async () => {
-            pollingAttemptsRef.current += 1
-
-            try {
-                const data = await fetchWallet()
-                if (data) {
-                    // RZC-006 / ADR-005: Order ID matching or fallback balance increment
-                    const foundTargetOrder = targetOrderIdRef.current
-                        ? data.ledger.some((e) => e.orderId === targetOrderIdRef.current)
-                        : false
-
-                    const balanceIncreased =
-                        initialBalanceRef.current !== null && data.balance > initialBalanceRef.current
-
-                    if (foundTargetOrder || (!targetOrderIdRef.current && balanceIncreased)) {
-                        stopPolling()
-                        return
-                    }
-                }
-            } catch {
-                // Ignore transient polling errors
-            }
-
-            if (pollingAttemptsRef.current >= MAX_POLLING_ATTEMPTS) {
-                stopPolling()
-            }
-        }, POLLING_INTERVAL_MS)
-    }, [balance, fetchWallet, stopPolling])
-
-    useEffect(() => {
-        return () => {
-            if (pollingTimerRef.current) {
-                clearInterval(pollingTimerRef.current)
-            }
-        }
-    }, [])
-
-    return {
-        balance,
-        ledger,
-        packages,
-        isLoading,
-        isPolling,
-        error,
-        refresh: async () => {
-            await fetchWallet()
-        },
-        startPolling,
-        stopPolling,
-    }
-}

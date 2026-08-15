@@ -58,6 +58,9 @@ export class HistoryController {
                 let emittedChunkCount = 0
 
                 try {
+                    // PRD-003: Verify review existence and ownership BEFORE deducting credits
+                    await this.historyService.getReview(id, userId)
+
                     // Atomically deduct 1 credit linked to this reviewId before starting the stream
                     const balanceAfter = await this.paymentsService.deductCredits({
                         userId,
