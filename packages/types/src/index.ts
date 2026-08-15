@@ -85,3 +85,34 @@ export type ReviewStreamEvent =
     | { type: 'cluster_done'; clusterId: string; issueCount: number; durationMs: number; attempts?: number }
     | { type: 'cluster_failed'; clusterId: string; attempts: number; message: string; durationMs: number }
     | { type: 'synthesis_start'; clusterCount: number }
+
+// ── Payment / Credit Wallet ──────────────────────────────────────────────────
+
+export const CreditPackageSchema = z.object({
+    id: z.string(),
+    label: z.string(),
+    credits: z.number().int().positive(),
+    amountPaise: z.number().int().positive(),
+    currency: z.string(),
+})
+
+export const LedgerEntrySchema = z.object({
+    id: z.string(),
+    type: z.enum(['FREE_GRANT', 'PURCHASE', 'CONSUMPTION', 'CONSUMPTION_REFUND']),
+    amount: z.number().int(),
+    balanceAfter: z.number().int().nonnegative(),
+    orderId: z.string().nullable().optional(),
+    reviewId: z.string().nullable().optional(),
+    description: z.string().nullable(),
+    createdAt: z.string(), // ISO 8601 string from JSON serialisation
+})
+
+export const WalletResponseSchema = z.object({
+    balance: z.number().int().nonnegative(),
+    ledger: z.array(LedgerEntrySchema),
+    packages: z.array(CreditPackageSchema),
+})
+
+export type CreditPackage = z.infer<typeof CreditPackageSchema>
+export type LedgerEntry = z.infer<typeof LedgerEntrySchema>
+export type WalletResponse = z.infer<typeof WalletResponseSchema>

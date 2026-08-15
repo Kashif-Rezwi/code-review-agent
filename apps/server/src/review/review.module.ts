@@ -11,9 +11,10 @@ import { AuthModule } from '../auth/auth.module'
 import { QueueModule } from '../queue/queue.module'
 import { HistoryModule } from '../history/history.module'
 import { ReviewDispatcherService } from './review-dispatcher.service'
+import { PaymentsModule } from '../payments/payments.module'
 
 @Module({
-    imports: [GithubModule, LinterModule, RagModule, AuthModule, QueueModule, HistoryModule],
+    imports: [GithubModule, LinterModule, RagModule, AuthModule, QueueModule, HistoryModule, PaymentsModule],
     controllers: [ReviewController],
     providers: [ReviewService, ReviewRepository, ReviewProcessor, ReviewStreamerService, ReviewDispatcherService],
 })

@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common'
+import { Global, Module } from '@nestjs/common'
 import { ConfigModule } from '@nestjs/config'
 import { AuthGuard } from './auth.guard'
 import { AuthService } from './auth.service'
@@ -6,6 +6,7 @@ import { TokenCacheService } from './token-cache.service'
 import { UsersModule } from '../users/users.module'
 import { GithubModule } from '../github/github.module'
 
+@Global()
 @Module({
     imports: [ConfigModule, UsersModule, GithubModule],
     providers: [AuthGuard, AuthService, TokenCacheService],

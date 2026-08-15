@@ -34,11 +34,13 @@ export function ReviewHeader({ mode, isLocked, onModeSwitch }: ReviewHeaderProps
                     >
                         {m === 'code' ? (
                             <>
-                                <Code2 className="w-4 h-4" /> Paste Code
+                                <Code2 className="w-4 h-4" />
+                                <span>Paste Code</span>
                             </>
                         ) : (
                             <>
-                                <GitPullRequest className="w-4 h-4" /> GitHub PR
+                                <GitPullRequest className="w-4 h-4" />
+                                <span>GitHub PR</span>
                             </>
                         )}
                     </button>
@@ -47,3 +49,5 @@ export function ReviewHeader({ mode, isLocked, onModeSwitch }: ReviewHeaderProps
         </header>
     )
 }
+
+

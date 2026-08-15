@@ -15,13 +15,17 @@ datasource db {
 // findOrCreate on every authenticated request via AuthGuard.
 
 model User {
-  id        String   @id          // GitHub user ID as string, e.g. "12345678"
-  login     String   @unique      // GitHub username, e.g. "kashifrezwi"
-  name      String?
-  email     String?
-  avatarUrl String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id            String   @id          // GitHub user ID as string, e.g. "12345678"
+  login         String   @unique      // GitHub username, e.g. "kashifrezwi"
+  name          String?
+  email         String?
+  avatarUrl     String?
+  creditBalance Int      @default(0)  // prepaid review credits
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  orders        PaymentOrder[]
+  ledgerEntries CreditLedger[]
 }
 
 // ── RAG: Coding Standards ───────────────────────────────────────────────────
@@ -128,5 +132,72 @@ model Conversation {
   content   String   @db.Text
   createdAt DateTime @default(now())
 
+  @@index([reviewId])
+}
+
+// ── Payments: Credits & Orders ───────────────────────────────────────────────
+
+enum OrderStatus {
+  CREATED
+  CAPTURED
+  FAILED
+  EXPIRED
+}
+
+enum LedgerEntryType {
+  FREE_GRANT
+  PURCHASE
+  CONSUMPTION
+  CONSUMPTION_REFUND
+}
+
+model PaymentOrder {
+  id                String      @id @default(cuid())
+  userId            String
+  user              User        @relation(fields: [userId], references: [id])
+  razorpayOrderId   String      @unique
+  razorpayPaymentId String?
+  packageId         String                    // credit package key, e.g. "50", "200", "500"
+  amountPaise       Int                       // Razorpay amounts are always integer paise
+  currency          String      @default("INR")
+  creditsGranted    Int         @default(0)   // persisted at order creation (R-02); read atomically during CREATED → CAPTURED transition
+  status            OrderStatus @default(CREATED)
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  events        PaymentEvent[]
+  ledgerEntries CreditLedger[]
+
+  @@index([userId])
+  @@index([status, createdAt])
+}
+
+model PaymentEvent {
+  id              String        @id @default(cuid())
+  razorpayEventId String        @unique       // x-razorpay-event-id header — idempotency key
+  razorpayOrderId String?
+  order           PaymentOrder? @relation(fields: [razorpayOrderId], references: [razorpayOrderId])
+  eventType       String                      // "order.paid", "payment.failed", "order.paid.amount_mismatch"
+  payload         Json                        // full raw Razorpay event body (stored after size check)
+  processedAt     DateTime      @default(now())
+  createdAt       DateTime      @default(now())
+
+  @@index([razorpayOrderId])
+}
+
+model CreditLedger {
+  id           String          @id @default(cuid())
+  userId       String
+  user         User            @relation(fields: [userId], references: [id])
+  type         LedgerEntryType
+  amount       Int             // positive = credits in (grant/purchase/refund), negative = credits out
+  balanceAfter Int             // snapshot of User.creditBalance after this entry (read from DB, never computed)
+  orderId      String?         // set for PURCHASE entries
+  order        PaymentOrder?   @relation(fields: [orderId], references: [id])
+  reviewId     String?         // set for CONSUMPTION / CONSUMPTION_REFUND entries
+  description  String?         // human-readable, e.g. "PR review", "Code review"
+  createdAt    DateTime        @default(now())
+
+  @@index([userId, createdAt])
   @@index([reviewId])
 }

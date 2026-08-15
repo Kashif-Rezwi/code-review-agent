@@ -1,4 +1,4 @@
-import { Body, Controller, Post, Get, Delete, Param, HttpCode, Req, UseGuards, Sse, MessageEvent } from '@nestjs/common'
+import { Body, Controller, Post, Get, Delete, Param, HttpCode, Req, UseGuards, Sse, MessageEvent, Logger } from '@nestjs/common'
 import { Request } from 'express'
 import { Observable } from 'rxjs'
 import { Throttle } from '@nestjs/throttler'
@@ -12,6 +12,8 @@ import { CreateSessionDto } from './dto/create-session.dto'
 @UseGuards(AuthGuard)
 @Controller('review')
 export class ReviewController {
+    private readonly logger = new Logger(ReviewController.name)
+
     constructor(
         private readonly reviewService: ReviewService,
         private readonly reviewStreamerService: ReviewStreamerService,
@@ -44,7 +46,8 @@ export class ReviewController {
     @HttpCode(204)
     async cancelReview(@Param('reviewId') reviewId: string, @Req() req: Request) {
         // Ownership check — throws NotFoundException if review doesn't belong to this user
-        await this.historyService.getReview(reviewId, req.user!.userId)
-        await this.reviewService.cancelReview(reviewId)
+        const review = await this.historyService.getReview(reviewId, req.user!.userId)
+        await this.reviewService.cancelReview(reviewId, req.user!.userId, review.type as 'CODE' | 'PR')
     }
 }
+

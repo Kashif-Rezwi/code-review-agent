@@ -78,3 +78,24 @@ export const ragService = {
     deleteDocument: (id: string, token?: string) => 
         apiFetch<void>(`/rag/documents/${id}`, { method: 'DELETE' }, token)
 }
+
+import type { WalletResponse } from '@cra/types'
+
+export const paymentsService = {
+    createOrder: (payload: { packageId: string }, token?: string) =>
+        apiFetch<{
+            orderId: string
+            razorpayOrderId: string
+            amount: number
+            currency: string
+            keyId: string
+        }>('/payments/order', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        }, token),
+    getWallet: <T = WalletResponse>(token?: string) =>
+        apiFetch<T>('/payments/wallet', undefined, token),
+}
+
+
