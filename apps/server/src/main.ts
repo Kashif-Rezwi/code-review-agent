@@ -1,11 +1,25 @@
 import { NestFactory } from '@nestjs/core'
 import { ValidationPipe } from '@nestjs/common'
+import type { IncomingMessage } from 'http'
+import { json, urlencoded } from 'express'
 import { AppModule } from './app.module'
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, { rawBody: true })
+  const app = await NestFactory.create(AppModule, { rawBody: true, bodyParser: false })
+
+  app.use(
+    json({
+      limit: '1mb',
+      verify: (req: IncomingMessage & { rawBody?: Buffer }, _res, buf) => {
+        req.rawBody = buf
+      },
+    }),
+  )
+  app.use(urlencoded({ extended: true, limit: '1mb' }))
+
 
   app.useGlobalPipes(new ValidationPipe({ whitelist: true }))
+
 
   const frontendUrl = process.env.FRONTEND_URL?.replace(/\/$/, '') || 'http://localhost:3000'
 

@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common'
 import { PrismaService } from '../prisma/prisma.service'
 import { Prisma } from '@prisma/client'
+import { ORDER_EXPIRY_MS } from './credit-cost.policy'
 
 @Injectable()
 export class PaymentsRepository {
@@ -32,13 +33,13 @@ export class PaymentsRepository {
      * Atomically capture an order and credit the user's wallet.
      * Runs entirely inside a single interactive $transaction.
      *
-     * Returns 'captured' if the order was transitioned CREATED → CAPTURED,
-     *         'already_captured' if the order was already in a terminal state,
+     * Returns 'captured' if the order was transitioned CREATED/FAILED/EXPIRED → CAPTURED,
+     *         'already_captured' if the order was already in a terminal state (CAPTURED),
      *         'not_found' if no order with that razorpayOrderId exists.
      */
     async captureOrder(params: {
         razorpayOrderId: string
-        razorpayPaymentId: string
+        razorpayPaymentId: string | null
         razorpayEventId: string
         payload: Prisma.InputJsonValue
         /** Amount paid in paise from Razorpay payload — used for cross-check (F-09). */
@@ -49,8 +50,24 @@ export class PaymentsRepository {
         const { razorpayOrderId, razorpayPaymentId, razorpayEventId, payload, amountPaidPaise, currency } = params
 
         return this.prisma.$transaction(async (tx) => {
-            // Step 1: Insert PaymentEvent — unique constraint on razorpayEventId is the idempotency key.
-            // If this throws P2002 the event was already processed — caller catches and returns 200.
+            // Step 1: Lookup local order first (RZP-002) to avoid foreign key violation
+            // if webhook references an order from another environment or system.
+            const localOrder = await tx.paymentOrder.findUnique({ where: { razorpayOrderId } })
+
+            if (!localOrder) {
+                // Record event with null order reference to preserve audit log without throwing FK violation.
+                await tx.paymentEvent.create({
+                    data: {
+                        razorpayEventId,
+                        razorpayOrderId: null,
+                        eventType: 'order.paid',
+                        payload,
+                    },
+                })
+                return 'not_found'
+            }
+
+            // Record event linked to the verified order.
             await tx.paymentEvent.create({
                 data: {
                     razorpayEventId,
@@ -60,14 +77,10 @@ export class PaymentsRepository {
                 },
             })
 
-            // Step 2: Load local order to cross-check amount (F-09).
-            const localOrder = await tx.paymentOrder.findUnique({ where: { razorpayOrderId } })
-            if (!localOrder) return 'not_found'
-
             // Step 2b: Fail-closed on zero/negative credits (R-02).
             // creditsGranted was persisted at order creation time. If it is <= 0,
             // the package was removed/renamed between creation and webhook delivery,
-            // or the order predates the fix. Do NOT capture — leave the order CREATED
+            // or the order predates the fix. Do NOT capture — leave the order in its current status
             // for manual reconciliation and record a zero_credits event.
             if (localOrder.creditsGranted <= 0) {
                 this.logger.error(
@@ -108,10 +121,11 @@ export class PaymentsRepository {
                 return 'amount_mismatch'
             }
 
-            // Step 4: Status-guard transition CREATED → CAPTURED (idempotency layer 2).
+            // Step 4: Status-guard transition CREATED/FAILED/EXPIRED → CAPTURED (idempotency layer 2, RZP-003).
+            // Retried payments after an initial failure on the same order must be capturable.
             const result = await tx.paymentOrder.updateMany({
-                where: { razorpayOrderId, status: 'CREATED' },
-                data: { status: 'CAPTURED', razorpayPaymentId, creditsGranted: localOrder.creditsGranted },
+                where: { razorpayOrderId, status: { in: ['CREATED', 'FAILED', 'EXPIRED'] } },
+                data: { status: 'CAPTURED', razorpayPaymentId: razorpayPaymentId ?? null, creditsGranted: localOrder.creditsGranted },
             })
             if (result.count === 0) return 'already_captured'
 
@@ -145,7 +159,7 @@ export class PaymentsRepository {
 
     /**
      * Atomically transition a CREATED order to FAILED.
-     * Returns true if the transition happened, false if already terminal.
+     * Returns true if the transition happened, false if already terminal or not found.
      */
     async failOrder(params: {
         razorpayOrderId: string
@@ -155,6 +169,20 @@ export class PaymentsRepository {
         const { razorpayOrderId, razorpayEventId, payload } = params
 
         return this.prisma.$transaction(async (tx) => {
+            // Step 1: Check if local order exists first (RZP-002)
+            const localOrder = await tx.paymentOrder.findUnique({ where: { razorpayOrderId } })
+            if (!localOrder) {
+                await tx.paymentEvent.create({
+                    data: {
+                        razorpayEventId,
+                        razorpayOrderId: null,
+                        eventType: 'payment.failed',
+                        payload,
+                    },
+                })
+                return false
+            }
+
             // Idempotency insert — catch P2002 above if already processed.
             await tx.paymentEvent.create({
                 data: {
@@ -358,10 +386,32 @@ export class PaymentsRepository {
         })
     }
 
-    /** Count orders with status CREATED for a user (used for pending order cap, F-11). */
-    countPendingOrders(userId: string): Promise<number> {
+    /**
+     * Atomically transition abandoned CREATED orders older than maxAgeMs to EXPIRED (RZP-004).
+     * Returns the number of expired orders.
+     */
+    async expireStaleOrders(userId?: string, maxAgeMs = ORDER_EXPIRY_MS): Promise<number> {
+        const cutoff = new Date(Date.now() - maxAgeMs)
+        const result = await this.prisma.paymentOrder.updateMany({
+            where: {
+                status: 'CREATED',
+                createdAt: { lt: cutoff },
+                ...(userId ? { userId } : {}),
+            },
+            data: { status: 'EXPIRED' },
+        })
+        if (result.count > 0) {
+            this.logger.log(`Expired ${result.count} stale pending order(s)`)
+        }
+        return result.count
+    }
+
+    /** Count active non-expired orders with status CREATED for a user (used for pending order cap, F-11). */
+    async countPendingOrders(userId: string): Promise<number> {
+        await this.expireStaleOrders(userId)
         return this.prisma.paymentOrder.count({
             where: { userId, status: 'CREATED' },
         })
     }
 }
+

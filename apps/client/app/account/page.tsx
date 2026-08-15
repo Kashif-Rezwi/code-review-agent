@@ -11,7 +11,10 @@ import { CreditCard, RefreshCw, Zap, ShieldCheck, History, ArrowDownRight, Arrow
 
 declare global {
     interface Window {
-        Razorpay: new (options: Record<string, unknown>) => { open: () => void }
+        Razorpay: new (options: Record<string, unknown>) => {
+            open: () => void
+            on: (event: string, handler: (response: { error?: { description?: string; code?: string; reason?: string } }) => void) => void
+        }
     }
 }
 
@@ -73,6 +76,11 @@ export default function AccountPage() {
             }
 
             const razorpayInstance = new window.Razorpay(options)
+            razorpayInstance.on('payment.failed', (response: { error?: { description?: string; code?: string } }) => {
+                const desc = response.error?.description || 'Payment was declined or failed.'
+                setCheckoutError(`Payment failed: ${desc}`)
+                setBuyingPackageId(null)
+            })
             razorpayInstance.open()
         } catch (err) {
             setCheckoutError(err instanceof Error ? err.message : 'Failed to initiate checkout.')

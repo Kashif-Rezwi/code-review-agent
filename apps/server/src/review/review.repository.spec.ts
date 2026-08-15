@@ -131,6 +131,80 @@ describe('ReviewRepository terminal state transitions', () => {
     );
   });
 
+  describe('markCancelledAndRefund (RZP-010)', () => {
+    it('cancels review and dispatches refund when status is PENDING', async () => {
+      const user = { updateMany: jest.fn().mockResolvedValue({ count: 1 }), findUniqueOrThrow: jest.fn().mockResolvedValue({ creditBalance: 30 }) };
+      const creditLedger = { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn().mockResolvedValue({}) };
+      review.updateMany.mockResolvedValue({ count: 1 });
+
+      const customPrisma = {
+        review,
+        reviewDispatch,
+        user,
+        creditLedger,
+        $transaction: jest.fn((callback: (tx: unknown) => unknown) =>
+          Promise.resolve(callback({ review, reviewDispatch, user, creditLedger })),
+        ),
+      } as unknown as PrismaService;
+
+      const customRepo = new ReviewRepository({ get: jest.fn().mockReturnValue('postgresql://configured') } as unknown as ConfigService, customPrisma);
+
+      const result = await customRepo.markCancelledAndRefund('review-1', {
+        userId: 'user-1',
+        cost: 5,
+        description: 'Refund: review cancelled by user',
+      });
+
+      expect(result).toBe(true);
+      expect(review.updateMany).toHaveBeenCalledWith({
+        where: { id: 'review-1', status: 'PENDING' },
+        data: { status: 'CANCELLED' },
+      });
+      expect(user.updateMany).toHaveBeenCalledWith({
+        where: { id: 'user-1' },
+        data: { creditBalance: { increment: 5 } },
+      });
+      expect(creditLedger.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            userId: 'user-1',
+            type: 'CONSUMPTION_REFUND',
+            amount: 5,
+            reviewId: 'review-1',
+          }),
+        }),
+      );
+    });
+
+    it('returns false when review was already terminal', async () => {
+      review.updateMany.mockResolvedValue({ count: 0 });
+      const user = { updateMany: jest.fn() };
+      const creditLedger = { findFirst: jest.fn(), create: jest.fn() };
+
+      const customPrisma = {
+        review,
+        reviewDispatch,
+        user,
+        creditLedger,
+        $transaction: jest.fn((callback: (tx: unknown) => unknown) =>
+          Promise.resolve(callback({ review, reviewDispatch, user, creditLedger })),
+        ),
+      } as unknown as PrismaService;
+
+      const customRepo = new ReviewRepository({ get: jest.fn().mockReturnValue('postgresql://configured') } as unknown as ConfigService, customPrisma);
+
+      const result = await customRepo.markCancelledAndRefund('review-1', {
+        userId: 'user-1',
+        cost: 5,
+        description: 'Refund: review cancelled by user',
+      });
+
+      expect(result).toBe(false);
+      expect(user.updateMany).not.toHaveBeenCalled();
+    });
+  });
+
+
   describe('saveReview', () => {
     it('completes an existing review only while it is PENDING', async () => {
       review.update.mockResolvedValue({ id: 'review-1' });

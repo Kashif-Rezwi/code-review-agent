@@ -197,4 +197,49 @@ describe('ReviewController R-01: credit refund on pipe-level 400', () => {
         // No refund should occur on success.
         expect(paymentsService.refundCredits).not.toHaveBeenCalled()
     })
+
+    it('RZP-010: cancels review and passes user and type for refunding', async () => {
+        const cancelReviewMock = jest.fn().mockResolvedValue(undefined)
+        const getReviewMock = jest.fn().mockResolvedValue({ id: 'review-1', type: 'PR', userId: 'user-1' })
+        const reviewSvc = { createSession: jest.fn(), cancelReview: cancelReviewMock }
+        const historySvc = { getReview: getReviewMock }
+
+        const cancelModule = await Test.createTestingModule({
+            imports: [
+                ThrottlerModule.forRoot({
+                    throttlers: [{ name: 'default', ttl: 3_600_000, limit: 60 }],
+                }),
+            ],
+            controllers: [ReviewController],
+            providers: [
+                CreditRefundInterceptor,
+                { provide: ReviewService, useValue: reviewSvc },
+                { provide: ReviewStreamerService, useValue: {} },
+                { provide: HistoryService, useValue: historySvc },
+                { provide: PaymentsService, useValue: paymentsService },
+            ],
+        })
+            .overrideGuard(AuthGuard)
+            .useValue({
+                canActivate: (context: ExecutionContext) => {
+                    const req = context.switchToHttp().getRequest<{ user?: { userId: string } }>()
+                    req.user = { userId: 'user-1' }
+                    return true
+                },
+            })
+            .compile()
+
+        const cancelApp = cancelModule.createNestApplication()
+        await cancelApp.init()
+
+        await request(cancelApp.getHttpServer())
+            .delete('/review/review-1')
+            .expect(204)
+
+        expect(getReviewMock).toHaveBeenCalledWith('review-1', 'user-1')
+        expect(cancelReviewMock).toHaveBeenCalledWith('review-1', 'user-1', 'PR')
+
+        await cancelApp.close()
+    })
 })
+

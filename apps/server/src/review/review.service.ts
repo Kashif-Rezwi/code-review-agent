@@ -86,10 +86,21 @@ export class ReviewService {
 
     /**
      * Cancels an in-progress review: removes the queued BullMQ job, marks the DB record
-     * CANCELLED (no-op if already terminal), and emits a terminal Redis event so live SSE clients close.
+     * CANCELLED and refunds pre-deducted credits (RZP-010), and emits a terminal Redis event so live SSE clients close.
      */
-    async cancelReview(reviewId: string): Promise<void> {
-        const wasCancelled = await this.reviewRepository.markCancelled(reviewId)
+    async cancelReview(reviewId: string, userId?: string, type?: 'CODE' | 'PR'): Promise<void> {
+        let wasCancelled = false
+        if (userId && type) {
+            const cost = getReviewCreditCost(type)
+            wasCancelled = await this.reviewRepository.markCancelledAndRefund(reviewId, {
+                userId,
+                cost,
+                description: 'Refund: review cancelled by user',
+            })
+        } else {
+            wasCancelled = await this.reviewRepository.markCancelled(reviewId)
+        }
+
         // Only push the terminal event when we actually flipped the status — a second event
         // on a COMPLETE/FAILED review would corrupt the Redis replay list for future SSE connections.
         if (wasCancelled) {

@@ -82,7 +82,8 @@ export class ReviewController {
     @HttpCode(204)
     async cancelReview(@Param('reviewId') reviewId: string, @Req() req: Request) {
         // Ownership check — throws NotFoundException if review doesn't belong to this user
-        await this.historyService.getReview(reviewId, req.user!.userId)
-        await this.reviewService.cancelReview(reviewId)
+        const review = await this.historyService.getReview(reviewId, req.user!.userId)
+        await this.reviewService.cancelReview(reviewId, req.user!.userId, review.type as 'CODE' | 'PR')
     }
 }
+

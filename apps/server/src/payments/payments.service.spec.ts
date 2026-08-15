@@ -174,6 +174,77 @@ describe('PaymentsService & Webhook handling', () => {
             await expect(service.handleWebhook(bodyBuffer, sig, 'evt_str')).resolves.not.toThrow()
             expect(repo.captureOrder).not.toHaveBeenCalled()
         })
+
+        it('RZP-001: payment.failed webhook parses order_id from payload.payment.entity.order_id', async () => {
+            const bodyObj = {
+                event: 'payment.failed',
+                payload: {
+                    payment: {
+                        entity: {
+                            id: 'pay_fail_123',
+                            order_id: 'order_fail_123',
+                            error_code: 'BAD_REQUEST_ERROR',
+                        },
+                    },
+                },
+            }
+            const bodyBuffer = Buffer.from(JSON.stringify(bodyObj))
+            const sig = signPayload(bodyBuffer)
+
+            repo.failOrder.mockResolvedValue(true)
+
+            await expect(service.handleWebhook(bodyBuffer, sig, 'evt_fail_123')).resolves.not.toThrow()
+            expect(repo.failOrder).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    razorpayOrderId: 'order_fail_123',
+                    razorpayEventId: 'evt_fail_123',
+                }),
+            )
+        })
+
+        it('RZP-002: order.paid for unknown order acknowledges 200 without throwing', async () => {
+            const bodyObj = {
+                event: 'order.paid',
+                payload: {
+                    order: { entity: { id: 'order_unknown', amount_paid: 9900 } },
+                },
+            }
+            const bodyBuffer = Buffer.from(JSON.stringify(bodyObj))
+            const sig = signPayload(bodyBuffer)
+
+            repo.captureOrder.mockResolvedValue('not_found')
+
+            await expect(service.handleWebhook(bodyBuffer, sig, 'evt_unk_123')).resolves.not.toThrow()
+            expect(repo.captureOrder).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    razorpayOrderId: 'order_unknown',
+                    razorpayEventId: 'evt_unk_123',
+                }),
+            )
+        })
+
+        it('RZP-005: handles P2028 transaction timeout and P2034 write conflict as idempotent ack', async () => {
+            const bodyObj = {
+                event: 'order.paid',
+                payload: {
+                    order: { entity: { id: 'order_123', amount_paid: 9900 } },
+                },
+            }
+            const bodyBuffer = Buffer.from(JSON.stringify(bodyObj))
+            const sig = signPayload(bodyBuffer)
+
+            const p2028Err: any = new Error('P2028 timeout')
+            p2028Err.code = 'P2028'
+            repo.captureOrder.mockRejectedValueOnce(p2028Err)
+
+            await expect(service.handleWebhook(bodyBuffer, sig, 'evt_p2028')).resolves.not.toThrow()
+
+            const p2034Err: any = new Error('P2034 conflict')
+            p2034Err.code = 'P2034'
+            repo.captureOrder.mockRejectedValueOnce(p2034Err)
+
+            await expect(service.handleWebhook(bodyBuffer, sig, 'evt_p2034')).resolves.not.toThrow()
+        })
     })
 
     describe('createOrder', () => {
@@ -187,3 +258,4 @@ describe('PaymentsService & Webhook handling', () => {
         })
     })
 })
+

@@ -19,6 +19,9 @@ export const CREDIT_COSTS = {
 /** Free credits granted once per user on first signup. */
 export const FREE_CREDIT_AMOUNT = 25
 
+/** TTL for pending CREATED orders before they are marked EXPIRED (30 minutes). */
+export const ORDER_EXPIRY_MS = 30 * 60 * 1000
+
 /** Returns the credit cost for a review type. Throws if type is unrecognised (implementation bug, not 402). */
 export function getReviewCreditCost(type: 'CODE' | 'PR'): number {
     if (type === 'CODE') return CREDIT_COSTS.CODE_REVIEW
@@ -26,3 +29,4 @@ export function getReviewCreditCost(type: 'CODE' | 'PR'): number {
     // Exhaustive — reaching this is a caller bug, not a user error.
     throw new Error(`Unknown review type: ${String(type)}`)
 }
+

@@ -14,8 +14,8 @@ interface UseWallet {
     stopPolling: () => void
 }
 
-const POLLING_INTERVAL_MS = 2000
-const MAX_POLLING_ATTEMPTS = 30
+const POLLING_INTERVAL_MS = 2500
+const MAX_POLLING_ATTEMPTS = 20
 
 export function useWallet(githubToken?: string): UseWallet {
     const [balance, setBalance] = useState<number>(0)

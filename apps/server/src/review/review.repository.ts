@@ -121,6 +121,67 @@ export class ReviewRepository {
         })
     }
 
+    /**
+     * Atomically transition PENDING → CANCELLED for both review and dispatch,
+     * and refund deducted credits to the user's wallet (RZP-010).
+     */
+    async markCancelledAndRefund(
+        reviewId: string,
+        refund: { userId: string; cost: number; description: string },
+    ): Promise<boolean> {
+        if (!this.hasDb) return false
+        return this.prisma.$transaction(async (tx) => {
+            const result = await tx.review.updateMany({
+                where: { id: reviewId, status: 'PENDING' },
+                data: { status: 'CANCELLED' },
+            })
+            if (result.count === 0) return false // Already terminal — skip refund.
+
+            await tx.reviewDispatch.updateMany({
+                where: { reviewId, status: { in: ['PENDING', 'PROCESSING'] } },
+                data: { status: 'CANCELLED', lockedUntil: null },
+            })
+
+            // Double-refund guard
+            const existingRefund = await tx.creditLedger.findFirst({
+                where: { reviewId, type: 'CONSUMPTION_REFUND' },
+                select: { id: true },
+            })
+            if (existingRefund) {
+                this.logger.warn(`Refund for review ${reviewId} already exists — skipping double-refund`)
+                return true
+            }
+
+            // Increment user credit balance
+            await tx.user.updateMany({
+                where: { id: refund.userId },
+                data: { creditBalance: { increment: refund.cost } },
+            })
+
+            const updatedUser = await tx.user.findUniqueOrThrow({
+                where: { id: refund.userId },
+                select: { creditBalance: true },
+            })
+
+            // Append CONSUMPTION_REFUND ledger entry
+            await tx.creditLedger.create({
+                data: {
+                    userId: refund.userId,
+                    type: 'CONSUMPTION_REFUND',
+                    amount: refund.cost,
+                    balanceAfter: updatedUser.creditBalance,
+                    reviewId,
+                    description: refund.description,
+                },
+            })
+
+            return true
+        }).catch((err: unknown) => {
+            if ((err as { code?: string })?.code === 'P2002') return false
+            throw err
+        })
+    }
+
     /** Returns true if the review was actually cancelled (was PENDING), false otherwise. */
     async markCancelled(reviewId: string): Promise<boolean> {
         if (!this.hasDb) return false

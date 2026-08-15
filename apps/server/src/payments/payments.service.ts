@@ -160,7 +160,7 @@ export class PaymentsService {
             .payment?.entity
 
         const razorpayOrderId = orderEntity?.id
-        const razorpayPaymentId = paymentEntity?.id
+        const razorpayPaymentId = paymentEntity?.id ?? null
         const amountPaidPaise = orderEntity?.amount_paid ?? null
         const currency = orderEntity?.currency ?? null
 
@@ -175,14 +175,18 @@ export class PaymentsService {
         // between order creation and webhook delivery.
         const result = await this.repo.captureOrder({
             razorpayOrderId,
-            razorpayPaymentId: razorpayPaymentId ?? '',
+            razorpayPaymentId,
             razorpayEventId: eventId,
             payload: rawBody.toString('utf8') as unknown as Prisma.InputJsonValue,
             amountPaidPaise,
             currency,
         }).catch((err: unknown) => {
             // P2002 = unique constraint on razorpayEventId — duplicate event delivery.
-            if ((err as { code?: string })?.code === 'P2002') return 'duplicate' as const
+            // P2028 / P2034 = transaction timeout or contention during concurrent duplicate bursts (RZP-005).
+            const code = (err as { code?: string })?.code
+            if (code === 'P2002' || code === 'P2028' || code === 'P2034') {
+                return 'duplicate' as const
+            }
             throw err
         })
 
@@ -202,11 +206,11 @@ export class PaymentsService {
                 break
             case 'zero_credits':
                 // R-02/R-04: order paid but creditsGranted <= 0 — entitlement missing,
-                // revenue-impacting. Order left CREATED for reconciliation.
-                this.logger.error(`order.paid: order ${razorpayOrderId} has zero credits — entitlement missing, left CREATED for reconciliation`)
+                // revenue-impacting. Order left in current status for reconciliation.
+                this.logger.error(`order.paid: order ${razorpayOrderId} has zero credits — entitlement missing, left for reconciliation`)
                 break
             case 'duplicate':
-                this.logger.debug(`order.paid: duplicate event ${eventId} — no-op`)
+                this.logger.debug(`order.paid: duplicate or contended event ${eventId} — no-op`)
                 break
         }
     }
@@ -216,11 +220,17 @@ export class PaymentsService {
         eventId: string,
         rawBody: Buffer,
     ): Promise<void> {
-        const orderEntity = (payload as { order?: { entity?: { id?: string } } }).order?.entity
-        const razorpayOrderId = orderEntity?.id
+        // RZP-001: In real Razorpay payment.failed webhooks, order_id lives inside
+        // payload.payment.entity.order_id, falling back to payload.order.entity.id.
+        const paymentEntity = (payload as { payment?: { entity?: { id?: string; order_id?: string } } })
+            .payment?.entity
+        const orderEntity = (payload as { order?: { entity?: { id?: string } } })
+            .order?.entity
+
+        const razorpayOrderId = paymentEntity?.order_id ?? orderEntity?.id
 
         if (!razorpayOrderId) {
-            this.logger.warn(`payment.failed webhook missing order.entity.id (eventId: ${eventId})`)
+            this.logger.warn(`payment.failed webhook missing payment.entity.order_id / order.entity.id (eventId: ${eventId})`)
             return
         }
 
@@ -229,14 +239,15 @@ export class PaymentsService {
             razorpayEventId: eventId,
             payload: rawBody.toString('utf8') as unknown as Prisma.InputJsonValue,
         }).catch((err: unknown) => {
-            if ((err as { code?: string })?.code === 'P2002') return false
+            const code = (err as { code?: string })?.code
+            if (code === 'P2002' || code === 'P2028' || code === 'P2034') return false
             throw err
         })
 
         if (transitioned) {
             this.logger.warn(`payment.failed: order ${razorpayOrderId} marked FAILED`)
         } else {
-            this.logger.debug(`payment.failed: order ${razorpayOrderId} already terminal — no-op`)
+            this.logger.debug(`payment.failed: order ${razorpayOrderId} already terminal or unknown — no-op`)
         }
     }
 
