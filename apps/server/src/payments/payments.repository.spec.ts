@@ -11,10 +11,10 @@ describe('PaymentsRepository security hardening', () => {
     let mockTx: {
         paymentEvent: { create: jest.Mock }
         paymentOrder: { findUnique: jest.Mock; updateMany: jest.Mock }
-        user: { updateMany: jest.Mock; findUniqueOrThrow: jest.Mock }
-        creditLedger: { create: jest.Mock; findFirst: jest.Mock }
+        user: { updateMany: jest.Mock; findUniqueOrThrow: jest.Mock; findUnique: jest.Mock; update: jest.Mock }
+        creditLedger: { create: jest.Mock; findFirst: jest.Mock; aggregate: jest.Mock }
     }
-    let prisma: { $transaction: jest.Mock }
+    let prisma: { $transaction: jest.Mock; $queryRaw: jest.Mock }
 
     beforeEach(() => {
         mockTx = {
@@ -23,12 +23,15 @@ describe('PaymentsRepository security hardening', () => {
             user: {
                 updateMany: jest.fn().mockResolvedValue(undefined),
                 findUniqueOrThrow: jest.fn(),
+                findUnique: jest.fn(),
+                update: jest.fn(),
             },
-            creditLedger: { create: jest.fn().mockResolvedValue(undefined), findFirst: jest.fn() },
+            creditLedger: { create: jest.fn().mockResolvedValue(undefined), findFirst: jest.fn(), aggregate: jest.fn() },
         }
 
         prisma = {
             $transaction: jest.fn((cb: (tx: typeof mockTx) => Promise<unknown>) => cb(mockTx)),
+            $queryRaw: jest.fn(),
         }
 
         repo = new PaymentsRepository(prisma as unknown as PrismaService)
@@ -297,6 +300,36 @@ describe('PaymentsRepository security hardening', () => {
                     }),
                 }),
             )
+        })
+    })
+
+    describe('checkBalanceDrift & reconcileUserBalance (RZC-010)', () => {
+        it('checkBalanceDrift executes raw query and returns drift array', async () => {
+            const mockDrifts = [{ userId: 'user_1', cachedBalance: 20, ledgerSum: 25, drift: -5 }]
+            prisma.$queryRaw.mockResolvedValueOnce(mockDrifts)
+
+            const drifts = await repo.checkBalanceDrift('user_1')
+            expect(drifts).toEqual(mockDrifts)
+        })
+
+        it('reconcileUserBalance updates User.creditBalance to match SUM(CreditLedger.amount)', async () => {
+            mockTx.user.findUnique.mockResolvedValue({ id: 'user_1', creditBalance: 20 })
+            mockTx.creditLedger.aggregate.mockResolvedValue({ _sum: { amount: 25 } })
+            mockTx.user.update.mockResolvedValue({ id: 'user_1', creditBalance: 25 })
+
+            const reconciled = await repo.reconcileUserBalance('user_1')
+            expect(reconciled).toBe(25)
+            expect(mockTx.user.update).toHaveBeenCalledWith({
+                where: { id: 'user_1' },
+                data: { creditBalance: 25 },
+            })
+        })
+
+        it('reconcileUserBalance returns null if user does not exist', async () => {
+            mockTx.user.findUnique.mockResolvedValue(null)
+
+            const result = await repo.reconcileUserBalance('nonexistent')
+            expect(result).toBeNull()
         })
     })
 })

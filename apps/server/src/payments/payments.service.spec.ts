@@ -5,6 +5,8 @@ import { ConfigService } from '@nestjs/config'
 import { UnauthorizedException, HttpException, HttpStatus } from '@nestjs/common'
 import { PaymentsService } from './payments.service'
 import { PaymentsRepository } from './payments.repository'
+import { PAYMENT_GATEWAY } from './gateway/payment-gateway.interface'
+import { RazorpayGatewayAdapter } from './gateway/razorpay-gateway.adapter'
 
 describe('PaymentsService & Webhook handling', () => {
     let service: PaymentsService
@@ -42,6 +44,10 @@ describe('PaymentsService & Webhook handling', () => {
                             throw new Error(`Unexpected key: ${key}`)
                         }),
                     },
+                },
+                {
+                    provide: PAYMENT_GATEWAY,
+                    useClass: RazorpayGatewayAdapter,
                 },
             ],
         }).compile()

@@ -1,7 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common'
+import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { PrismaService } from '../prisma/prisma.service'
 import { Prisma } from '@prisma/client'
+import { PaymentsRepository } from '../payments/payments.repository'
 import type { ReviewData } from '@cra/ai'
 import type { ReviewStreamEvent } from '@cra/types'
 
@@ -13,26 +14,55 @@ export class ReviewRepository {
     constructor(
         private readonly config: ConfigService,
         private readonly prisma: PrismaService,
+        private readonly paymentsRepository: PaymentsRepository,
     ) {
         this.hasDb = !!this.config.get('DATABASE_URL')
     }
 
-    async createSession(type: 'CODE' | 'PR', input: string, userId: string) {
+    async createSession(type: 'CODE' | 'PR', input: string, userId: string, cost?: number) {
         if (!this.hasDb) return null
-        try {
-            return await this.prisma.$transaction(async (transaction) => {
-                const review = await transaction.review.create({
-                    data: { userId, type, input, status: 'PENDING' },
+        return this.prisma.$transaction(async (tx) => {
+            if (cost && cost > 0) {
+                // Anti-double-spend conditional decrement (INV-02)
+                const deducted = await tx.user.updateMany({
+                    where: { id: userId, creditBalance: { gte: cost } },
+                    data: { creditBalance: { decrement: cost } },
                 })
-                await transaction.reviewDispatch.create({
-                    data: { reviewId: review.id },
-                })
-                return review
+                if (deducted.count === 0) {
+                    throw new HttpException(
+                        { statusCode: HttpStatus.PAYMENT_REQUIRED, message: 'Insufficient credits. Please top up your balance.' },
+                        HttpStatus.PAYMENT_REQUIRED,
+                    )
+                }
+            }
+
+            const review = await tx.review.create({
+                data: { userId, type, input, status: 'PENDING' },
             })
-        } catch (err) {
-            this.logger.warn(`Failed to create review session: ${err instanceof Error ? err.message : err}`)
-            return null
-        }
+            await tx.reviewDispatch.create({
+                data: { reviewId: review.id },
+            })
+
+            if (cost && cost > 0) {
+                const updatedUser = await tx.user.findUniqueOrThrow({
+                    where: { id: userId },
+                    select: { creditBalance: true },
+                })
+
+                await tx.creditLedger.create({
+                    data: {
+                        userId,
+                        type: 'CONSUMPTION',
+                        amount: -cost,
+                        balanceAfter: updatedUser.creditBalance,
+                        reviewId: review.id, // RZC-003: Guaranteed link at millisecond zero!
+                        description: `${type === 'PR' ? 'PR' : 'Code'} review session`,
+                    },
+                })
+            }
+
+            return review
+        })
     }
 
     async markFailed(reviewId: string, message: string, traceLog?: ReviewStreamEvent[]): Promise<boolean> {
@@ -55,8 +85,7 @@ export class ReviewRepository {
      * Both operations run inside a single $transaction — if either fails, neither is committed (F-05).
      *
      * Returns true if the review was actually transitioned, false if already terminal (skip refund).
-     * A double-refund guard catches P2002 on the ledger insert (unique reviewId + type constraint
-     * enforced at application level — we skip if a CONSUMPTION_REFUND for this review already exists).
+     * Delegates balance & ledger operations to PaymentsRepository.refundCreditsInTx (RZC-001, RZC-002, ADR-007).
      */
     async markFailedAndRefund(
         reviewId: string,
@@ -77,45 +106,17 @@ export class ReviewRepository {
             })
             if (result.count === 0) return false // Already terminal — skip refund.
 
-            // Step 2: Double-refund guard — check if a refund already exists for this review.
-            const existingRefund = await tx.creditLedger.findFirst({
-                where: { reviewId, type: 'CONSUMPTION_REFUND' },
-                select: { id: true },
-            })
-            if (existingRefund) {
-                this.logger.warn(`Refund for review ${reviewId} already exists — skipping double-refund (F-05)`)
-                return true
-            }
-
-            // Step 3: Increment user's credit balance.
-            await tx.user.updateMany({
-                where: { id: refund.userId },
-                data: { creditBalance: { increment: refund.cost } },
-            })
-
-            // Step 4: Read balanceAfter from DB — never compute it (F-04).
-            const updatedUser = await tx.user.findUniqueOrThrow({
-                where: { id: refund.userId },
-                select: { creditBalance: true },
-            })
-
-            // Step 5: Append CONSUMPTION_REFUND ledger entry.
-            await tx.creditLedger.create({
-                data: {
-                    userId: refund.userId,
-                    type: 'CONSUMPTION_REFUND',
-                    amount: refund.cost,
-                    balanceAfter: updatedUser.creditBalance,
-                    reviewId,
-                    description: refund.description,
-                },
+            // Step 2: Delegate financial refund to PaymentsRepository inside this transaction
+            await this.paymentsRepository.refundCreditsInTx(tx, {
+                userId: refund.userId,
+                cost: refund.cost,
+                reviewId,
+                description: refund.description,
             })
 
             return true
         }).catch((err: unknown) => {
-            // P2002 = unique constraint on (reviewId, type='CONSUMPTION_REFUND') —
-            // defense-in-depth (S-06). The status guard in Step 1 prevents this in
-            // normal operation; the catch ensures a bug in the guard cannot double-refund.
+            // P2002 = unique constraint on (reviewId, type='CONSUMPTION_REFUND') — defense-in-depth (S-06).
             if ((err as { code?: string })?.code === 'P2002') return false
             throw err
         })
@@ -124,6 +125,7 @@ export class ReviewRepository {
     /**
      * Atomically transition PENDING → CANCELLED for both review and dispatch,
      * and refund deducted credits to the user's wallet (RZP-010).
+     * Delegates financial refund to PaymentsRepository.refundCreditsInTx (RZC-001, RZC-002, ADR-007).
      */
     async markCancelledAndRefund(
         reviewId: string,
@@ -142,37 +144,12 @@ export class ReviewRepository {
                 data: { status: 'CANCELLED', lockedUntil: null },
             })
 
-            // Double-refund guard
-            const existingRefund = await tx.creditLedger.findFirst({
-                where: { reviewId, type: 'CONSUMPTION_REFUND' },
-                select: { id: true },
-            })
-            if (existingRefund) {
-                this.logger.warn(`Refund for review ${reviewId} already exists — skipping double-refund`)
-                return true
-            }
-
-            // Increment user credit balance
-            await tx.user.updateMany({
-                where: { id: refund.userId },
-                data: { creditBalance: { increment: refund.cost } },
-            })
-
-            const updatedUser = await tx.user.findUniqueOrThrow({
-                where: { id: refund.userId },
-                select: { creditBalance: true },
-            })
-
-            // Append CONSUMPTION_REFUND ledger entry
-            await tx.creditLedger.create({
-                data: {
-                    userId: refund.userId,
-                    type: 'CONSUMPTION_REFUND',
-                    amount: refund.cost,
-                    balanceAfter: updatedUser.creditBalance,
-                    reviewId,
-                    description: refund.description,
-                },
+            // Delegate financial refund to PaymentsRepository inside this transaction
+            await this.paymentsRepository.refundCreditsInTx(tx, {
+                userId: refund.userId,
+                cost: refund.cost,
+                reviewId,
+                description: refund.description,
             })
 
             return true

@@ -76,9 +76,10 @@ export class ReviewService {
     ) {}
 
     async createSession(type: 'CODE' | 'PR', input: string, userId: string) {
-        const session = await this.reviewRepository.createSession(type, input, userId)
+        const cost = getReviewCreditCost(type)
+        const session = await this.reviewRepository.createSession(type, input, userId, cost)
         if (!session) throw new InternalServerErrorException('Database not configured or failed to create session')
-        // The review and dispatch intent were committed atomically. The kick is
+        // The review, dispatch intent, and credit consumption were committed atomically. The kick is
         // opportunistic; the two-second poller guarantees eventual handoff.
         void this.reviewDispatcher.kick()
         return session

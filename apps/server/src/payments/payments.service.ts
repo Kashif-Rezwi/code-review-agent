@@ -1,16 +1,18 @@
 import * as crypto from 'crypto'
 import {
-    BadGatewayException,
     HttpException,
     HttpStatus,
+    Inject,
     Injectable,
     Logger,
+    OnModuleDestroy,
+    OnModuleInit,
     UnauthorizedException,
 } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
-import Razorpay from 'razorpay'
 import { CREDIT_PACKAGES, FREE_CREDIT_AMOUNT } from './credit-cost.policy'
 import { PaymentsRepository } from './payments.repository'
+import { PAYMENT_GATEWAY, PaymentGateway } from './gateway/payment-gateway.interface'
 import type { WalletResponse } from '@cra/types'
 import { Prisma } from '@prisma/client'
 
@@ -21,20 +23,46 @@ const MAX_PENDING_ORDERS = 3
 const WEBHOOK_MAX_BODY_BYTES = 1_048_576 // 1 MB
 
 @Injectable()
-export class PaymentsService {
+export class PaymentsService implements OnModuleInit, OnModuleDestroy {
     private readonly logger = new Logger(PaymentsService.name)
-    private readonly razorpay: Razorpay
-    private readonly webhookSecret: string
+    private sweepTimer: NodeJS.Timeout | null = null
 
     constructor(
         private readonly config: ConfigService,
         private readonly repo: PaymentsRepository,
-    ) {
-        this.razorpay = new Razorpay({
-            key_id: this.config.getOrThrow<string>('RAZORPAY_KEY_ID'),
-            key_secret: this.config.getOrThrow<string>('RAZORPAY_KEY_SECRET'),
-        })
-        this.webhookSecret = this.config.getOrThrow<string>('RAZORPAY_WEBHOOK_SECRET')
+        @Inject(PAYMENT_GATEWAY) private readonly gateway: PaymentGateway,
+    ) {}
+
+    onModuleInit() {
+        // Run an initial sweep and schedule periodic cleanup every 15 minutes (RZC-009)
+        void this.sweepStaleOrders()
+        this.sweepTimer = setInterval(() => {
+            void this.sweepStaleOrders()
+        }, 15 * 60 * 1000)
+        this.sweepTimer.unref?.()
+    }
+
+    onModuleDestroy() {
+        if (this.sweepTimer) {
+            clearInterval(this.sweepTimer)
+            this.sweepTimer = null
+        }
+    }
+
+    /**
+     * Periodically sweep and expire abandoned CREATED orders (RZC-009).
+     */
+    async sweepStaleOrders(): Promise<number> {
+        try {
+            const count = await this.repo.expireStaleOrders()
+            if (count > 0) {
+                this.logger.log(`[RZP_ORDER_SWEEPER] Expired ${count} stale pending order(s)`)
+            }
+            return count
+        } catch (err) {
+            this.logger.warn(`[RZP_ORDER_SWEEPER] Failed to expire stale orders: ${err instanceof Error ? err.message : err}`)
+            return 0
+        }
     }
 
     /**
@@ -58,21 +86,13 @@ export class PaymentsService {
 
         const internalOrderId = crypto.randomUUID()
 
-        // Call Razorpay Orders API — do NOT include userId in notes (F-10, avoids PII in dashboard).
-        let razorpayOrder: { id: string; amount: number; currency: string }
-        try {
-            razorpayOrder = await this.razorpay.orders.create({
-                amount: pkg.amountPaise,
-                currency: pkg.currency,
-                receipt: internalOrderId,
-                notes: { packageId },
-            }) as { id: string; amount: number; currency: string }
-        } catch (err) {
-            // Sanitise SDK error — do NOT log raw error object (F-10, may contain API keys in headers).
-            const msg = err instanceof Error ? err.message : 'Razorpay API error'
-            this.logger.error(`Razorpay order creation failed: ${msg}`)
-            throw new BadGatewayException('Payment service unavailable. Please try again later.')
-        }
+        // Call Gateway API — do NOT include userId in notes (F-10, avoids PII in dashboard).
+        const razorpayOrder = await this.gateway.createOrder({
+            amountPaise: pkg.amountPaise,
+            currency: pkg.currency,
+            receipt: internalOrderId,
+            notes: { packageId },
+        })
 
         // Persist local order record.
         const localOrder = await this.repo.createOrder({
@@ -84,6 +104,10 @@ export class PaymentsService {
             currency: pkg.currency,
             creditsGranted: pkg.credits, // R-02: persist at creation time, read at capture time
         })
+
+        this.logger.log(
+            `[RZP_ORDER_CREATED] Order created: localId=${localOrder.id}, rzpOrderId=${razorpayOrder.id}, pkg=${packageId}, credits=${pkg.credits}`,
+        )
 
         return {
             orderId: localOrder.id,
@@ -102,23 +126,9 @@ export class PaymentsService {
      * Body-size check must happen in the controller BEFORE calling this (F-03).
      */
     async handleWebhook(rawBody: Buffer, signatureHeader: string, eventId: string): Promise<void> {
-        // F-02: Validate signature header format before timingSafeEqual (prevents RangeError on length mismatch).
-        if (!/^[0-9a-f]{64}$/.test(signatureHeader)) {
-            throw new UnauthorizedException('Invalid webhook signature format.')
-        }
-
-        // F-01: Compute HMAC over rawBody as Buffer — never stringify first.
-        const expectedHmac = crypto
-            .createHmac('sha256', this.webhookSecret)
-            .update(rawBody)
-            .digest('hex')
-
-        const isValid = crypto.timingSafeEqual(
-            Buffer.from(expectedHmac, 'hex'),
-            Buffer.from(signatureHeader, 'hex'),
-        )
+        const isValid = this.gateway.verifyWebhookSignature(rawBody, signatureHeader)
         if (!isValid) {
-            throw new UnauthorizedException('Webhook signature mismatch.')
+            throw new UnauthorizedException('Webhook signature mismatch or invalid format.')
         }
 
         // Parse body only after signature is verified.
@@ -129,12 +139,12 @@ export class PaymentsService {
             // cause a TypeError when reading event.event — Razorpay always delivers
             // object payloads, but a defensive check avoids an unhandled 500.
             if (typeof parsed !== 'object' || parsed === null) {
-                this.logger.warn(`Webhook body is valid JSON but not an object (eventId: ${eventId})`)
+                this.logger.warn(`[RZP_WEBHOOK_RECEIVED] Webhook body is valid JSON but not an object (eventId: ${eventId})`)
                 return
             }
             event = parsed as typeof event
         } catch {
-            this.logger.warn(`Webhook body is not valid JSON (eventId: ${eventId})`)
+            this.logger.warn(`[RZP_WEBHOOK_RECEIVED] Webhook body is not valid JSON (eventId: ${eventId})`)
             return
         }
 
@@ -145,7 +155,7 @@ export class PaymentsService {
         } else if (eventType === 'payment.failed') {
             await this.handlePaymentFailed(event.payload ?? {}, eventId, rawBody)
         } else {
-            this.logger.debug(`Unrecognised webhook event type: ${eventType} — ignoring.`)
+            this.logger.debug(`[RZP_WEBHOOK_RECEIVED] Unrecognised webhook event type: ${eventType} — ignoring.`)
         }
     }
 
@@ -165,7 +175,7 @@ export class PaymentsService {
         const currency = orderEntity?.currency ?? null
 
         if (!razorpayOrderId) {
-            this.logger.warn(`order.paid webhook missing order.entity.id (eventId: ${eventId})`)
+            this.logger.warn(`[RZP_WEBHOOK_RECEIVED] order.paid webhook missing order.entity.id (eventId: ${eventId})`)
             return
         }
 
@@ -192,14 +202,14 @@ export class PaymentsService {
 
         switch (result) {
             case 'captured':
-                this.logger.log(`order.paid: captured order ${razorpayOrderId}`)
+                this.logger.log(`[RZP_WEBHOOK_CAPTURED] order.paid: captured order ${razorpayOrderId}`)
                 break
             case 'already_captured':
-                this.logger.warn(`order.paid: order ${razorpayOrderId} was already captured — idempotent no-op`)
+                this.logger.warn(`[RZP_WEBHOOK_CAPTURED] order.paid: order ${razorpayOrderId} was already captured — idempotent no-op`)
                 break
             case 'not_found':
                 // R-04: elevated to error — a paid order with no local row is revenue-impacting.
-                this.logger.error(`order.paid: no local order found for ${razorpayOrderId} — may be from a different environment`)
+                this.logger.error(`[RZP_MISMATCH] order.paid: no local order found for ${razorpayOrderId} — may be from a different environment`)
                 break
             case 'amount_mismatch':
                 // Error already logged in the repository with full context.
@@ -207,10 +217,10 @@ export class PaymentsService {
             case 'zero_credits':
                 // R-02/R-04: order paid but creditsGranted <= 0 — entitlement missing,
                 // revenue-impacting. Order left in current status for reconciliation.
-                this.logger.error(`order.paid: order ${razorpayOrderId} has zero credits — entitlement missing, left for reconciliation`)
+                this.logger.error(`[RZP_MISMATCH] order.paid: order ${razorpayOrderId} has zero credits — entitlement missing, left for reconciliation`)
                 break
             case 'duplicate':
-                this.logger.debug(`order.paid: duplicate or contended event ${eventId} — no-op`)
+                this.logger.debug(`[RZP_WEBHOOK_RECEIVED] order.paid: duplicate or contended event ${eventId} — no-op`)
                 break
         }
     }
@@ -261,6 +271,8 @@ export class PaymentsService {
                 type: e.type,
                 amount: e.amount,
                 balanceAfter: e.balanceAfter,
+                orderId: e.orderId,
+                reviewId: e.reviewId,
                 description: e.description,
                 createdAt: e.createdAt.toISOString(),
             })),
@@ -294,7 +306,7 @@ export class PaymentsService {
     async refundCreditsInTx(
         tx: Prisma.TransactionClient,
         params: { userId: string; cost: number; reviewId: string; description: string },
-    ): Promise<void> {
+    ): Promise<boolean> {
         return this.repo.refundCreditsInTx(tx, params)
     }
 
@@ -319,6 +331,20 @@ export class PaymentsService {
      */
     async grantFreeCredits(userId: string): Promise<boolean> {
         return this.repo.grantFreeCredits(userId, FREE_CREDIT_AMOUNT)
+    }
+
+    /**
+     * Check for drift between denormalized User.creditBalance and SUM(CreditLedger.amount) (RZC-010).
+     */
+    async checkBalanceDrift(userId?: string) {
+        return this.repo.checkBalanceDrift(userId)
+    }
+
+    /**
+     * Reconcile a user's balance to match the authoritative sum of their ledger entries (RZC-010).
+     */
+    async reconcileUserBalance(userId: string): Promise<number | null> {
+        return this.repo.reconcileUserBalance(userId)
     }
 
     /** Returns the webhook maximum body size constant — used by the webhook controller. */

@@ -101,6 +101,8 @@ export const LedgerEntrySchema = z.object({
     type: z.enum(['FREE_GRANT', 'PURCHASE', 'CONSUMPTION', 'CONSUMPTION_REFUND']),
     amount: z.number().int(),
     balanceAfter: z.number().int().nonnegative(),
+    orderId: z.string().nullable().optional(),
+    reviewId: z.string().nullable().optional(),
     description: z.string().nullable(),
     createdAt: z.string(), // ISO 8601 string from JSON serialisation
 })

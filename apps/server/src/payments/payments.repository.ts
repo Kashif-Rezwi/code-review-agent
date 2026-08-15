@@ -218,6 +218,8 @@ export class PaymentsRepository {
                     type: true,
                     amount: true,
                     balanceAfter: true,
+                    orderId: true,
+                    reviewId: true,
                     description: true,
                     createdAt: true,
                 },
@@ -279,8 +281,18 @@ export class PaymentsRepository {
             reviewId: string
             description: string
         },
-    ): Promise<void> {
+    ): Promise<boolean> {
         const { userId, cost, reviewId, description } = params
+
+        // Double-refund guard — check if a refund already exists for this review.
+        const existingRefund = await tx.creditLedger.findFirst({
+            where: { reviewId, type: 'CONSUMPTION_REFUND' },
+            select: { id: true },
+        })
+        if (existingRefund) {
+            this.logger.warn(`Refund for review ${reviewId} already exists — skipping double-refund (F-05)`)
+            return false
+        }
 
         await tx.user.updateMany({
             where: { id: userId },
@@ -302,6 +314,8 @@ export class PaymentsRepository {
                 description,
             },
         })
+
+        return true
     }
 
     /**
@@ -411,6 +425,64 @@ export class PaymentsRepository {
         await this.expireStaleOrders(userId)
         return this.prisma.paymentOrder.count({
             where: { userId, status: 'CREATED' },
+        })
+    }
+
+    /**
+     * Check for drift between denormalized User.creditBalance and SUM(CreditLedger.amount).
+     * Returns an array of users where cachedBalance !== ledgerSum (RZC-010).
+     */
+    async checkBalanceDrift(userId?: string): Promise<
+        Array<{ userId: string; cachedBalance: number; ledgerSum: number; drift: number }>
+    > {
+        const results = await this.prisma.$queryRaw<
+            Array<{ userId: string; cachedBalance: number; ledgerSum: number; drift: number }>
+        >`
+            SELECT 
+                u.id AS "userId",
+                u."creditBalance" AS "cachedBalance",
+                COALESCE(SUM(l.amount), 0)::int AS "ledgerSum",
+                (u."creditBalance" - COALESCE(SUM(l.amount), 0)::int) AS "drift"
+            FROM "User" u
+            LEFT JOIN "CreditLedger" l ON u.id = l."userId"
+            ${userId ? Prisma.sql`WHERE u.id = ${userId}` : Prisma.empty}
+            GROUP BY u.id, u."creditBalance"
+            HAVING u."creditBalance" != COALESCE(SUM(l.amount), 0)::int
+        `
+        return results
+    }
+
+    /**
+     * Reconcile a user's balance to match the authoritative sum of their ledger entries.
+     * Returns the reconciled balance, or null if user was not found (RZC-010).
+     */
+    async reconcileUserBalance(userId: string): Promise<number | null> {
+        return this.prisma.$transaction(async (tx) => {
+            const user = await tx.user.findUnique({
+                where: { id: userId },
+                select: { id: true, creditBalance: true },
+            })
+            if (!user) return null
+
+            const aggregate = await tx.creditLedger.aggregate({
+                where: { userId },
+                _sum: { amount: true },
+            })
+
+            const ledgerSum = aggregate._sum.amount ?? 0
+
+            if (user.creditBalance !== ledgerSum) {
+                this.logger.warn(
+                    `[RZC-010] Reconciling credit balance for user ${userId}: ` +
+                        `cached=${user.creditBalance}, ledgerSum=${ledgerSum}`,
+                )
+                await tx.user.update({
+                    where: { id: userId },
+                    data: { creditBalance: ledgerSum },
+                })
+            }
+
+            return ledgerSum
         })
     }
 }

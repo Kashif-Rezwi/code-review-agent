@@ -199,4 +199,5 @@ model CreditLedger {
   createdAt    DateTime        @default(now())
 
   @@index([userId, createdAt])
+  @@index([reviewId])
 }

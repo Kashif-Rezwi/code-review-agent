@@ -63,7 +63,7 @@ export default function AccountPage() {
                 order_id: orderData.razorpayOrderId,
                 handler: () => {
                     setBuyingPackageId(null)
-                    startPolling()
+                    startPolling(orderData.orderId)
                 },
                 modal: {
                     ondismiss: () => {

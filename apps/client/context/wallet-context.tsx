@@ -1,8 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+'use client'
+
+import React, { createContext, useContext, useCallback, useEffect, useRef, useState } from 'react'
+import { useSession } from 'next-auth/react'
 import { paymentsService } from '@/lib/api'
 import type { CreditPackage, LedgerEntry, WalletResponse } from '@cra/types'
 
-interface UseWallet {
+export interface WalletContextValue {
     balance: number
     ledger: LedgerEntry[]
     packages: CreditPackage[]
@@ -17,7 +20,12 @@ interface UseWallet {
 const POLLING_INTERVAL_MS = 2000
 const MAX_POLLING_ATTEMPTS = 25
 
-export function useWallet(githubToken?: string): UseWallet {
+const WalletContext = createContext<WalletContextValue | null>(null)
+
+export function WalletProvider({ children }: { children: React.ReactNode }) {
+    const { data: session } = useSession()
+    const token = session?.githubToken
+
     const [balance, setBalance] = useState<number>(0)
     const [ledger, setLedger] = useState<LedgerEntry[]>([])
     const [packages, setPackages] = useState<CreditPackage[]>([])
@@ -31,12 +39,12 @@ export function useWallet(githubToken?: string): UseWallet {
     const targetOrderIdRef = useRef<string | null>(null)
 
     const fetchWallet = useCallback(async () => {
-        if (!githubToken) {
+        if (!token) {
             setIsLoading(false)
             return
         }
         try {
-            const data = await paymentsService.getWallet<WalletResponse>(githubToken)
+            const data = await paymentsService.getWallet<WalletResponse>(token)
             setBalance(data.balance)
             setLedger(data.ledger)
             setPackages(data.packages)
@@ -47,11 +55,15 @@ export function useWallet(githubToken?: string): UseWallet {
         } finally {
             setIsLoading(false)
         }
-    }, [githubToken])
+    }, [token])
 
     useEffect(() => {
-        void fetchWallet()
-    }, [fetchWallet])
+        if (token) {
+            void fetchWallet()
+        } else {
+            setIsLoading(false)
+        }
+    }, [token, fetchWallet])
 
     const stopPolling = useCallback(() => {
         if (pollingTimerRef.current) {
@@ -76,7 +88,7 @@ export function useWallet(githubToken?: string): UseWallet {
             try {
                 const data = await fetchWallet()
                 if (data) {
-                    // RZC-006 / ADR-005: Order ID matching or fallback balance increment
+                    // RZC-006 / ADR-005: Precise ledger entry matching for target order ID
                     const foundTargetOrder = targetOrderIdRef.current
                         ? data.ledger.some((e) => e.orderId === targetOrderIdRef.current)
                         : false
@@ -90,7 +102,7 @@ export function useWallet(githubToken?: string): UseWallet {
                     }
                 }
             } catch {
-                // Ignore transient polling errors
+                // Ignore transient network errors while polling
             }
 
             if (pollingAttemptsRef.current >= MAX_POLLING_ATTEMPTS) {
@@ -107,7 +119,7 @@ export function useWallet(githubToken?: string): UseWallet {
         }
     }, [])
 
-    return {
+    const value: WalletContextValue = {
         balance,
         ledger,
         packages,
@@ -120,4 +132,14 @@ export function useWallet(githubToken?: string): UseWallet {
         startPolling,
         stopPolling,
     }
+
+    return <WalletContext.Provider value={value}>{children}</WalletContext.Provider>
+}
+
+export function useWalletContext(): WalletContextValue {
+    const context = useContext(WalletContext)
+    if (!context) {
+        throw new Error('useWalletContext must be used within a WalletProvider')
+    }
+    return context
 }

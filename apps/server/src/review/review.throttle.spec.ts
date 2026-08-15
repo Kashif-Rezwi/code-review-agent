@@ -4,9 +4,6 @@ import { ThrottlerModule } from '@nestjs/throttler'
 import request from 'supertest'
 
 import { AuthGuard } from '../auth/auth.guard'
-import { CreditGuard } from '../payments/credit.guard'
-import { PaymentsService } from '../payments/payments.service'
-import { CreditRefundInterceptor } from '../payments/credit-refund.interceptor'
 import { HistoryService } from '../history/history.service'
 import { ReviewController } from './review.controller'
 import { ReviewService } from './review.service'
@@ -15,7 +12,6 @@ import { ReviewStreamerService } from './review-streamer.service'
 describe('POST /review/session rate limiting', () => {
     let app: INestApplication
     const reviewService = { createSession: jest.fn().mockResolvedValue({ id: 'review-1' }) }
-    const paymentsService = { refundCredits: jest.fn().mockResolvedValue(undefined) }
 
     beforeAll(async () => {
         const moduleRef = await Test.createTestingModule({
@@ -27,11 +23,9 @@ describe('POST /review/session rate limiting', () => {
             ],
             controllers: [ReviewController],
             providers: [
-                CreditRefundInterceptor,
                 { provide: ReviewService, useValue: reviewService },
                 { provide: ReviewStreamerService, useValue: {} },
                 { provide: HistoryService, useValue: {} },
-                { provide: PaymentsService, useValue: paymentsService },
             ],
         })
             .overrideGuard(AuthGuard)
@@ -42,8 +36,6 @@ describe('POST /review/session rate limiting', () => {
                     return true
                 },
             })
-            .overrideGuard(CreditGuard)
-            .useValue({ canActivate: () => true })
             .compile()
 
         app = moduleRef.createNestApplication()

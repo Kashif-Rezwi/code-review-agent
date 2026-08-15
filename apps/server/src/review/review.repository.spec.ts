@@ -27,9 +27,12 @@ const reviewData: ReviewData = {
   positives: ['Clear naming'],
 };
 
-describe('ReviewRepository terminal state transitions', () => {
+describe('ReviewRepository terminal state transitions & atomic session creation', () => {
   let review: ReviewDelegateMock;
   let reviewDispatch: { create: jest.Mock; updateMany: jest.Mock };
+  let user: { updateMany: jest.Mock; findUniqueOrThrow: jest.Mock };
+  let creditLedger: { create: jest.Mock; findFirst: jest.Mock };
+  let paymentsRepo: { refundCreditsInTx: jest.Mock };
   let repository: ReviewRepository;
 
   beforeEach(() => {
@@ -45,18 +48,31 @@ describe('ReviewRepository terminal state transitions', () => {
       create: jest.fn(),
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
     };
+    user = {
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      findUniqueOrThrow: jest.fn().mockResolvedValue({ creditBalance: 40 }),
+    };
+    creditLedger = {
+      create: jest.fn().mockResolvedValue({}),
+      findFirst: jest.fn().mockResolvedValue(null),
+    };
+    paymentsRepo = {
+      refundCreditsInTx: jest.fn().mockResolvedValue(true),
+    };
     const prisma = {
       review,
       reviewDispatch,
+      user,
+      creditLedger,
       $transaction: jest.fn((callback: (transaction: unknown) => unknown) =>
-        Promise.resolve(callback({ review, reviewDispatch })),
+        Promise.resolve(callback({ review, reviewDispatch, user, creditLedger })),
       ),
     } as unknown as PrismaService;
 
-    repository = new ReviewRepository(config, prisma);
+    repository = new ReviewRepository(config, prisma, paymentsRepo as any);
   });
 
-  it('creates the review and dispatch intent in the same transaction', async () => {
+  it('creates the review, dispatch intent, and consumes credits in the same transaction (RZC-003, ADR-001)', async () => {
     review.create.mockResolvedValue({
       id: 'review-1',
       type: 'PR',
@@ -66,8 +82,13 @@ describe('ReviewRepository terminal state transitions', () => {
     });
     reviewDispatch.create.mockResolvedValue({ id: 'dispatch-1' });
 
-    await expect(repository.createSession('PR', 'https://github.com/acme/repo/pull/1', 'user-1'))
-      .resolves.toMatchObject({ id: 'review-1' });
+    const session = await repository.createSession('PR', 'https://github.com/acme/repo/pull/1', 'user-1', 10);
+    expect(session).toMatchObject({ id: 'review-1' });
+
+    expect(user.updateMany).toHaveBeenCalledWith({
+      where: { id: 'user-1', creditBalance: { gte: 10 } },
+      data: { creditBalance: { decrement: 10 } },
+    });
     expect(review.create).toHaveBeenCalledWith({
       data: {
         userId: 'user-1',
@@ -77,6 +98,26 @@ describe('ReviewRepository terminal state transitions', () => {
       },
     });
     expect(reviewDispatch.create).toHaveBeenCalledWith({ data: { reviewId: 'review-1' } });
+    expect(creditLedger.create).toHaveBeenCalledWith({
+      data: {
+        userId: 'user-1',
+        type: 'CONSUMPTION',
+        amount: -10,
+        balanceAfter: 40,
+        reviewId: 'review-1',
+        description: 'PR review session',
+      },
+    });
+  });
+
+  it('throws 402 PaymentRequired when user has insufficient balance during session creation', async () => {
+    user.updateMany.mockResolvedValue({ count: 0 }); // insufficient balance
+
+    await expect(
+      repository.createSession('PR', 'https://github.com/acme/repo/pull/1', 'user-1', 10),
+    ).rejects.toThrow();
+
+    expect(review.create).not.toHaveBeenCalled();
   });
 
   describe('markFailed', () => {
@@ -111,6 +152,36 @@ describe('ReviewRepository terminal state transitions', () => {
     });
   });
 
+  describe('markFailedAndRefund', () => {
+    it('transitions PENDING -> FAILED and delegates refund to PaymentsRepository (RZC-001, RZC-002)', async () => {
+      review.updateMany.mockResolvedValue({ count: 1 });
+
+      const result = await repository.markFailedAndRefund('review-1', 'PR acquisition failed', {
+        userId: 'user-1',
+        cost: 10,
+        description: 'Refund: PR review failed',
+      });
+
+      expect(result).toBe(true);
+      expect(review.updateMany).toHaveBeenCalledWith({
+        where: { id: 'review-1', status: 'PENDING' },
+        data: {
+          status: 'FAILED',
+          summary: 'PR acquisition failed',
+        },
+      });
+      expect(paymentsRepo.refundCreditsInTx).toHaveBeenCalledWith(
+        expect.anything(),
+        {
+          userId: 'user-1',
+          cost: 10,
+          reviewId: 'review-1',
+          description: 'Refund: PR review failed',
+        },
+      );
+    });
+  });
+
   describe('markCancelled', () => {
     it.each([
       [1, true],
@@ -132,24 +203,10 @@ describe('ReviewRepository terminal state transitions', () => {
   });
 
   describe('markCancelledAndRefund (RZP-010)', () => {
-    it('cancels review and dispatches refund when status is PENDING', async () => {
-      const user = { updateMany: jest.fn().mockResolvedValue({ count: 1 }), findUniqueOrThrow: jest.fn().mockResolvedValue({ creditBalance: 30 }) };
-      const creditLedger = { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn().mockResolvedValue({}) };
+    it('cancels review and delegates refund to PaymentsRepository when status is PENDING (RZC-001, RZC-002)', async () => {
       review.updateMany.mockResolvedValue({ count: 1 });
 
-      const customPrisma = {
-        review,
-        reviewDispatch,
-        user,
-        creditLedger,
-        $transaction: jest.fn((callback: (tx: unknown) => unknown) =>
-          Promise.resolve(callback({ review, reviewDispatch, user, creditLedger })),
-        ),
-      } as unknown as PrismaService;
-
-      const customRepo = new ReviewRepository({ get: jest.fn().mockReturnValue('postgresql://configured') } as unknown as ConfigService, customPrisma);
-
-      const result = await customRepo.markCancelledAndRefund('review-1', {
+      const result = await repository.markCancelledAndRefund('review-1', {
         userId: 'user-1',
         cost: 5,
         description: 'Refund: review cancelled by user',
@@ -160,47 +217,28 @@ describe('ReviewRepository terminal state transitions', () => {
         where: { id: 'review-1', status: 'PENDING' },
         data: { status: 'CANCELLED' },
       });
-      expect(user.updateMany).toHaveBeenCalledWith({
-        where: { id: 'user-1' },
-        data: { creditBalance: { increment: 5 } },
-      });
-      expect(creditLedger.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          data: expect.objectContaining({
-            userId: 'user-1',
-            type: 'CONSUMPTION_REFUND',
-            amount: 5,
-            reviewId: 'review-1',
-          }),
-        }),
+      expect(paymentsRepo.refundCreditsInTx).toHaveBeenCalledWith(
+        expect.anything(),
+        {
+          userId: 'user-1',
+          cost: 5,
+          reviewId: 'review-1',
+          description: 'Refund: review cancelled by user',
+        },
       );
     });
 
     it('returns false when review was already terminal', async () => {
       review.updateMany.mockResolvedValue({ count: 0 });
-      const user = { updateMany: jest.fn() };
-      const creditLedger = { findFirst: jest.fn(), create: jest.fn() };
 
-      const customPrisma = {
-        review,
-        reviewDispatch,
-        user,
-        creditLedger,
-        $transaction: jest.fn((callback: (tx: unknown) => unknown) =>
-          Promise.resolve(callback({ review, reviewDispatch, user, creditLedger })),
-        ),
-      } as unknown as PrismaService;
-
-      const customRepo = new ReviewRepository({ get: jest.fn().mockReturnValue('postgresql://configured') } as unknown as ConfigService, customPrisma);
-
-      const result = await customRepo.markCancelledAndRefund('review-1', {
+      const result = await repository.markCancelledAndRefund('review-1', {
         userId: 'user-1',
         cost: 5,
         description: 'Refund: review cancelled by user',
       });
 
       expect(result).toBe(false);
-      expect(user.updateMany).not.toHaveBeenCalled();
+      expect(paymentsRepo.refundCreditsInTx).not.toHaveBeenCalled();
     });
   });
 

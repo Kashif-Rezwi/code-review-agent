@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Post, Req, UseGuards, UseInterceptors, Logger, Sse, MessageEvent } from '@nestjs/common'
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Post, Req, UseGuards, Logger, Sse, MessageEvent } from '@nestjs/common'
 import type { Request } from 'express'
 import { Observable } from 'rxjs'
 import { HistoryService } from './history.service'
@@ -7,12 +7,8 @@ import { ProviderStreamError } from '../ai/ai-runtime.adapter'
 import { AuthGuard } from '../auth/auth.guard'
 import { UserThrottlerGuard } from '../throttle/user-throttler.guard'
 import { Throttle } from '@nestjs/throttler'
-
-import { CreditGuard } from '../payments/credit.guard'
-import { CreditCost } from '../payments/credit-cost.decorator'
 import { CREDIT_COSTS } from '../payments/credit-cost.policy'
 import { PaymentsService } from '../payments/payments.service'
-import { CreditRefundInterceptor } from '../payments/credit-refund.interceptor'
 
 @UseGuards(AuthGuard)
 @Controller('history')
@@ -49,45 +45,67 @@ export class HistoryController {
     // Guard runs after the controller-level AuthGuard, so it keys on req.user.userId.
     @Post(':id/chat')
     @Sse()
-    @UseGuards(UserThrottlerGuard, CreditGuard)
-    @UseInterceptors(CreditRefundInterceptor)
-    @CreditCost(CREDIT_COSTS.CHAT)
+    @UseGuards(UserThrottlerGuard)
     @Throttle({ default: { limit: 60, ttl: 3_600_000 } })
     chat(@Param('id') id: string, @Body() dto: ChatMessageDto, @Req() req: Request): Observable<MessageEvent> {
+        const userId = req.user!.userId
+
         return new Observable((subscriber) => {
-            // Teardown aborts the model call so a disconnected client stops spending tokens.
             const abort = new AbortController()
-            const stream = this.historyService.chatGenerator(id, req.user!.userId, dto.message, abort.signal)
 
             void (async () => {
+                let creditDeducted = false
+                let emittedChunkCount = 0
+
                 try {
+                    // Atomically deduct 1 credit linked to this reviewId before starting the stream
+                    const balanceAfter = await this.paymentsService.deductCredits({
+                        userId,
+                        cost: CREDIT_COSTS.CHAT,
+                        reviewId: id,
+                        description: 'Follow-up chat query',
+                    })
+
+                    if (balanceAfter === null) {
+                        subscriber.next({
+                            data: {
+                                type: 'error',
+                                message: 'Insufficient credits. Please top up your balance.',
+                            },
+                        })
+                        subscriber.complete()
+                        return
+                    }
+
+                    creditDeducted = true
+                    const stream = this.historyService.chatGenerator(id, userId, dto.message, abort.signal)
+
                     for await (const chunk of stream) {
+                        emittedChunkCount++
                         subscriber.next({ data: { type: 'delta', text: chunk } })
                     }
                     subscriber.next({ data: { type: 'done' } })
                 } catch (err) {
                     if (abort.signal.aborted) return
                     this.logger.error(`Failed to stream chat answer: ${err instanceof Error ? err.message : err}`)
-                    // S-04: Refund pre-deducted credits if the chat stream failed after CreditGuard deduction.
-                    const creditReq = req as Request & { creditDeducted?: number; creditUserId?: string }
-                    if (creditReq.creditDeducted && creditReq.creditUserId) {
-                        void this.paymentsService.refundCredits({
-                            userId: creditReq.creditUserId,
-                            cost: creditReq.creditDeducted,
-                            reviewId: null,
+
+                    // RZC-011: Refund if the stream failed before yielding complete response or on early provider error
+                    if (creditDeducted && emittedChunkCount === 0) {
+                        await this.paymentsService.refundCredits({
+                            userId,
+                            cost: CREDIT_COSTS.CHAT,
+                            reviewId: id,
                             description: 'Refund: chat stream failed',
                         }).catch((refundErr: unknown) => {
                             this.logger.error(
                                 `Failed to refund chat credits: ${refundErr instanceof Error ? refundErr.message : String(refundErr)}`,
                             )
                         })
-                        // R-01: Clear markers so CreditRefundInterceptor doesn't double-refund.
-                        creditReq.creditDeducted = undefined
-                        creditReq.creditUserId = undefined
                     }
+
                     const message = err instanceof ProviderStreamError
                         ? 'The AI provider returned an error. Please try again later.'
-                        : 'Stream interrupted'
+                        : (err instanceof Error ? err.message : 'Stream interrupted')
                     subscriber.next({ data: { type: 'error', message } })
                 } finally {
                     subscriber.complete()
