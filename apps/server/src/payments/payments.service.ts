@@ -1,5 +1,6 @@
 import * as crypto from 'crypto'
 import {
+    BadRequestException,
     HttpException,
     HttpStatus,
     Inject,
@@ -10,7 +11,7 @@ import {
     UnauthorizedException,
 } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
-import { CREDIT_PACKAGES, FREE_CREDIT_AMOUNT } from './credit-cost.policy'
+import { FREE_CREDIT_AMOUNT, getActiveCreditPackages } from './credit-cost.policy'
 import { PaymentsRepository } from './payments.repository'
 import { PAYMENT_GATEWAY, PaymentGateway } from './gateway/payment-gateway.interface'
 import type { WalletResponse } from '@cra/types'
@@ -66,14 +67,26 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
     }
 
     /**
+     * The hidden ₹1 dev pack is active only when PAYMENTS_DEV_PACK matches the
+     * PAYMENTS_DEV_PACK_SECRET configured for this environment — a shared secret
+     * known only to the operator, so the activation value is not guessable from
+     * the repo (live smoke testing only).
+     */
+    private isDevPackEnabled(): boolean {
+        const flag = this.config.get<string>('PAYMENTS_DEV_PACK')
+        const secret = this.config.get<string>('PAYMENTS_DEV_PACK_SECRET')
+        return Boolean(secret) && flag === secret
+    }
+
+    /**
      * Create a Razorpay order and persist a local PaymentOrder row.
      * Validates packageId, enforces pending order cap (F-11), calls Razorpay API,
      * and stores the local order record.
      */
     async createOrder(packageId: string, userId: string) {
-        const pkg = CREDIT_PACKAGES[packageId]
-        // DTO @IsIn validation already guards this — belt-and-suspenders.
-        if (!pkg) throw new Error(`Unknown packageId: ${packageId}`)
+        const pkg = getActiveCreditPackages(this.isDevPackEnabled())[packageId]
+        // Service is the sole packageId validator — the DTO cannot see the env-gated dev pack.
+        if (!pkg) throw new BadRequestException(`Unknown packageId: ${packageId}`)
 
         // F-11: Pending order cap — prevent unbounded abandoned orders.
         const pendingCount = await this.repo.countPendingOrders(userId)
@@ -276,7 +289,7 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
                 description: e.description,
                 createdAt: e.createdAt.toISOString(),
             })),
-            packages: Object.entries(CREDIT_PACKAGES).map(([id, pkg]) => ({
+            packages: Object.entries(getActiveCreditPackages(this.isDevPackEnabled())).map(([id, pkg]) => ({
                 id,
                 label: pkg.label,
                 credits: pkg.credits,

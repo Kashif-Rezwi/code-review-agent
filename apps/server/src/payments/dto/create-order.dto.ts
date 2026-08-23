@@ -1,11 +1,10 @@
-import { IsIn, IsNotEmpty, IsString } from 'class-validator'
-import { CREDIT_PACKAGES } from '../credit-cost.policy'
+import { IsNotEmpty, IsString } from 'class-validator'
 
 export class CreateOrderDto {
+    // Package membership is validated in PaymentsService.createOrder — the available
+    // package list is gated by a runtime secret (dev pack) and cannot be evaluated
+    // here at decorator time.
     @IsString()
     @IsNotEmpty()
-    @IsIn(Object.keys(CREDIT_PACKAGES), {
-        message: `packageId must be one of: ${Object.keys(CREDIT_PACKAGES).join(', ')}`,
-    })
     packageId: string
 }

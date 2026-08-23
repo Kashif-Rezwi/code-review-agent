@@ -2,19 +2,22 @@
 import * as crypto from 'crypto'
 import { Test, TestingModule } from '@nestjs/testing'
 import { ConfigService } from '@nestjs/config'
-import { UnauthorizedException, HttpException, HttpStatus } from '@nestjs/common'
+import { UnauthorizedException, HttpException, HttpStatus, BadRequestException } from '@nestjs/common'
 import { PaymentsService } from './payments.service'
 import { PaymentsRepository } from './payments.repository'
-import { PAYMENT_GATEWAY } from './gateway/payment-gateway.interface'
+import { PAYMENT_GATEWAY, PaymentGateway } from './gateway/payment-gateway.interface'
 import { RazorpayGatewayAdapter } from './gateway/razorpay-gateway.adapter'
 
 describe('PaymentsService & Webhook handling', () => {
     let service: PaymentsService
     let repo: jest.Mocked<PaymentsRepository>
+    let configGet: jest.Mock
+    let gateway: PaymentGateway
 
     const WEBHOOK_SECRET = 'test_webhook_secret_1234567890'
     const KEY_ID = 'rzp_test_key_123'
     const KEY_SECRET = 'rzp_test_secret_123'
+    const DEV_PACK_SECRET = 'test_dev_pack_secret'
 
     beforeEach(async () => {
         const mockRepo = {
@@ -30,6 +33,9 @@ describe('PaymentsService & Webhook handling', () => {
             countPendingOrders: jest.fn().mockResolvedValue(0),
         }
 
+        // Default: PAYMENTS_DEV_PACK is unset — the hidden dev pack stays disabled.
+        configGet = jest.fn((_key: string) => undefined)
+
         const module: TestingModule = await Test.createTestingModule({
             providers: [
                 PaymentsService,
@@ -37,6 +43,7 @@ describe('PaymentsService & Webhook handling', () => {
                 {
                     provide: ConfigService,
                     useValue: {
+                        get: configGet,
                         getOrThrow: jest.fn((key: string) => {
                             if (key === 'RAZORPAY_WEBHOOK_SECRET') return WEBHOOK_SECRET
                             if (key === 'RAZORPAY_KEY_ID') return KEY_ID
@@ -54,6 +61,7 @@ describe('PaymentsService & Webhook handling', () => {
 
         service = module.get<PaymentsService>(PaymentsService)
         repo = module.get(PaymentsRepository)
+        gateway = module.get(PAYMENT_GATEWAY)
     })
 
     function signPayload(body: Buffer, secret = WEBHOOK_SECRET): string {
@@ -260,6 +268,99 @@ describe('PaymentsService & Webhook handling', () => {
             await expect(service.createOrder('50', 'user_1')).rejects.toThrow(HttpException)
             await expect(service.createOrder('50', 'user_1')).rejects.toMatchObject({
                 status: HttpStatus.TOO_MANY_REQUESTS,
+            })
+        })
+
+        it('dev pack disabled (default): createOrder("dev1") throws BadRequestException', async () => {
+            await expect(service.createOrder('dev1', 'user_1')).rejects.toThrow(BadRequestException)
+            expect(repo.createOrder).not.toHaveBeenCalled()
+        })
+
+        it('dev pack enabled (PAYMENTS_DEV_PACK matches secret): createOrder("dev1") creates a ₹1 order for 1 credit', async () => {
+            configGet.mockImplementation((key: string) =>
+                key === 'PAYMENTS_DEV_PACK' || key === 'PAYMENTS_DEV_PACK_SECRET' ? DEV_PACK_SECRET : undefined,
+            )
+            const gatewaySpy = jest
+                .spyOn(gateway, 'createOrder')
+                .mockResolvedValue({ id: 'order_dev_123', amount: 100, currency: 'INR' })
+            repo.createOrder.mockResolvedValue({ id: 'local_dev_1' } as any)
+
+            const result = await service.createOrder('dev1', 'user_1')
+
+            expect(gatewaySpy).toHaveBeenCalledWith({
+                amountPaise: 100,
+                currency: 'INR',
+                receipt: expect.any(String),
+                notes: { packageId: 'dev1' },
+            })
+            expect(repo.createOrder).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    packageId: 'dev1',
+                    amountPaise: 100,
+                    currency: 'INR',
+                    creditsGranted: 1,
+                }),
+            )
+            expect(result).toMatchObject({
+                orderId: 'local_dev_1',
+                razorpayOrderId: 'order_dev_123',
+                amount: 100,
+                currency: 'INR',
+                keyId: KEY_ID,
+            })
+        })
+
+        it('dev pack disabled when flag does not match the secret', async () => {
+            configGet.mockImplementation((key: string) => {
+                if (key === 'PAYMENTS_DEV_PACK') return 'wrong_value'
+                if (key === 'PAYMENTS_DEV_PACK_SECRET') return DEV_PACK_SECRET
+                return undefined
+            })
+
+            await expect(service.createOrder('dev1', 'user_1')).rejects.toThrow(BadRequestException)
+            expect(repo.createOrder).not.toHaveBeenCalled()
+        })
+
+        it('dev pack disabled when the secret is unset even if flag is set', async () => {
+            configGet.mockImplementation((key: string) =>
+                key === 'PAYMENTS_DEV_PACK' ? DEV_PACK_SECRET : undefined,
+            )
+
+            await expect(service.createOrder('dev1', 'user_1')).rejects.toThrow(BadRequestException)
+            expect(repo.createOrder).not.toHaveBeenCalled()
+        })
+
+        it('unknown packageId throws BadRequestException regardless of dev pack flag', async () => {
+            await expect(service.createOrder('nope', 'user_1')).rejects.toThrow(BadRequestException)
+            configGet.mockImplementation((key: string) =>
+                key === 'PAYMENTS_DEV_PACK' || key === 'PAYMENTS_DEV_PACK_SECRET' ? DEV_PACK_SECRET : undefined,
+            )
+            await expect(service.createOrder('nope', 'user_1')).rejects.toThrow(BadRequestException)
+        })
+    })
+
+    describe('getWallet packages', () => {
+        it('excludes the dev pack when PAYMENTS_DEV_PACK is unset', async () => {
+            repo.getWallet.mockResolvedValue({ balance: 0, ledger: [] } as any)
+
+            const wallet = await service.getWallet('user_1')
+
+            expect(wallet.packages.map((p) => p.id)).toEqual(['50', '200', '500'])
+        })
+
+        it('includes the dev pack when PAYMENTS_DEV_PACK matches the secret', async () => {
+            configGet.mockImplementation((key: string) =>
+                key === 'PAYMENTS_DEV_PACK' || key === 'PAYMENTS_DEV_PACK_SECRET' ? DEV_PACK_SECRET : undefined,
+            )
+            repo.getWallet.mockResolvedValue({ balance: 0, ledger: [] } as any)
+
+            const wallet = await service.getWallet('user_1')
+
+            expect(wallet.packages.map((p) => p.id)).toEqual(['50', '200', '500', 'dev1'])
+            expect(wallet.packages.find((p) => p.id === 'dev1')).toMatchObject({
+                credits: 1,
+                amountPaise: 100,
+                currency: 'INR',
             })
         })
     })

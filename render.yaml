@@ -57,3 +57,9 @@ services:
         sync: false
       - key: RAZORPAY_WEBHOOK_SECRET
         sync: false
+      # Hidden ₹1 dev pack — set BOTH in the dashboard to the same random value to
+      # expose it for live smoke testing; the value itself must never be committed.
+      - key: PAYMENTS_DEV_PACK
+        sync: false
+      - key: PAYMENTS_DEV_PACK_SECRET
+        sync: false
