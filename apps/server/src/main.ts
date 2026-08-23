@@ -35,6 +35,8 @@ async function bootstrap() {
   app.enableCors({
     origin: allowedOrigins,
     credentials: true,
+    // x-dev-pack: operator-only header that unlocks the hidden ₹1 dev pack per-request.
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-dev-pack'],
   })
 
   // Drain Prisma/Redis/BullMQ cleanly on SIGTERM (every Render deploy sends one)

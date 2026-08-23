@@ -34,7 +34,7 @@ describe('PaymentsService & Webhook handling', () => {
         }
 
         // Default: PAYMENTS_DEV_PACK is unset — the hidden dev pack stays disabled.
-        configGet = jest.fn((_key: string) => undefined)
+        configGet = jest.fn((key: string) => (key === 'PAYMENTS_DEV_PACK' ? DEV_PACK_SECRET : undefined))
 
         const module: TestingModule = await Test.createTestingModule({
             providers: [
@@ -271,21 +271,18 @@ describe('PaymentsService & Webhook handling', () => {
             })
         })
 
-        it('dev pack disabled (default): createOrder("dev1") throws BadRequestException', async () => {
+        it('dev pack disabled without x-dev-pack header: createOrder("dev1") throws BadRequestException', async () => {
             await expect(service.createOrder('dev1', 'user_1')).rejects.toThrow(BadRequestException)
             expect(repo.createOrder).not.toHaveBeenCalled()
         })
 
-        it('dev pack enabled (PAYMENTS_DEV_PACK matches secret): createOrder("dev1") creates a ₹1 order for 1 credit', async () => {
-            configGet.mockImplementation((key: string) =>
-                key === 'PAYMENTS_DEV_PACK' || key === 'PAYMENTS_DEV_PACK_SECRET' ? DEV_PACK_SECRET : undefined,
-            )
+        it('dev pack enabled (x-dev-pack header matches env secret): creates a ₹1 order for 1 credit', async () => {
             const gatewaySpy = jest
                 .spyOn(gateway, 'createOrder')
                 .mockResolvedValue({ id: 'order_dev_123', amount: 100, currency: 'INR' })
             repo.createOrder.mockResolvedValue({ id: 'local_dev_1' } as any)
 
-            const result = await service.createOrder('dev1', 'user_1')
+            const result = await service.createOrder('dev1', 'user_1', DEV_PACK_SECRET)
 
             expect(gatewaySpy).toHaveBeenCalledWith({
                 amountPaise: 100,
@@ -310,37 +307,26 @@ describe('PaymentsService & Webhook handling', () => {
             })
         })
 
-        it('dev pack disabled when flag does not match the secret', async () => {
-            configGet.mockImplementation((key: string) => {
-                if (key === 'PAYMENTS_DEV_PACK') return 'wrong_value'
-                if (key === 'PAYMENTS_DEV_PACK_SECRET') return DEV_PACK_SECRET
-                return undefined
-            })
-
-            await expect(service.createOrder('dev1', 'user_1')).rejects.toThrow(BadRequestException)
+        it('dev pack disabled when the header does not match the env secret', async () => {
+            await expect(service.createOrder('dev1', 'user_1', 'wrong_value')).rejects.toThrow(BadRequestException)
             expect(repo.createOrder).not.toHaveBeenCalled()
         })
 
-        it('dev pack disabled when the secret is unset even if flag is set', async () => {
-            configGet.mockImplementation((key: string) =>
-                key === 'PAYMENTS_DEV_PACK' ? DEV_PACK_SECRET : undefined,
-            )
+        it('dev pack disabled when the env secret is unset even with a header present', async () => {
+            configGet.mockReturnValue(undefined)
 
-            await expect(service.createOrder('dev1', 'user_1')).rejects.toThrow(BadRequestException)
+            await expect(service.createOrder('dev1', 'user_1', DEV_PACK_SECRET)).rejects.toThrow(BadRequestException)
             expect(repo.createOrder).not.toHaveBeenCalled()
         })
 
-        it('unknown packageId throws BadRequestException regardless of dev pack flag', async () => {
+        it('unknown packageId throws BadRequestException regardless of dev pack header', async () => {
             await expect(service.createOrder('nope', 'user_1')).rejects.toThrow(BadRequestException)
-            configGet.mockImplementation((key: string) =>
-                key === 'PAYMENTS_DEV_PACK' || key === 'PAYMENTS_DEV_PACK_SECRET' ? DEV_PACK_SECRET : undefined,
-            )
-            await expect(service.createOrder('nope', 'user_1')).rejects.toThrow(BadRequestException)
+            await expect(service.createOrder('nope', 'user_1', DEV_PACK_SECRET)).rejects.toThrow(BadRequestException)
         })
     })
 
     describe('getWallet packages', () => {
-        it('excludes the dev pack when PAYMENTS_DEV_PACK is unset', async () => {
+        it('excludes the dev pack without an x-dev-pack header', async () => {
             repo.getWallet.mockResolvedValue({ balance: 0, ledger: [] } as any)
 
             const wallet = await service.getWallet('user_1')
@@ -348,13 +334,10 @@ describe('PaymentsService & Webhook handling', () => {
             expect(wallet.packages.map((p) => p.id)).toEqual(['50', '200', '500'])
         })
 
-        it('includes the dev pack when PAYMENTS_DEV_PACK matches the secret', async () => {
-            configGet.mockImplementation((key: string) =>
-                key === 'PAYMENTS_DEV_PACK' || key === 'PAYMENTS_DEV_PACK_SECRET' ? DEV_PACK_SECRET : undefined,
-            )
+        it('includes the dev pack when the x-dev-pack header matches the env secret', async () => {
             repo.getWallet.mockResolvedValue({ balance: 0, ledger: [] } as any)
 
-            const wallet = await service.getWallet('user_1')
+            const wallet = await service.getWallet('user_1', DEV_PACK_SECRET)
 
             expect(wallet.packages.map((p) => p.id)).toEqual(['50', '200', '500', 'dev1'])
             expect(wallet.packages.find((p) => p.id === 'dev1')).toMatchObject({

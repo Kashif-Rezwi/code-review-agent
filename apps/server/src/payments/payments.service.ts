@@ -67,15 +67,18 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
     }
 
     /**
-     * The hidden ₹1 dev pack is active only when PAYMENTS_DEV_PACK matches the
-     * PAYMENTS_DEV_PACK_SECRET configured for this environment — a shared secret
-     * known only to the operator, so the activation value is not guessable from
-     * the repo (live smoke testing only).
+     * Whether the hidden ₹1 dev pack is available for this request.
+     * Requires PAYMENTS_DEV_PACK to be set in the environment AND the caller to
+     * present the same value via the x-dev-pack request header — a shared secret
+     * known only to the operator, never committed or documented anywhere.
+     * The constant-time comparison avoids leaking the secret via timing.
      */
-    private isDevPackEnabled(): boolean {
-        const flag = this.config.get<string>('PAYMENTS_DEV_PACK')
-        const secret = this.config.get<string>('PAYMENTS_DEV_PACK_SECRET')
-        return Boolean(secret) && flag === secret
+    private isDevPackEnabled(devPackHeader?: string): boolean {
+        const secret = this.config.get<string>('PAYMENTS_DEV_PACK')
+        if (!secret || !devPackHeader) return false
+        const headerBuf = Buffer.from(devPackHeader, 'utf8')
+        const secretBuf = Buffer.from(secret, 'utf8')
+        return headerBuf.length === secretBuf.length && crypto.timingSafeEqual(headerBuf, secretBuf)
     }
 
     /**
@@ -83,9 +86,9 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
      * Validates packageId, enforces pending order cap (F-11), calls Razorpay API,
      * and stores the local order record.
      */
-    async createOrder(packageId: string, userId: string) {
-        const pkg = getActiveCreditPackages(this.isDevPackEnabled())[packageId]
-        // Service is the sole packageId validator — the DTO cannot see the env-gated dev pack.
+    async createOrder(packageId: string, userId: string, devPackHeader?: string) {
+        const pkg = getActiveCreditPackages(this.isDevPackEnabled(devPackHeader))[packageId]
+        // Service is the sole packageId validator — the DTO cannot see the secret-gated dev pack.
         if (!pkg) throw new BadRequestException(`Unknown packageId: ${packageId}`)
 
         // F-11: Pending order cap — prevent unbounded abandoned orders.
@@ -275,7 +278,7 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
     }
 
     /** Return wallet response (balance + ledger + available packages). */
-    async getWallet(userId: string): Promise<WalletResponse> {
+    async getWallet(userId: string, devPackHeader?: string): Promise<WalletResponse> {
         const { balance, ledger } = await this.repo.getWallet(userId)
         return {
             balance,
@@ -289,7 +292,7 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
                 description: e.description,
                 createdAt: e.createdAt.toISOString(),
             })),
-            packages: Object.entries(getActiveCreditPackages(this.isDevPackEnabled())).map(([id, pkg]) => ({
+            packages: Object.entries(getActiveCreditPackages(this.isDevPackEnabled(devPackHeader))).map(([id, pkg]) => ({
                 id,
                 label: pkg.label,
                 credits: pkg.credits,

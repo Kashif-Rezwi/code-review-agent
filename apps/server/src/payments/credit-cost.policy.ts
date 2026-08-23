@@ -15,10 +15,10 @@ export const CREDIT_PACKAGES: Record<string, CreditPackage> = {
 
 /**
  * Hidden ₹1 package for cheap live-mode smoke testing — active only when the
- * PAYMENTS_DEV_PACK env var matches the operator-held PAYMENTS_DEV_PACK_SECRET.
- * Exists so the go-live payment flow (order → webhook → credit grant) can be
- * verified with ₹1 instead of the ₹99 minimum public pack. Keep it disabled in
- * steady state so real users never see it.
+ * request presents the x-dev-pack header matching the operator-held
+ * PAYMENTS_DEV_PACK env secret. Exists so the go-live payment flow
+ * (order → webhook → credit grant) can be verified with ₹1 instead of the ₹99
+ * minimum public pack. Real users never see it without the secret.
  */
 export const DEV_PACK_PACKAGE_ID = 'dev1'
 export const DEV_CREDIT_PACKAGE: CreditPackage = {

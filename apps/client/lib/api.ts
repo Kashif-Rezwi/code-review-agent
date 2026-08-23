@@ -17,10 +17,16 @@ export async function apiErrorMessage(response: Response): Promise<string> {
 }
 
 /**
- * Typed fetch wrapper for the CRA API: prepends API_URL, merges an optional Bearer token,
- * throws the server's message on non-2xx, and returns the parsed JSON body on success.
+ * Typed fetch wrapper for the CRA API: prepends API_URL, merges an optional Bearer token
+ * and optional extra headers, throws the server's message on non-2xx, and returns the
+ * parsed JSON body on success.
  */
-export async function apiFetch<T>(path: string, init?: RequestInit, token?: string): Promise<T> {
+export async function apiFetch<T>(
+    path: string,
+    init?: RequestInit,
+    token?: string,
+    extraHeaders?: Record<string, string>,
+): Promise<T> {
     if (!API_URL) {
         // Without a configured API origin the request would go same-origin and 404
         // against the Next.js server with a confusing error.
@@ -32,6 +38,7 @@ export async function apiFetch<T>(path: string, init?: RequestInit, token?: stri
         headers: {
             ...(init?.headers as Record<string, string> | undefined),
             ...authHeader,
+            ...extraHeaders,
         },
     })
     if (!res.ok) {
@@ -82,20 +89,25 @@ export const ragService = {
 import type { WalletResponse } from '@cra/types'
 
 export const paymentsService = {
-    createOrder: (payload: { packageId: string }, token?: string) =>
+    createOrder: (payload: { packageId: string }, token?: string, devPack?: string) =>
         apiFetch<{
             orderId: string
             razorpayOrderId: string
             amount: number
             currency: string
             keyId: string
-        }>('/payments/order', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-        }, token),
-    getWallet: <T = WalletResponse>(token?: string) =>
-        apiFetch<T>('/payments/wallet', undefined, token),
+        }>(
+            '/payments/order',
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            },
+            token,
+            devPack ? { 'x-dev-pack': devPack } : undefined,
+        ),
+    getWallet: <T = WalletResponse>(token?: string, devPack?: string) =>
+        apiFetch<T>('/payments/wallet', undefined, token, devPack ? { 'x-dev-pack': devPack } : undefined),
 }
 
 

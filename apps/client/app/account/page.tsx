@@ -1,10 +1,11 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
 import { useSession } from 'next-auth/react'
 import { AppHeader } from '@/components/layout/app-header'
 import { PageHeader } from '@/components/layout/page-header'
 import { useWallet } from '@/lib/use-wallet'
+import { useDevPackSecret } from '@/lib/dev-pack'
 import { paymentsService } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { CreditCard, RefreshCw, Zap, ShieldCheck, History, ArrowDownRight, ArrowUpRight, Gift, CheckCircle2 } from 'lucide-react'
@@ -19,10 +20,20 @@ declare global {
 }
 
 export default function AccountPage() {
+    // useSearchParams (used by useDevPackSecret) requires a Suspense boundary.
+    return (
+        <Suspense fallback={null}>
+            <AccountPageContent />
+        </Suspense>
+    )
+}
+
+function AccountPageContent() {
     const { data: session } = useSession()
     const token = session?.githubToken
+    const devPack = useDevPackSecret()
 
-    const { balance, ledger, packages, isLoading, isPolling, error: walletError, refresh, startPolling } = useWallet(token)
+    const { balance, ledger, packages, isLoading, isPolling, error: walletError, refresh, startPolling, enableDevPack } = useWallet(token)
     const [buyingPackageId, setBuyingPackageId] = useState<string | null>(null)
     const [checkoutError, setCheckoutError] = useState<string | null>(null)
     const [scriptLoaded, setScriptLoaded] = useState<boolean>(() => typeof window !== 'undefined' && Boolean(window.Razorpay))
@@ -38,6 +49,15 @@ export default function AccountPage() {
         document.body.appendChild(script)
     }, [])
 
+    // If the operator opened /account?dev_pack=<secret>, arm the wallet context so
+    // every wallet fetch presents the x-dev-pack header, then refresh to fetch the
+    // package list including the hidden ₹1 pack.
+    useEffect(() => {
+        if (!devPack) return
+        enableDevPack(devPack)
+        void refresh()
+    }, [devPack, enableDevPack, refresh])
+
     const handleBuy = async (packageId: string) => {
         if (!token) {
             setCheckoutError('Please log in to purchase credits.')
@@ -52,7 +72,7 @@ export default function AccountPage() {
         setCheckoutError(null)
 
         try {
-            const orderData = await paymentsService.createOrder({ packageId }, token)
+            const orderData = await paymentsService.createOrder({ packageId }, token, devPack ?? undefined)
 
             const options = {
                 key: orderData.keyId,

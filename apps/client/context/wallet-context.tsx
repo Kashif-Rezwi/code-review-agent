@@ -15,6 +15,7 @@ export interface WalletContextValue {
     refresh: () => Promise<void>
     startPolling: (targetOrderId?: string) => void
     stopPolling: () => void
+    enableDevPack: (secret: string) => void
 }
 
 const POLLING_INTERVAL_MS = 2000
@@ -37,6 +38,14 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     const pollingAttemptsRef = useRef<number>(0)
     const pollingTimerRef = useRef<NodeJS.Timeout | null>(null)
     const targetOrderIdRef = useRef<string | null>(null)
+    // Set once via enableDevPack() from pages that accept the operator-only URL
+    // param (e.g. /account?dev_pack=<secret>); forwarded as x-dev-pack on every
+    // wallet fetch so the server can include the hidden ₹1 dev pack.
+    const devPackRef = useRef<string | null>(null)
+
+    const enableDevPack = useCallback((secret: string) => {
+        devPackRef.current = secret
+    }, [])
 
     const fetchWallet = useCallback(async () => {
         if (!token) {
@@ -44,7 +53,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
             return
         }
         try {
-            const data = await paymentsService.getWallet<WalletResponse>(token)
+            const data = await paymentsService.getWallet<WalletResponse>(token, devPackRef.current ?? undefined)
             setBalance(data.balance)
             setLedger(data.ledger)
             setPackages(data.packages)
@@ -131,6 +140,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
         },
         startPolling,
         stopPolling,
+        enableDevPack,
     }
 
     return <WalletContext.Provider value={value}>{children}</WalletContext.Provider>
