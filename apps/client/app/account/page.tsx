@@ -33,8 +33,9 @@ function AccountPageContent() {
     const token = session?.githubToken
     const devPack = useDevPackSecret()
 
-    const { balance, ledger, packages, isLoading, isPolling, error: walletError, refresh, startPolling, enableDevPack } = useWallet(token)
+    const { balance, ledger, packages, isLoading, error: walletError, refresh, enableDevPack } = useWallet(token)
     const [buyingPackageId, setBuyingPackageId] = useState<string | null>(null)
+    const [paymentPending, setPaymentPending] = useState<boolean>(false)
     const [checkoutError, setCheckoutError] = useState<string | null>(null)
     const [scriptLoaded, setScriptLoaded] = useState<boolean>(() => typeof window !== 'undefined' && Boolean(window.Razorpay))
 
@@ -83,7 +84,9 @@ function AccountPageContent() {
                 order_id: orderData.razorpayOrderId,
                 handler: () => {
                     setBuyingPackageId(null)
-                    startPolling(orderData.orderId)
+                    // Webhook settles asynchronously — no auto-polling; the user
+                    // refreshes the wallet manually once Razorpay confirms.
+                    setPaymentPending(true)
                 },
                 modal: {
                     ondismiss: () => {
@@ -124,15 +127,27 @@ function AccountPageContent() {
                     </div>
                 )}
 
-                {isPolling && (
-                    <div className="p-4 rounded-xl bg-blue-500/10 border border-blue-500/30 text-blue-300 flex items-center justify-between animate-pulse">
+                {paymentPending && (
+                    <div className="p-4 rounded-xl bg-blue-500/10 border border-blue-500/30 text-blue-300 flex items-center justify-between">
                         <div className="flex items-center gap-3">
-                            <RefreshCw className="w-5 h-5 animate-spin text-blue-400" />
+                            <RefreshCw className="w-5 h-5 text-blue-400" />
                             <div>
-                                <p className="text-sm font-semibold">Payment Received! Syncing Wallet...</p>
-                                <p className="text-xs text-blue-400/80">Your balance will update automatically once the webhook settles.</p>
+                                <p className="text-sm font-semibold">Payment received — credits arrive via webhook.</p>
+                                <p className="text-xs text-blue-400/80">This usually takes a few seconds. Hit Refresh to update your balance.</p>
                             </div>
                         </div>
+                        <Button
+                            variant="secondary"
+                            onClick={() => {
+                                void refresh()
+                                setPaymentPending(false)
+                            }}
+                            disabled={isLoading}
+                            className="flex items-center gap-2 shrink-0"
+                        >
+                            <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+                            <span>Refresh</span>
+                        </Button>
                     </div>
                 )}
 
