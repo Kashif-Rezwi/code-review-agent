@@ -88,6 +88,9 @@
   html {
     overscroll-behavior: none;
     height: 100%;
+    /* Always reserve the scrollbar gutter so pages with/without a scrollbar
+       (e.g. standards vs account) never shift the layout horizontally */
+    scrollbar-gutter: stable;
   }
   body {
     @apply bg-background text-foreground;
