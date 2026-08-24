@@ -5,6 +5,7 @@ import { useSession } from 'next-auth/react'
 import { AppHeader } from '@/components/layout/app-header'
 import { PageHeader } from '@/components/layout/page-header'
 import { useWallet } from '@/lib/use-wallet'
+import { formatCredits } from '@/lib/format-credits'
 import { useDevPackSecret } from '@/lib/dev-pack'
 import { paymentsService } from '@/lib/api'
 import { Button } from '@/components/ui/button'
@@ -168,11 +169,11 @@ function AccountPageContent() {
                             <span>Available Balance</span>
                         </div>
                         <div className="flex items-baseline gap-3">
-                            <span className="text-4xl font-extrabold text-white tracking-tight">{isLoading ? '...' : balance}</span>
+                            <span className="text-4xl font-extrabold text-white tracking-tight">{isLoading ? '...' : formatCredits(balance)}</span>
                             <span className="text-lg font-medium text-slate-400">credits</span>
                         </div>
                         <p className="text-xs text-slate-400">
-                            Costs: Code Review = 5 credits • PR Review = 10 credits • Chat = 1 credit
+                            Pay only for what you use — Code Review ≈ 0.2 • PR Review ≈ 0.8–3 • Chat ≈ 0.03 credits
                         </p>
                     </div>
 
@@ -208,7 +209,7 @@ function AccountPageContent() {
                                 <div className="space-y-2">
                                     <div className="flex items-center justify-between">
                                         <span className="text-sm font-semibold text-blue-400 bg-blue-500/10 px-2.5 py-0.5 rounded-full border border-blue-500/20">
-                                            {pkg.credits} Credits
+                                            {formatCredits(pkg.credits)} Credits
                                         </span>
                                         <ShieldCheck className="w-4 h-4 text-slate-500 group-hover:text-blue-400 transition-colors" />
                                     </div>
@@ -216,8 +217,9 @@ function AccountPageContent() {
                                         ₹{pkg.amountPaise / 100}
                                     </div>
                                     <p className="text-xs text-slate-400">
-                                        approx. {Math.floor(pkg.credits / 5)} code reviews or {Math.floor(pkg.credits / 10)} PR reviews
+                                        ≈ {Math.floor(pkg.credits / 20)} code reviews or {Math.floor(pkg.credits / 100)} PR reviews
                                     </p>
+                                    <p className="text-[11px] text-slate-500">Credits shown after payment processing fee.</p>
                                 </div>
 
                                 <Button
@@ -258,11 +260,13 @@ function AccountPageContent() {
                                                     entry.type === 'FREE_GRANT' ? 'bg-purple-500/10 text-purple-400 border border-purple-500/20' :
                                                     entry.type === 'PURCHASE' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
                                                     entry.type === 'CONSUMPTION_REFUND' ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' :
+                                                    entry.type === 'SETTLEMENT' ? 'bg-teal-500/10 text-teal-400 border border-teal-500/20' :
                                                     'bg-blue-500/10 text-blue-400 border border-blue-500/20'
                                                 }`}>
                                                     {entry.type === 'FREE_GRANT' ? <Gift className="w-4 h-4" /> :
                                                      entry.type === 'PURCHASE' ? <ArrowDownRight className="w-4 h-4" /> :
                                                      entry.type === 'CONSUMPTION_REFUND' ? <CheckCircle2 className="w-4 h-4" /> :
+                                                     entry.type === 'SETTLEMENT' ? <CheckCircle2 className="w-4 h-4" /> :
                                                      <ArrowUpRight className="w-4 h-4" />}
                                                 </div>
                                                 <div>
@@ -273,9 +277,9 @@ function AccountPageContent() {
 
                                             <div className="text-right">
                                                 <p className={`text-sm font-bold ${isPositive ? 'text-emerald-400' : 'text-slate-300'}`}>
-                                                    {isPositive ? `+${entry.amount}` : entry.amount} credits
+                                                    {isPositive ? `+${formatCredits(entry.amount)}` : formatCredits(entry.amount)} credits
                                                 </p>
-                                                <p className="text-xs text-slate-500">Balance: {entry.balanceAfter}</p>
+                                                <p className="text-xs text-slate-500">Balance: {formatCredits(entry.balanceAfter)}</p>
                                             </div>
                                         </div>
                                     )
