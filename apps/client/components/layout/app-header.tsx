@@ -20,11 +20,12 @@ const NAV = [
 /** Shared top navigation header — identical across every page. */
 export function AppHeader() {
     const pathname = usePathname()
-    const { data: session } = useSession()
+    const { data: session, status } = useSession()
     const token = session?.githubToken
     const { balance } = useWallet(token)
     const [menuOpen, setMenuOpen] = useState(false)
     const menuRef = useRef<HTMLDivElement>(null)
+    const isSessionLoading = status === 'loading'
 
     // Close menu on click outside or Escape
     useEffect(() => {
@@ -78,26 +79,34 @@ export function AppHeader() {
                             })}
                         </nav>
 
-                        {/* Credit Balance Badge */}
-                        {session?.user && (
-                            <Link
-                                href="/account"
-                                className={cn(
-                                    'flex items-center gap-1.5 h-8 px-3 rounded-full text-xs font-semibold border transition-all duration-200',
-                                    pathname.startsWith('/account')
-                                        ? 'bg-blue-500/10 text-blue-300 border-blue-500/20 shadow-glow-blue-sm'
-                                        : 'bg-blue-500/10 text-blue-400 border-blue-500/20 hover:text-blue-300 hover:border-blue-400/40',
-                                )}
-                                title="Click to view wallet and recharge credits"
-                            >
-                                <Wallet className="w-3.5 h-3.5" />
-                                <span>{formatCredits(balance)} credits</span>
-                            </Link>
-                        )}
+                        {/* Account cluster — loading skeleton, authenticated controls, or nothing */}
+                        {isSessionLoading ? (
+                            <div className="flex items-center gap-3" aria-hidden>
+                                {/* Credit balance skeleton — occupies the exact pill slot so nothing shifts */}
+                                <div className="h-8 w-24 rounded-full bg-gray-800 animate-pulse shrink-0" />
+                                {/* Profile avatar skeleton — occupies the avatar slot */}
+                                <div className="h-8 w-8 rounded-full bg-gray-800 animate-pulse shrink-0" />
+                            </div>
+                        ) : (
+                            session?.user && (
+                                <div className="flex items-center gap-3 animate-in fade-in duration-200">
+                                    {/* Credit Balance Pill */}
+                                    <Link
+                                        href="/account"
+                                        className={cn(
+                                            'flex items-center gap-1.5 h-8 px-3 rounded-full text-xs font-semibold border transition-all duration-200',
+                                            pathname.startsWith('/account')
+                                                ? 'bg-blue-500/10 text-blue-300 border-blue-500/20 shadow-glow-blue-sm'
+                                                : 'bg-blue-500/10 text-blue-400 border-blue-500/20 hover:text-blue-300 hover:border-blue-400/40',
+                                        )}
+                                        title="Click to view wallet and recharge credits"
+                                    >
+                                        <Wallet className="w-3.5 h-3.5" />
+                                        <span>{formatCredits(balance)} credits</span>
+                                    </Link>
 
-                        {/* Profile menu */}
-                        {session?.user && (
-                            <div className="relative" ref={menuRef}>
+                                    {/* Profile menu */}
+                                    <div className="relative" ref={menuRef}>
                                 <button
                                     id="user-menu-btn"
                                     onClick={() => setMenuOpen(o => !o)}
@@ -180,7 +189,9 @@ export function AppHeader() {
                                         </div>
                                     </div>
                                 )}
-                            </div>
+                                </div>
+                                </div>
+                            )
                         )}
                     </div>
                 </div>
