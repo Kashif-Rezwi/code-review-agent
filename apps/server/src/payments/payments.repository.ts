@@ -319,6 +319,61 @@ export class PaymentsRepository {
     }
 
     /**
+     * Settle a completed operation: refund the unused portion of the up-front reserve.
+     * Runs inside the caller's transaction so settlement is atomic with the operation's
+     * terminal write (e.g. review completion). `amount` is in hundredths of a credit.
+     * A SETTLEMENT ledger entry records the refund; the CONSUMPTION entry from reservation
+     * time already captured the full reserve.
+     */
+    async settleCreditsInTx(
+        tx: Prisma.TransactionClient,
+        params: {
+            userId: string
+            amount: number
+            reviewId: string | null
+            description: string
+        },
+    ): Promise<void> {
+        const { userId, amount, reviewId, description } = params
+        if (amount <= 0) return
+
+        await tx.user.updateMany({
+            where: { id: userId },
+            data: { creditBalance: { increment: amount } },
+        })
+
+        const updatedUser = await tx.user.findUniqueOrThrow({
+            where: { id: userId },
+            select: { creditBalance: true },
+        })
+
+        await tx.creditLedger.create({
+            data: {
+                userId,
+                type: 'SETTLEMENT',
+                amount,
+                balanceAfter: updatedUser.creditBalance,
+                reviewId,
+                description,
+            },
+        })
+    }
+
+    /**
+     * Settle a completed operation in its own transaction (chat path). Thin wrapper over
+     * settleCreditsInTx for callers that don't already hold a transaction.
+     */
+    async settleCredits(params: {
+        userId: string
+        amount: number
+        reviewId: string | null
+        description: string
+    }): Promise<void> {
+        if (params.amount <= 0) return
+        await this.prisma.$transaction((tx) => this.settleCreditsInTx(tx, params))
+    }
+
+    /**
      * Idempotently grant free credits on first signup.
      * Checks for an existing FREE_GRANT row first; if one exists, returns without granting.
      * The application-level check replaces the partial unique index approach (A-6).

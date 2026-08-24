@@ -40,7 +40,7 @@ import { pickArgs, toolStartLabel, toolDoneLabel } from './review.formatter'
 import { ThinkingStream } from './review.thinking'
 import { runReviewAgent } from './review.agent'
 import type { NormalizedPRFile, PRSnapshot } from '../github/github.types'
-import { getReviewCreditCost } from '../payments/credit-cost.policy'
+import { getReviewReserve, costFromUsage, type TokenUsage } from '../payments/credit-cost.policy'
 
 type StandardsContext = Awaited<ReturnType<RagService['retrieveForContext']>>
 
@@ -50,6 +50,7 @@ type WorkerSuccess = {
     review: ReviewData
     attempts: number
     truncatedFiles: string[]
+    usage: TokenUsage
 }
 
 type WorkerFailure = {
@@ -76,8 +77,8 @@ export class ReviewService {
     ) {}
 
     async createSession(type: 'CODE' | 'PR', input: string, userId: string) {
-        const cost = getReviewCreditCost(type)
-        const session = await this.reviewRepository.createSession(type, input, userId, cost)
+        const reserve = getReviewReserve(type)
+        const session = await this.reviewRepository.createSession(type, input, userId, reserve)
         if (!session) throw new InternalServerErrorException('Database not configured or failed to create session')
         // The review, dispatch intent, and credit consumption were committed atomically. The kick is
         // opportunistic; the two-second poller guarantees eventual handoff.
@@ -92,10 +93,10 @@ export class ReviewService {
     async cancelReview(reviewId: string, userId?: string, type?: 'CODE' | 'PR'): Promise<void> {
         let wasCancelled = false
         if (userId && type) {
-            const cost = getReviewCreditCost(type)
+            const reserve = getReviewReserve(type)
             wasCancelled = await this.reviewRepository.markCancelledAndRefund(reviewId, {
                 userId,
-                cost,
+                cost: reserve,
                 description: 'Refund: review cancelled by user',
             })
         } else {
@@ -144,13 +145,13 @@ export class ReviewService {
             if (err instanceof ReviewCancelledError || signal?.reason instanceof ReviewCancelledError) return
             const message = this.publicErrorMessage(err)
             const event = { type: 'error' as const, message }
-            // Atomically mark the review FAILED and refund the deducted credits (F-05).
+            // Atomically mark the review FAILED and refund the deducted reserve (F-05).
             // markFailedAndRefund runs both operations in a single $transaction.
-            const creditCost = getReviewCreditCost(type)
+            const reserve = getReviewReserve(type)
             const transitioned = await this.reviewRepository.markFailedAndRefund(
                 reviewId,
                 message,
-                { userId, cost: creditCost, description: `Refund: ${type === 'PR' ? 'PR' : 'Code'} review failed` },
+                { userId, cost: reserve, description: `Refund: ${type === 'PR' ? 'PR' : 'Code'} review failed` },
                 [...conn.getTrace(), event],
             )
             // A cancelled or already-terminal review must not receive a second,
@@ -234,8 +235,11 @@ export class ReviewService {
 
         const plannerDeadline = operationDeadline(signal, 'Planner', AI_POLICY.deadlineMs.planner)
         let clusters: ClusterPlan[]
+        let plannerUsage: TokenUsage = { inputTokens: 0, outputTokens: 0 }
         try {
-            clusters = await planClusters(files, this.aiService.fastModel, plannerDeadline.signal)
+            const planned = await planClusters(files, this.aiService.fastModel, plannerDeadline.signal)
+            clusters = planned.clusters
+            plannerUsage = planned.usage
         } catch (error) {
             if (signal?.aborted) throwSignalReason(signal)
             this.logger.warn(`Planner timed out; using deterministic clustering: ${this.errMsg(error)}`)
@@ -289,11 +293,14 @@ export class ReviewService {
         const coverage = this.buildCoverage(snapshot, clusters, successful, failed)
         let finalReview: ReviewData
         let synthesisStep = 0
+        let synthesisUsage: TokenUsage = { inputTokens: 0, outputTokens: 0 }
         if (clusters.length === 1) {
             finalReview = partialReviews[0].review
         } else {
             send({ type: 'synthesis_start', clusterCount: partialReviews.length })
-            finalReview = await this.synthesizeReview(prUrl, partialReviews, standards, coverage, signal)
+            const synthesized = await this.synthesizeReview(prUrl, partialReviews, standards, coverage, signal)
+            finalReview = synthesized.review
+            synthesisUsage = synthesized.usage
             synthesisStep = 1
         }
 
@@ -310,6 +317,16 @@ export class ReviewService {
             coverage,
         }
 
+        // Review tier: all cluster workers + synthesis. Fast tier: the planner.
+        const reviewTier = successful.reduce<TokenUsage>(
+            (acc, s) => ({
+                inputTokens: acc.inputTokens + s.usage.inputTokens,
+                outputTokens: acc.outputTokens + s.usage.outputTokens,
+            }),
+            { inputTokens: synthesisUsage.inputTokens, outputTokens: synthesisUsage.outputTokens },
+        )
+        const usage = this.settleUsage(reviewTier, plannerUsage)
+
         await this.completeReview(
             prUrl,
             'PR',
@@ -320,6 +337,7 @@ export class ReviewService {
             Date.now() - startedAt,
             successful.length + synthesisStep,
             outcome,
+            usage,
         )
     }
 
@@ -350,7 +368,7 @@ export class ReviewService {
         try {
             // Linter tool only — the PR path pre-builds context and stays tool-free. One transient-error
             // retry (quota/429, provider-hint aware); parse failures and non-transient errors throw immediately.
-            const review = await withProviderRetry(
+            const agentResult = await withProviderRetry(
                 async () => {
                     const callDeadline = operationDeadline(signal, 'Pasted-code review', AI_POLICY.deadlineMs.codeReview)
                     try {
@@ -371,6 +389,7 @@ export class ReviewService {
                 },
                 { signal, label: 'Pasted-code review' },
             )
+            const { review } = agentResult
 
             const merged = { ...review, appliedStandards: standards?.appliedNames }
             await this.completeReview(
@@ -382,6 +401,8 @@ export class ReviewService {
                 reviewId,
                 Date.now() - _startedAt,
                 getToolCallCount(),
+                'complete',
+                this.settleUsage(agentResult.usage),
             )
         } catch (err: unknown) {
             thinking.flushPending()
@@ -400,6 +421,7 @@ export class ReviewService {
         durationMs: number,
         stepCount: number,
         outcome: 'complete' | 'partial' = 'complete',
+        usage?: { reviewTier: TokenUsage; fastTier: TokenUsage },
     ): Promise<void> {
         const event: ReviewStreamEvent = {
             type: 'complete',
@@ -408,6 +430,9 @@ export class ReviewService {
             stepCount,
             outcome,
         }
+        const settle = usage && reviewId
+            ? this.computeSettlement(reviewType, usage, reviewId)
+            : undefined
         const savedId = await this.reviewRepository.saveReview(
             input,
             reviewType,
@@ -416,6 +441,7 @@ export class ReviewService {
             [...conn.getTrace(), event],
             reviewId,
             outcome,
+            settle,
         )
 
         // A missing ID for an existing session means cancellation (or another
@@ -429,12 +455,42 @@ export class ReviewService {
         await conn.flush()
     }
 
+    /** Combine per-tier token usage into a billing shape. */
+    private settleUsage(reviewTier: TokenUsage, fastTier: TokenUsage = { inputTokens: 0, outputTokens: 0 }) {
+        return { reviewTier, fastTier }
+    }
+
+    /**
+     * Compute the settlement (refund = reserve − actual cost) for a completed review.
+     * Returns undefined when there's nothing to refund. Actual cost is the real token
+     * consumption priced per tier model, times the safety factor. Never throws on the
+     * billing path — a review that succeeded must complete even if usage is missing.
+     */
+    private computeSettlement(
+        reviewType: 'CODE' | 'PR',
+        usage: { reviewTier: TokenUsage; fastTier: TokenUsage },
+        reviewId: string,
+    ): { amount: number; reviewId: string; description: string } | undefined {
+        const reserve = getReviewReserve(reviewType)
+        const actual =
+            costFromUsage(this.aiService.reviewModelIdForBilling, usage.reviewTier) +
+            costFromUsage(this.aiService.fastModelIdForBilling, usage.fastTier)
+        const refund = Math.max(0, reserve - actual)
+        this.logger.log(
+            `[SETTLE] review=${reviewId} type=${reviewType} reserve=${reserve} actual=${actual} refund=${refund} ` +
+            `reviewTier(in=${usage.reviewTier.inputTokens},out=${usage.reviewTier.outputTokens}) ` +
+            `fastTier(in=${usage.fastTier.inputTokens},out=${usage.fastTier.outputTokens})`,
+        )
+        if (refund <= 0) return undefined
+        return { amount: refund, reviewId, description: `Settlement: ${reviewType === 'PR' ? 'PR' : 'Code'} review unused reserve` }
+    }
+
     private async runWorkerWithRetry(
         cluster: ClusterPlan,
         standards: StandardsContext,
         send: (event: ReviewStreamEvent) => void,
         signal?: AbortSignal,
-    ): Promise<{ review: ReviewData; attempts: number; truncatedFiles: string[] }> {
+    ): Promise<{ review: ReviewData; attempts: number; truncatedFiles: string[]; usage: TokenUsage }> {
         const workerStart = Date.now()
         const context = this.buildClusterContext(cluster, standards?.content)
         let lastError: unknown
@@ -443,7 +499,7 @@ export class ReviewService {
             if (signal?.aborted) throwSignalReason(signal)
             const deadline = operationDeadline(signal, `Worker ${cluster.id} attempt ${attempt}`, AI_POLICY.deadlineMs.workerAttempt)
             try {
-                const review = await this.runWorkerAttempt(cluster, standards, send, context.text, attempt, deadline.signal)
+                const { review, usage } = await this.runWorkerAttempt(cluster, standards, send, context.text, attempt, deadline.signal)
                 send({
                     type: 'cluster_done',
                     clusterId: cluster.id,
@@ -451,7 +507,7 @@ export class ReviewService {
                     durationMs: Date.now() - workerStart,
                     attempts: attempt,
                 })
-                return { review, attempts: attempt, truncatedFiles: context.truncatedFiles }
+                return { review, attempts: attempt, truncatedFiles: context.truncatedFiles, usage }
             } catch (error) {
                 if (signal?.aborted) throwSignalReason(signal)
                 lastError = error
@@ -490,7 +546,7 @@ export class ReviewService {
         fileSection: string,
         attempt: number,
         signal: AbortSignal,
-    ): Promise<ReviewData> {
+    ): Promise<{ review: ReviewData; usage: TokenUsage }> {
         const userMessage = `Review the untrusted pull-request data in this JSON envelope:\n${fileSection}`
         const system = buildWorkerPrompt() + (attempt > 1
             ? '\n\nRETRY REQUIREMENT: Return one valid JSON review object. Do not add trailing prose after the closing brace.'
@@ -740,18 +796,19 @@ export class ReviewService {
         standards: StandardsContext,
         coverage?: ReviewCoverage,
         signal?: AbortSignal,
-    ): Promise<ReviewData> {
+    ): Promise<{ review: ReviewData; usage: TokenUsage }> {
         const baseSystem = buildSynthesisSystemPrompt()
         const userMessage = buildSynthesisUserMessage(prUrl, partialReviews) +
             `\n\nAdditional untrusted JSON data:\n${JSON.stringify({
                 coverage: coverage ?? null,
                 codingStandards: standards?.content ?? null,
             })}`
+        const usage: TokenUsage = { inputTokens: 0, outputTokens: 0 }
 
         // ── Attempt 1: standard ───────────────────────────────────────────────
         const firstDeadline = operationDeadline(signal, 'Synthesis attempt 1', AI_POLICY.deadlineMs.synthesisAttempt)
         try {
-            const { text } = await runReviewGenerate({
+            const { text, usage: u1 } = await runReviewGenerate({
                 model: this.aiService.defaultModel,
                 system: baseSystem,
                 messages: [{ role: 'user', content: userMessage }],
@@ -759,7 +816,9 @@ export class ReviewService {
                 abortSignal: firstDeadline.signal,
                 maxOutputTokens: AI_POLICY.maxOutputTokens.synthesis,
             })
-            return parseReviewText(text)
+            usage.inputTokens += u1?.inputTokens ?? 0
+            usage.outputTokens += u1?.outputTokens ?? 0
+            return { review: parseReviewText(text), usage }
         } catch (err) {
             if (firstDeadline.signal.aborted && !signal?.aborted) {
                 this.logger.warn('Synthesis attempt 1 timed out')
@@ -775,7 +834,7 @@ export class ReviewService {
         // ── Attempt 2: temperature 0 + reinforced JSON-only instruction ───────
         const secondDeadline = operationDeadline(signal, 'Synthesis attempt 2', AI_POLICY.deadlineMs.synthesisAttempt)
         try {
-            const { text } = await runReviewGenerate({
+            const { text, usage: u2 } = await runReviewGenerate({
                 model: this.aiService.defaultModel,
                 system:
                     baseSystem +
@@ -787,7 +846,9 @@ export class ReviewService {
                 abortSignal: secondDeadline.signal,
                 maxOutputTokens: AI_POLICY.maxOutputTokens.synthesis,
             })
-            return parseReviewText(text)
+            usage.inputTokens += u2?.inputTokens ?? 0
+            usage.outputTokens += u2?.outputTokens ?? 0
+            return { review: parseReviewText(text), usage }
         } catch (err) {
             if (signal?.aborted) throwSignalReason(signal)
             this.logger.warn(`Synthesis attempt 2 failed: ${err instanceof Error ? err.message : err}`)
@@ -797,7 +858,7 @@ export class ReviewService {
 
         // ── Fallback: deterministic merge — guaranteed valid ReviewData ────────
         this.logger.warn(`Both synthesis attempts failed for ${prUrl} — using programmatic merge fallback`)
-        return this.mergeReviewsFallback(partialReviews)
+        return { review: this.mergeReviewsFallback(partialReviews), usage }
     }
 
     /** Merge worker partial reviews deterministically — used when LLM synthesis fails twice. */

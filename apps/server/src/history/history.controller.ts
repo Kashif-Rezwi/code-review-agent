@@ -7,7 +7,7 @@ import { ProviderStreamError } from '../ai/ai-runtime.adapter'
 import { AuthGuard } from '../auth/auth.guard'
 import { UserThrottlerGuard } from '../throttle/user-throttler.guard'
 import { Throttle } from '@nestjs/throttler'
-import { CREDIT_COSTS } from '../payments/credit-cost.policy'
+import { RESERVES } from '../payments/credit-cost.policy'
 import { PaymentsService } from '../payments/payments.service'
 
 @UseGuards(AuthGuard)
@@ -61,10 +61,10 @@ export class HistoryController {
                     // PRD-003: Verify review existence and ownership BEFORE deducting credits
                     await this.historyService.getReview(id, userId)
 
-                    // Atomically deduct 1 credit linked to this reviewId before starting the stream
+                    // Reserve up-front (worst-case) before the stream; settle to real usage after.
                     const balanceAfter = await this.paymentsService.deductCredits({
                         userId,
-                        cost: CREDIT_COSTS.CHAT,
+                        cost: RESERVES.CHAT,
                         reviewId: id,
                         description: 'Follow-up chat query',
                     })
@@ -81,12 +81,32 @@ export class HistoryController {
                     }
 
                     creditDeducted = true
-                    const stream = this.historyService.chatGenerator(id, userId, dto.message, abort.signal)
+                    // Request-local usage capture — safe under concurrent chats (no shared state).
+                    let chatUsage: import('../payments/credit-cost.policy').TokenUsage | undefined
+                    const stream = this.historyService.chatGenerator(id, userId, dto.message, abort.signal, (u) => {
+                        chatUsage = u
+                    })
 
                     for await (const chunk of stream) {
                         emittedChunkCount++
                         subscriber.next({ data: { type: 'delta', text: chunk } })
                     }
+
+                    // Stream completed and was persisted — settle the reserve down to real usage.
+                    const charge = this.historyService.computeChatCharge(chatUsage)
+                    const refund = charge === undefined ? RESERVES.CHAT : Math.max(0, RESERVES.CHAT - charge)
+                    if (refund > 0) {
+                        await this.paymentsService.settleCredits({
+                            userId,
+                            amount: refund,
+                            reviewId: id,
+                            description: charge === undefined ? 'Settlement: chat (usage unavailable)' : 'Settlement: chat unused reserve',
+                        }).catch((settleErr: unknown) => {
+                            // Settlement failure is non-fatal: the user keeps the full reserve charge.
+                            this.logger.error(`Failed to settle chat credits: ${settleErr instanceof Error ? settleErr.message : String(settleErr)}`)
+                        })
+                    }
+
                     subscriber.next({ data: { type: 'done' } })
                 } catch (err) {
                     if (abort.signal.aborted) return
@@ -96,7 +116,7 @@ export class HistoryController {
                     if (creditDeducted && emittedChunkCount === 0) {
                         await this.paymentsService.refundCredits({
                             userId,
-                            cost: CREDIT_COSTS.CHAT,
+                            cost: RESERVES.CHAT,
                             reviewId: id,
                             description: 'Refund: chat stream failed',
                         }).catch((refundErr: unknown) => {
