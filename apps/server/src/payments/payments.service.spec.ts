@@ -295,7 +295,7 @@ describe('PaymentsService & Webhook handling', () => {
                     packageId: 'dev1',
                     amountPaise: 100,
                     currency: 'INR',
-                    creditsGranted: 1,
+                    creditsGranted: 97, // floor(100 / 1.0236) — ₹1 minus the Razorpay fee haircut
                 }),
             )
             expect(result).toMatchObject({
@@ -331,7 +331,7 @@ describe('PaymentsService & Webhook handling', () => {
 
             const wallet = await service.getWallet('user_1')
 
-            expect(wallet.packages.map((p) => p.id)).toEqual(['50', '200', '500'])
+            expect(wallet.packages.map((p) => p.id)).toEqual(['5', '10', '50'])
         })
 
         it('includes the dev pack when the x-dev-pack header matches the env secret', async () => {
@@ -339,9 +339,9 @@ describe('PaymentsService & Webhook handling', () => {
 
             const wallet = await service.getWallet('user_1', DEV_PACK_SECRET)
 
-            expect(wallet.packages.map((p) => p.id)).toEqual(['50', '200', '500', 'dev1'])
+            expect(wallet.packages.map((p) => p.id)).toEqual(['5', '10', '50', 'dev1'])
             expect(wallet.packages.find((p) => p.id === 'dev1')).toMatchObject({
-                credits: 1,
+                credits: 97, // floor(100 / 1.0236)
                 amountPaise: 100,
                 currency: 'INR',
             })

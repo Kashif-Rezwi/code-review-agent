@@ -11,7 +11,7 @@ import {
     UnauthorizedException,
 } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
-import { FREE_CREDIT_AMOUNT, getActiveCreditPackages } from './credit-cost.policy'
+import { FREE_CREDIT_AMOUNT, creditsFromTopup, getActiveCreditPackages } from './credit-cost.policy'
 import { PaymentsRepository } from './payments.repository'
 import { PAYMENT_GATEWAY, PaymentGateway } from './gateway/payment-gateway.interface'
 import type { WalletResponse } from '@cra/types'
@@ -110,7 +110,9 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
             notes: { packageId },
         })
 
-        // Persist local order record.
+        // Persist local order record. Credits are derived from the amount (R-02) at creation
+        // time — the Razorpay fee haircut is applied here, never at usage time.
+        const creditsGranted = creditsFromTopup(pkg.amountPaise)
         const localOrder = await this.repo.createOrder({
             id: internalOrderId,
             userId,
@@ -118,11 +120,11 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
             packageId,
             amountPaise: pkg.amountPaise,
             currency: pkg.currency,
-            creditsGranted: pkg.credits, // R-02: persist at creation time, read at capture time
+            creditsGranted, // R-02: persist at creation time, read at capture time
         })
 
         this.logger.log(
-            `[RZP_ORDER_CREATED] Order created: localId=${localOrder.id}, rzpOrderId=${razorpayOrder.id}, pkg=${packageId}, credits=${pkg.credits}`,
+            `[RZP_ORDER_CREATED] Order created: localId=${localOrder.id}, rzpOrderId=${razorpayOrder.id}, pkg=${packageId}, credits=${creditsGranted}`,
         )
 
         return {
@@ -295,7 +297,7 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
             packages: Object.entries(getActiveCreditPackages(this.isDevPackEnabled(devPackHeader))).map(([id, pkg]) => ({
                 id,
                 label: pkg.label,
-                credits: pkg.credits,
+                credits: creditsFromTopup(pkg.amountPaise),
                 amountPaise: pkg.amountPaise,
                 currency: pkg.currency,
             })),
@@ -338,6 +340,20 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
         description: string
     }): Promise<void> {
         return this.repo.refundCredits(params)
+    }
+
+    /**
+     * Settle a completed operation: refund the unused portion of the up-front reserve.
+     * Creates its own transaction — used by the chat path after the stream completes.
+     * `amount` is in hundredths of a credit.
+     */
+    async settleCredits(params: {
+        userId: string
+        amount: number
+        reviewId: string | null
+        description: string
+    }): Promise<void> {
+        return this.repo.settleCredits(params)
     }
 
     /**
