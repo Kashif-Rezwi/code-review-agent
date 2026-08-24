@@ -34,11 +34,16 @@ const runPlanner = generateObject as unknown as (options: {
     prompt: string
     abortSignal?: AbortSignal
     maxOutputTokens: number
-}) => Promise<{ object: { clusters: ProposedCluster[] } }>
+}) => Promise<{ object: { clusters: ProposedCluster[] }; usage?: { inputTokens?: number; outputTokens?: number } }>
 
-export async function planClusters(files: PRFile[], model: LanguageModel, abortSignal?: AbortSignal): Promise<ClusterPlan[]> {
-    if (files.length === 0) return []
-    if (files.length <= 3) return [generalCluster(files)]
+export interface PlanClustersResult {
+    clusters: ClusterPlan[]
+    usage: { inputTokens: number; outputTokens: number }
+}
+
+export async function planClusters(files: PRFile[], model: LanguageModel, abortSignal?: AbortSignal): Promise<PlanClustersResult> {
+    if (files.length === 0) return { clusters: [], usage: { inputTokens: 0, outputTokens: 0 } }
+    if (files.length <= 3) return { clusters: [generalCluster(files)], usage: { inputTokens: 0, outputTokens: 0 } }
 
     const fileEnvelope = files.map(({ filename, additions, deletions, status }) => ({
         filename,
@@ -48,7 +53,7 @@ export async function planClusters(files: PRFile[], model: LanguageModel, abortS
     }))
 
     try {
-        const { object } = await runPlanner({
+        const { object, usage } = await runPlanner({
             model,
             schema: ClusterPlanSchema,
             temperature: 0,
@@ -75,12 +80,16 @@ Changed files JSON:
 ${JSON.stringify(fileEnvelope)}`,
         })
 
-        return reconcileClusterPlan(files, object.clusters)
+        return {
+            clusters: reconcileClusterPlan(files, object.clusters),
+            usage: { inputTokens: usage?.inputTokens ?? 0, outputTokens: usage?.outputTokens ?? 0 },
+        }
     } catch {
         if (abortSignal?.aborted) {
             throw abortSignal.reason instanceof Error ? abortSignal.reason : new Error('Planner aborted')
         }
-        return buildDeterministicClusters(files)
+        // Deterministic fallback consumed no tokens.
+        return { clusters: buildDeterministicClusters(files), usage: { inputTokens: 0, outputTokens: 0 } }
     }
 }
 

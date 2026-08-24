@@ -3,12 +3,16 @@ import type { EmbeddingModel } from 'ai'
 import { createRunLinterTool } from '@cra/ai'
 import type { LintResult } from '../linter/linter.service'
 
-export type MinimalAiStep = { text: string }
+export type MinimalUsage = { inputTokens?: number; outputTokens?: number }
+export type MinimalAiStep = { text: string; usage?: MinimalUsage }
 export type MinimalStreamResult = {
     text: PromiseLike<string>
     steps: PromiseLike<MinimalAiStep[]>
 }
-export type MinimalChatStreamResult = { textStream: AsyncIterable<string> }
+export type MinimalChatStreamResult = {
+    textStream: AsyncIterable<string>
+    usage: PromiseLike<MinimalUsage>
+}
 
 /**
  * Provider-side failure delivered as a stream `error` chunk (billing, quota, auth).
@@ -77,7 +81,7 @@ export function runReviewStream(options: RuntimeOptions): MinimalStreamResult {
     return streamRuntime({ maxRetries: DEFAULT_MAX_RETRIES, ...options })
 }
 
-export function runReviewGenerate(options: RuntimeOptions): Promise<{ text: string }> {
+export function runReviewGenerate(options: RuntimeOptions): Promise<{ text: string; usage?: MinimalUsage }> {
     return generateRuntime({ maxRetries: DEFAULT_MAX_RETRIES, ...options })
 }
 
