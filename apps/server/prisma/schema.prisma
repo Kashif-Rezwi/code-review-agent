@@ -20,7 +20,7 @@ model User {
   name          String?
   email         String?
   avatarUrl     String?
-  creditBalance Int      @default(0)  // prepaid review credits
+  creditBalance Int      @default(0)  // prepaid review credits, in hundredths (100 = 1 credit = ₹1)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -149,6 +149,7 @@ enum LedgerEntryType {
   PURCHASE
   CONSUMPTION
   CONSUMPTION_REFUND
+  SETTLEMENT
 }
 
 model PaymentOrder {
@@ -160,7 +161,7 @@ model PaymentOrder {
   packageId         String                    // credit package key, e.g. "50", "200", "500"
   amountPaise       Int                       // Razorpay amounts are always integer paise
   currency          String      @default("INR")
-  creditsGranted    Int         @default(0)   // persisted at order creation (R-02); read atomically during CREATED → CAPTURED transition
+  creditsGranted    Int         @default(0)   // hundredths (100 = 1 credit); persisted at order creation (R-02); read atomically during CREATED → CAPTURED transition
   status            OrderStatus @default(CREATED)
   createdAt         DateTime    @default(now())
   updatedAt         DateTime    @updatedAt
@@ -190,8 +191,8 @@ model CreditLedger {
   userId       String
   user         User            @relation(fields: [userId], references: [id])
   type         LedgerEntryType
-  amount       Int             // positive = credits in (grant/purchase/refund), negative = credits out
-  balanceAfter Int             // snapshot of User.creditBalance after this entry (read from DB, never computed)
+  amount       Int             // hundredths (100 = 1 credit); positive = credits in (grant/purchase/refund/settlement), negative = credits out
+  balanceAfter Int             // hundredths; snapshot of User.creditBalance after this entry (read from DB, never computed)
   orderId      String?         // set for PURCHASE entries
   order        PaymentOrder?   @relation(fields: [orderId], references: [id])
   reviewId     String?         // set for CONSUMPTION / CONSUMPTION_REFUND entries
