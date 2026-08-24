@@ -4,6 +4,7 @@ import type { ReviewStatus } from '@prisma/client'
 import { AiService } from '../ai/ai.service'
 import { ProviderStreamError, runChatStream, toProviderStreamError } from '../ai/ai-runtime.adapter'
 import { AI_POLICY } from '../ai/ai-policy'
+import { costFromUsage, type TokenUsage } from '../payments/credit-cost.policy'
 import { HistoryRepository, ReviewWithRelations } from './history.repository'
 
 @Injectable()
@@ -42,8 +43,17 @@ export class HistoryService {
      * Stream the chat completion, yielding text chunks; persist the conversation when the stream
      * completes naturally. Same provider-error contract as the review pipeline: a captured stream
      * error is rethrown after the loop — never saved as a blank answer.
+     *
+     * Token usage is reported via the `onUsage` callback (not a shared field) so concurrent
+     * chats on this singleton service can't overwrite each other's billing data.
      */
-    async *chatGenerator(id: string, userId: string, message: string, signal?: AbortSignal): AsyncGenerator<string, void, unknown> {
+    async *chatGenerator(
+        id: string,
+        userId: string,
+        message: string,
+        signal?: AbortSignal,
+        onUsage?: (usage: TokenUsage) => void,
+    ): AsyncGenerator<string, void, unknown> {
         const review = await this.getReview(id, userId)
         const system = this.buildChatSystem(review)
 
@@ -78,6 +88,23 @@ export class HistoryService {
         if (fullText) {
             await this.historyRepository.saveChatQuery(id, message, fullText)
         }
+
+        // Report token usage for cost settlement; resolve failures leave usage unreported.
+        try {
+            const u = await result.usage
+            onUsage?.({ inputTokens: u?.inputTokens ?? 0, outputTokens: u?.outputTokens ?? 0 })
+        } catch {
+            // Provider didn't report usage — the caller refunds the full reserve.
+        }
+    }
+
+    /**
+     * Credits (hundredths) actually consumed by a chat stream, priced on the fast model.
+     * Returns undefined when the provider didn't report usage — the caller refunds the full reserve.
+     */
+    computeChatCharge(usage: TokenUsage | undefined): number | undefined {
+        if (!usage) return undefined
+        return costFromUsage(this.aiService.fastModelIdForBilling, usage)
     }
 
     private buildChatSystem(review: ReviewWithRelations): string {

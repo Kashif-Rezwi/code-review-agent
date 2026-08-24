@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Post, Req, UseGuards } from '@nestjs/common'
+import { Body, Controller, Get, Headers, HttpCode, Post, Req, UseGuards } from '@nestjs/common'
 import { Throttle } from '@nestjs/throttler'
 import type { Request } from 'express'
 import { AuthGuard } from '../auth/auth.guard'
@@ -24,16 +24,20 @@ export class PaymentsController {
     @HttpCode(201)
     @UseGuards(UserThrottlerGuard)
     @Throttle({ default: { limit: 5, ttl: 3_600_000 } })
-    async createOrder(@Body() dto: CreateOrderDto, @Req() req: Request) {
+    async createOrder(
+        @Body() dto: CreateOrderDto,
+        @Req() req: Request,
+        @Headers('x-dev-pack') devPack?: string,
+    ) {
         // userId is always from req.user (set by AuthGuard) — never trusted from the body.
-        return this.paymentsService.createOrder(dto.packageId, req.user!.userId)
+        return this.paymentsService.createOrder(dto.packageId, req.user!.userId, devPack)
     }
 
     /** Return the authenticated user's credit balance, recent ledger, and available packages. */
     @Get('wallet')
     @UseGuards(UserThrottlerGuard)
     @Throttle({ default: { limit: 60, ttl: 60_000 } }) // F-12: 60/min per user
-    getWallet(@Req() req: Request) {
-        return this.paymentsService.getWallet(req.user!.userId)
+    getWallet(@Req() req: Request, @Headers('x-dev-pack') devPack?: string) {
+        return this.paymentsService.getWallet(req.user!.userId, devPack)
     }
 }

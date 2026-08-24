@@ -1,5 +1,6 @@
 import * as crypto from 'crypto'
 import {
+    BadRequestException,
     HttpException,
     HttpStatus,
     Inject,
@@ -10,7 +11,7 @@ import {
     UnauthorizedException,
 } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
-import { CREDIT_PACKAGES, FREE_CREDIT_AMOUNT } from './credit-cost.policy'
+import { FREE_CREDIT_AMOUNT, creditsFromTopup, getActiveCreditPackages } from './credit-cost.policy'
 import { PaymentsRepository } from './payments.repository'
 import { PAYMENT_GATEWAY, PaymentGateway } from './gateway/payment-gateway.interface'
 import type { WalletResponse } from '@cra/types'
@@ -66,14 +67,29 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
     }
 
     /**
+     * Whether the hidden ₹1 dev pack is available for this request.
+     * Requires PAYMENTS_DEV_PACK to be set in the environment AND the caller to
+     * present the same value via the x-dev-pack request header — a shared secret
+     * known only to the operator, never committed or documented anywhere.
+     * The constant-time comparison avoids leaking the secret via timing.
+     */
+    private isDevPackEnabled(devPackHeader?: string): boolean {
+        const secret = this.config.get<string>('PAYMENTS_DEV_PACK')
+        if (!secret || !devPackHeader) return false
+        const headerBuf = Buffer.from(devPackHeader, 'utf8')
+        const secretBuf = Buffer.from(secret, 'utf8')
+        return headerBuf.length === secretBuf.length && crypto.timingSafeEqual(headerBuf, secretBuf)
+    }
+
+    /**
      * Create a Razorpay order and persist a local PaymentOrder row.
      * Validates packageId, enforces pending order cap (F-11), calls Razorpay API,
      * and stores the local order record.
      */
-    async createOrder(packageId: string, userId: string) {
-        const pkg = CREDIT_PACKAGES[packageId]
-        // DTO @IsIn validation already guards this — belt-and-suspenders.
-        if (!pkg) throw new Error(`Unknown packageId: ${packageId}`)
+    async createOrder(packageId: string, userId: string, devPackHeader?: string) {
+        const pkg = getActiveCreditPackages(this.isDevPackEnabled(devPackHeader))[packageId]
+        // Service is the sole packageId validator — the DTO cannot see the secret-gated dev pack.
+        if (!pkg) throw new BadRequestException(`Unknown packageId: ${packageId}`)
 
         // F-11: Pending order cap — prevent unbounded abandoned orders.
         const pendingCount = await this.repo.countPendingOrders(userId)
@@ -94,7 +110,9 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
             notes: { packageId },
         })
 
-        // Persist local order record.
+        // Persist local order record. Credits are derived from the amount (R-02) at creation
+        // time — the Razorpay fee haircut is applied here, never at usage time.
+        const creditsGranted = creditsFromTopup(pkg.amountPaise)
         const localOrder = await this.repo.createOrder({
             id: internalOrderId,
             userId,
@@ -102,11 +120,11 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
             packageId,
             amountPaise: pkg.amountPaise,
             currency: pkg.currency,
-            creditsGranted: pkg.credits, // R-02: persist at creation time, read at capture time
+            creditsGranted, // R-02: persist at creation time, read at capture time
         })
 
         this.logger.log(
-            `[RZP_ORDER_CREATED] Order created: localId=${localOrder.id}, rzpOrderId=${razorpayOrder.id}, pkg=${packageId}, credits=${pkg.credits}`,
+            `[RZP_ORDER_CREATED] Order created: localId=${localOrder.id}, rzpOrderId=${razorpayOrder.id}, pkg=${packageId}, credits=${creditsGranted}`,
         )
 
         return {
@@ -262,7 +280,7 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
     }
 
     /** Return wallet response (balance + ledger + available packages). */
-    async getWallet(userId: string): Promise<WalletResponse> {
+    async getWallet(userId: string, devPackHeader?: string): Promise<WalletResponse> {
         const { balance, ledger } = await this.repo.getWallet(userId)
         return {
             balance,
@@ -276,10 +294,10 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
                 description: e.description,
                 createdAt: e.createdAt.toISOString(),
             })),
-            packages: Object.entries(CREDIT_PACKAGES).map(([id, pkg]) => ({
+            packages: Object.entries(getActiveCreditPackages(this.isDevPackEnabled(devPackHeader))).map(([id, pkg]) => ({
                 id,
                 label: pkg.label,
-                credits: pkg.credits,
+                credits: creditsFromTopup(pkg.amountPaise),
                 amountPaise: pkg.amountPaise,
                 currency: pkg.currency,
             })),
@@ -322,6 +340,20 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
         description: string
     }): Promise<void> {
         return this.repo.refundCredits(params)
+    }
+
+    /**
+     * Settle a completed operation: refund the unused portion of the up-front reserve.
+     * Creates its own transaction — used by the chat path after the stream completes.
+     * `amount` is in hundredths of a credit.
+     */
+    async settleCredits(params: {
+        userId: string
+        amount: number
+        reviewId: string | null
+        description: string
+    }): Promise<void> {
+        return this.repo.settleCredits(params)
     }
 
     /**

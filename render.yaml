@@ -57,3 +57,15 @@ services:
         sync: false
       - key: RAZORPAY_WEBHOOK_SECRET
         sync: false
+      # Hidden ₹1 dev pack — set to a random operator-chosen secret in the dashboard;
+      # unlock via /account?dev_pack=<same secret>. The value must never be committed.
+      - key: PAYMENTS_DEV_PACK
+        sync: false
+      # Credit pricing tunables — optional; safe defaults live in credit-cost.policy.ts.
+      # Set in the dashboard only to retune pricing without a redeploy.
+      - key: RAZORPAY_FEE_RATE
+        sync: false
+      - key: USD_INR
+        sync: false
+      - key: CREDIT_SAFETY_FACTOR
+        sync: false

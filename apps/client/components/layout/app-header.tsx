@@ -9,6 +9,7 @@ import { useSession, signOut } from 'next-auth/react'
 import { useState, useRef, useEffect } from 'react'
 import { ServerWakeupBanner } from '@/components/ui/server-wakeup-banner'
 import { useWallet } from '@/lib/use-wallet'
+import { formatCredits } from '@/lib/format-credits'
 
 const NAV = [
     { href: '/review', label: 'Review', icon: Code2 },
@@ -78,7 +79,7 @@ export function AppHeader() {
                                 title="Click to view wallet and recharge credits"
                             >
                                 <Wallet className="w-3.5 h-3.5" />
-                                <span>{balance} credits</span>
+                                <span>{formatCredits(balance)} credits</span>
                             </Link>
                         )}
 

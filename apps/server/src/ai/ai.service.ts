@@ -83,6 +83,15 @@ export class AiService {
         return this.chatRouter.languageModel(this.fastModelId)
     }
 
+    /** Model IDs exposed for cost computation (billing is keyed by model ID). */
+    get reviewModelIdForBilling(): string {
+        return this.reviewModelId
+    }
+
+    get fastModelIdForBilling(): string {
+        return this.fastModelId
+    }
+
     private get embeddingModel(): EmbeddingModel {
         return this.embeddingGateway.embeddingModel(this.embeddingModelId)
     }

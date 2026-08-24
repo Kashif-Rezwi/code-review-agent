@@ -4,7 +4,7 @@ import { ThrottlerModule } from '@nestjs/throttler'
 import { HistoryController } from './history.controller'
 import { HistoryService } from './history.service'
 import { PaymentsService } from '../payments/payments.service'
-import { CREDIT_COSTS } from '../payments/credit-cost.policy'
+import { RESERVES } from '../payments/credit-cost.policy'
 import { AuthGuard } from '../auth/auth.guard'
 import { UserThrottlerGuard } from '../throttle/user-throttler.guard'
 import type { Request } from 'express'
@@ -18,10 +18,12 @@ describe('HistoryController', () => {
         getReview: jest.Mock
         deleteReview: jest.Mock
         chatGenerator: jest.Mock
+        computeChatCharge: jest.Mock
     }
     let paymentsService: {
         deductCredits: jest.Mock
         refundCredits: jest.Mock
+        settleCredits: jest.Mock
     }
 
     const mockRequest = {
@@ -35,11 +37,13 @@ describe('HistoryController', () => {
             getReview: jest.fn(),
             deleteReview: jest.fn(),
             chatGenerator: jest.fn(),
+            computeChatCharge: jest.fn(),
         }
 
         paymentsService = {
             deductCredits: jest.fn(),
             refundCredits: jest.fn().mockResolvedValue({ id: 'refund-1' }),
+            settleCredits: jest.fn().mockResolvedValue(undefined),
         }
 
         const module: TestingModule = await Test.createTestingModule({
@@ -123,7 +127,7 @@ describe('HistoryController', () => {
             expect(historyService.getReview).toHaveBeenCalledWith('rev-1', 'user-1')
             expect(paymentsService.deductCredits).toHaveBeenCalledWith({
                 userId: 'user-1',
-                cost: CREDIT_COSTS.CHAT,
+                cost: RESERVES.CHAT,
                 reviewId: 'rev-1',
                 description: 'Follow-up chat query',
             })
@@ -133,16 +137,24 @@ describe('HistoryController', () => {
             ])
         })
 
-        it('deducts 1 credit and streams response on success', async () => {
+        it('reserves credits, streams response, then settles to real usage on success', async () => {
             historyService.getReview.mockResolvedValue({ id: 'rev-1', userId: 'user-1' })
             paymentsService.deductCredits.mockResolvedValue(24)
+            // 3 hundredths consumed → refund the remaining 7 of the 10-hundredth reserve.
+            historyService.computeChatCharge.mockReturnValue(3)
 
+            // Simulate the real generator: report usage via the onUsage callback, then stream.
             async function* mockGenerator() {
                 await Promise.resolve()
                 yield 'Hello'
                 yield ' world!'
             }
-            historyService.chatGenerator.mockImplementation(mockGenerator)
+            historyService.chatGenerator.mockImplementation(
+                (_id: string, _uid: string, _msg: string, _sig: unknown, onUsage?: (u: unknown) => void) => {
+                    onUsage?.({ inputTokens: 3000, outputTokens: 500 })
+                    return mockGenerator()
+                },
+            )
 
             const observable = controller.chat('rev-1', { message: 'Hello' }, mockRequest)
             const events = await lastValueFrom(observable.pipe(toArray()))
@@ -150,11 +162,19 @@ describe('HistoryController', () => {
             expect(historyService.getReview).toHaveBeenCalledWith('rev-1', 'user-1')
             expect(paymentsService.deductCredits).toHaveBeenCalledWith({
                 userId: 'user-1',
-                cost: CREDIT_COSTS.CHAT,
+                cost: RESERVES.CHAT,
                 reviewId: 'rev-1',
                 description: 'Follow-up chat query',
             })
+            // The controller forwards the captured usage to compute the charge.
+            expect(historyService.computeChatCharge).toHaveBeenCalledWith({ inputTokens: 3000, outputTokens: 500 })
             expect(paymentsService.refundCredits).not.toHaveBeenCalled()
+            expect(paymentsService.settleCredits).toHaveBeenCalledWith({
+                userId: 'user-1',
+                amount: RESERVES.CHAT - 3,
+                reviewId: 'rev-1',
+                description: 'Settlement: chat unused reserve',
+            })
 
             expect(events).toEqual([
                 { data: { type: 'delta', text: 'Hello' } },
@@ -182,7 +202,7 @@ describe('HistoryController', () => {
             expect(paymentsService.deductCredits).toHaveBeenCalled()
             expect(paymentsService.refundCredits).toHaveBeenCalledWith({
                 userId: 'user-1',
-                cost: CREDIT_COSTS.CHAT,
+                cost: RESERVES.CHAT,
                 reviewId: 'rev-1',
                 description: 'Refund: chat stream failed',
             })

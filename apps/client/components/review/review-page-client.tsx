@@ -68,7 +68,9 @@ export function ReviewPageClient({ initialReviewType, initialReviewId }: { initi
     // Lock inputs if there's an initial ID or if we are streaming/complete/error
     const isLocked = !!initialReviewId || isStreaming || phase === 'complete' || phase === 'error'
 
-    const creditCost = mode === 'code' ? 5 : 10
+    // Balance and cost are in hundredths (100 = 1 credit). The gate compares against the
+    // up-front reserve — the user is charged only real usage, settled after completion.
+    const creditCost = mode === 'code' ? 100 : 500
     const hasSufficientCredits = session?.user ? balance >= creditCost : true
 
     const canSubmit =

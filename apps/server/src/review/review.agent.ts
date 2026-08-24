@@ -2,6 +2,7 @@ import { InternalServerErrorException, Logger } from '@nestjs/common'
 import type { LanguageModel } from 'ai'
 import type { ReviewData } from '@cra/types'
 
+import type { TokenUsage } from '../payments/credit-cost.policy'
 import {
     ProviderStreamError,
     runReviewStream,
@@ -10,6 +11,17 @@ import {
 } from '../ai/ai-runtime.adapter'
 import { throwSignalReason } from '../queue/review-cancellation.service'
 import { parseReviewFromSteps, parseReviewText } from './review-parser.util'
+
+/** Sum per-step token usage into one total (missing usage counts as zero). */
+export function sumStepUsage(steps: MinimalAiStep[]): TokenUsage {
+    let inputTokens = 0
+    let outputTokens = 0
+    for (const step of steps) {
+        inputTokens += step.usage?.inputTokens ?? 0
+        outputTokens += step.usage?.outputTokens ?? 0
+    }
+    return { inputTokens, outputTokens }
+}
 
 const logger = new Logger('ReviewAgent')
 
@@ -37,7 +49,7 @@ export interface ReviewAgentOptions {
  * ceremony so call sites stay declarative. Stops once a step parses as a valid review (saves tokens),
  * forces plain text on the final tool step, rethrows captured provider errors once settled, else parses steps last-to-first.
  */
-export async function runReviewAgent(options: ReviewAgentOptions): Promise<ReviewData> {
+export async function runReviewAgent(options: ReviewAgentOptions): Promise<{ review: ReviewData; usage: TokenUsage }> {
     const { model, system, userMessage, tools, temperature, maxOutputTokens, maxSteps, signal, callbacks } = options
     let providerError: ProviderStreamError | undefined
 
@@ -88,7 +100,7 @@ export async function runReviewAgent(options: ReviewAgentOptions): Promise<Revie
     if (providerError) throw providerError
 
     try {
-        return parseReviewFromSteps(finalText, steps)
+        return { review: parseReviewFromSteps(finalText, steps), usage: sumStepUsage(steps) }
     } catch {
         logger.error(
             `Review parsing failed — steps: ${steps.length}, ` +

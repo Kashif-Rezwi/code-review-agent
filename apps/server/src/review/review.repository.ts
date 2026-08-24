@@ -185,6 +185,7 @@ export class ReviewRepository {
         traceLog?: ReviewStreamEvent[],
         reviewId?: string,
         outcome: 'complete' | 'partial' = 'complete',
+        settle?: { amount: number; reviewId: string; description: string },
     ): Promise<string | undefined> {
         if (!this.hasDb) return undefined
         const reviewData = {
@@ -211,12 +212,20 @@ export class ReviewRepository {
         if (reviewId) {
             // Only PENDING may become COMPLETE. Prisma throws P2025 when the
             // review was cancelled or another terminal transition won the race.
+            // Settlement (refund of unused reserve) rides in the SAME transaction so a
+            // crash can't leave the user charged the full reserve for a completed review,
+            // and a lost race (P2025) rolls the refund back alongside the save.
             try {
-                const saved = await this.prisma.review.update({
-                    where: { id: reviewId, status: 'PENDING' },
-                    data: { ...reviewData, status: outcome === 'partial' ? 'PARTIAL' : 'COMPLETE' },
+                return await this.prisma.$transaction(async (tx) => {
+                    const saved = await tx.review.update({
+                        where: { id: reviewId, status: 'PENDING' },
+                        data: { ...reviewData, status: outcome === 'partial' ? 'PARTIAL' : 'COMPLETE' },
+                    })
+                    if (settle && settle.amount > 0) {
+                        await this.paymentsRepository.settleCreditsInTx(tx, { userId, ...settle })
+                    }
+                    return saved.id
                 })
-                return saved.id
             } catch (err: unknown) {
                 if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') {
                     return undefined

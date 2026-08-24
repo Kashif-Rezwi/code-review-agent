@@ -98,7 +98,8 @@ export const CreditPackageSchema = z.object({
 
 export const LedgerEntrySchema = z.object({
     id: z.string(),
-    type: z.enum(['FREE_GRANT', 'PURCHASE', 'CONSUMPTION', 'CONSUMPTION_REFUND']),
+    type: z.enum(['FREE_GRANT', 'PURCHASE', 'CONSUMPTION', 'CONSUMPTION_REFUND', 'SETTLEMENT']),
+    // All credit amounts are in HUNDREDTHS (100 = 1 credit = ₹1) — display divides by 100.
     amount: z.number().int(),
     balanceAfter: z.number().int().nonnegative(),
     orderId: z.string().nullable().optional(),

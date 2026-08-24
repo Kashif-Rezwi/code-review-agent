@@ -51,25 +51,25 @@ describe('useWallet', () => {
         expect(result.current.packages).toEqual(mockWallet.packages)
     })
 
-    it('startPolling triggers polling mode and stopPolling halts it', async () => {
+    it('refresh re-fetches wallet data on demand', async () => {
         const mockWallet = { balance: 50, ledger: [], packages: [] }
         vi.mocked(paymentsService.getWallet).mockResolvedValue(mockWallet)
 
         const { result } = renderHook(() => useWallet(), { wrapper })
 
         await waitFor(() => expect(result.current.isLoading).toBe(false))
+        expect(result.current.balance).toBe(50)
+        const callsAfterMount = vi.mocked(paymentsService.getWallet).mock.calls.length
 
-        act(() => {
-            result.current.startPolling()
+        const updatedWallet = { balance: 51, ledger: [], packages: [] }
+        vi.mocked(paymentsService.getWallet).mockResolvedValue(updatedWallet)
+
+        await act(async () => {
+            await result.current.refresh()
         })
 
-        expect(result.current.isPolling).toBe(true)
-
-        act(() => {
-            result.current.stopPolling()
-        })
-
-        expect(result.current.isPolling).toBe(false)
+        expect(vi.mocked(paymentsService.getWallet).mock.calls.length).toBe(callsAfterMount + 1)
+        expect(result.current.balance).toBe(51)
     })
 
     it('multiple hook consumers share the identical synchronized state container', async () => {

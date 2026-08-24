@@ -171,6 +171,8 @@ describe('ReviewService coverage-safe PR orchestration', () => {
             expect.any(Array),
             REVIEW_ID,
             'complete',
+            // Settlement object (mocked usage is zero → refund the full PR reserve).
+            expect.objectContaining({ reviewId: REVIEW_ID, amount: 500 }),
         )
         expect(harness.operations.indexOf('save')).toBeLessThan(harness.operations.indexOf('send:complete'))
     })

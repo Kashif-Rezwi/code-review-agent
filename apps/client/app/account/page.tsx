@@ -1,10 +1,12 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
 import { useSession } from 'next-auth/react'
 import { AppHeader } from '@/components/layout/app-header'
 import { PageHeader } from '@/components/layout/page-header'
 import { useWallet } from '@/lib/use-wallet'
+import { formatCredits } from '@/lib/format-credits'
+import { useDevPackSecret } from '@/lib/dev-pack'
 import { paymentsService } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { CreditCard, RefreshCw, Zap, ShieldCheck, History, ArrowDownRight, ArrowUpRight, Gift, CheckCircle2 } from 'lucide-react'
@@ -19,11 +21,22 @@ declare global {
 }
 
 export default function AccountPage() {
+    // useSearchParams (used by useDevPackSecret) requires a Suspense boundary.
+    return (
+        <Suspense fallback={null}>
+            <AccountPageContent />
+        </Suspense>
+    )
+}
+
+function AccountPageContent() {
     const { data: session } = useSession()
     const token = session?.githubToken
+    const devPack = useDevPackSecret()
 
-    const { balance, ledger, packages, isLoading, isPolling, error: walletError, refresh, startPolling } = useWallet(token)
+    const { balance, ledger, packages, isLoading, error: walletError, refresh, enableDevPack } = useWallet(token)
     const [buyingPackageId, setBuyingPackageId] = useState<string | null>(null)
+    const [paymentPending, setPaymentPending] = useState<boolean>(false)
     const [checkoutError, setCheckoutError] = useState<string | null>(null)
     const [scriptLoaded, setScriptLoaded] = useState<boolean>(() => typeof window !== 'undefined' && Boolean(window.Razorpay))
 
@@ -37,6 +50,15 @@ export default function AccountPage() {
         script.onerror = () => setCheckoutError('Failed to load Razorpay Checkout SDK.')
         document.body.appendChild(script)
     }, [])
+
+    // If the operator opened /account?dev_pack=<secret>, arm the wallet context so
+    // every wallet fetch presents the x-dev-pack header, then refresh to fetch the
+    // package list including the hidden ₹1 pack.
+    useEffect(() => {
+        if (!devPack) return
+        enableDevPack(devPack)
+        void refresh()
+    }, [devPack, enableDevPack, refresh])
 
     const handleBuy = async (packageId: string) => {
         if (!token) {
@@ -52,7 +74,7 @@ export default function AccountPage() {
         setCheckoutError(null)
 
         try {
-            const orderData = await paymentsService.createOrder({ packageId }, token)
+            const orderData = await paymentsService.createOrder({ packageId }, token, devPack ?? undefined)
 
             const options = {
                 key: orderData.keyId,
@@ -63,7 +85,9 @@ export default function AccountPage() {
                 order_id: orderData.razorpayOrderId,
                 handler: () => {
                     setBuyingPackageId(null)
-                    startPolling(orderData.orderId)
+                    // Webhook settles asynchronously — no auto-polling; the user
+                    // refreshes the wallet manually once Razorpay confirms.
+                    setPaymentPending(true)
                 },
                 modal: {
                     ondismiss: () => {
@@ -104,15 +128,27 @@ export default function AccountPage() {
                     </div>
                 )}
 
-                {isPolling && (
-                    <div className="p-4 rounded-xl bg-blue-500/10 border border-blue-500/30 text-blue-300 flex items-center justify-between animate-pulse">
+                {paymentPending && (
+                    <div className="p-4 rounded-xl bg-blue-500/10 border border-blue-500/30 text-blue-300 flex items-center justify-between">
                         <div className="flex items-center gap-3">
-                            <RefreshCw className="w-5 h-5 animate-spin text-blue-400" />
+                            <RefreshCw className="w-5 h-5 text-blue-400" />
                             <div>
-                                <p className="text-sm font-semibold">Payment Received! Syncing Wallet...</p>
-                                <p className="text-xs text-blue-400/80">Your balance will update automatically once the webhook settles.</p>
+                                <p className="text-sm font-semibold">Payment received — credits arrive via webhook.</p>
+                                <p className="text-xs text-blue-400/80">This usually takes a few seconds. Hit Refresh to update your balance.</p>
                             </div>
                         </div>
+                        <Button
+                            variant="secondary"
+                            onClick={() => {
+                                void refresh()
+                                setPaymentPending(false)
+                            }}
+                            disabled={isLoading}
+                            className="flex items-center gap-2 shrink-0"
+                        >
+                            <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+                            <span>Refresh</span>
+                        </Button>
                     </div>
                 )}
 
@@ -133,11 +169,11 @@ export default function AccountPage() {
                             <span>Available Balance</span>
                         </div>
                         <div className="flex items-baseline gap-3">
-                            <span className="text-4xl font-extrabold text-white tracking-tight">{isLoading ? '...' : balance}</span>
+                            <span className="text-4xl font-extrabold text-white tracking-tight">{isLoading ? '...' : formatCredits(balance)}</span>
                             <span className="text-lg font-medium text-slate-400">credits</span>
                         </div>
                         <p className="text-xs text-slate-400">
-                            Costs: Code Review = 5 credits • PR Review = 10 credits • Chat = 1 credit
+                            Pay only for what you use — Code Review ≈ 0.2 • PR Review ≈ 0.8–3 • Chat ≈ 0.03 credits
                         </p>
                     </div>
 
@@ -173,7 +209,7 @@ export default function AccountPage() {
                                 <div className="space-y-2">
                                     <div className="flex items-center justify-between">
                                         <span className="text-sm font-semibold text-blue-400 bg-blue-500/10 px-2.5 py-0.5 rounded-full border border-blue-500/20">
-                                            {pkg.credits} Credits
+                                            {formatCredits(pkg.credits)} Credits
                                         </span>
                                         <ShieldCheck className="w-4 h-4 text-slate-500 group-hover:text-blue-400 transition-colors" />
                                     </div>
@@ -181,8 +217,9 @@ export default function AccountPage() {
                                         ₹{pkg.amountPaise / 100}
                                     </div>
                                     <p className="text-xs text-slate-400">
-                                        approx. {Math.floor(pkg.credits / 5)} code reviews or {Math.floor(pkg.credits / 10)} PR reviews
+                                        ≈ {Math.floor(pkg.credits / 20)} code reviews or {Math.floor(pkg.credits / 100)} PR reviews
                                     </p>
+                                    <p className="text-[11px] text-slate-500">Credits shown after payment processing fee.</p>
                                 </div>
 
                                 <Button
@@ -223,11 +260,13 @@ export default function AccountPage() {
                                                     entry.type === 'FREE_GRANT' ? 'bg-purple-500/10 text-purple-400 border border-purple-500/20' :
                                                     entry.type === 'PURCHASE' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
                                                     entry.type === 'CONSUMPTION_REFUND' ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' :
+                                                    entry.type === 'SETTLEMENT' ? 'bg-teal-500/10 text-teal-400 border border-teal-500/20' :
                                                     'bg-blue-500/10 text-blue-400 border border-blue-500/20'
                                                 }`}>
                                                     {entry.type === 'FREE_GRANT' ? <Gift className="w-4 h-4" /> :
                                                      entry.type === 'PURCHASE' ? <ArrowDownRight className="w-4 h-4" /> :
                                                      entry.type === 'CONSUMPTION_REFUND' ? <CheckCircle2 className="w-4 h-4" /> :
+                                                     entry.type === 'SETTLEMENT' ? <CheckCircle2 className="w-4 h-4" /> :
                                                      <ArrowUpRight className="w-4 h-4" />}
                                                 </div>
                                                 <div>
@@ -238,9 +277,9 @@ export default function AccountPage() {
 
                                             <div className="text-right">
                                                 <p className={`text-sm font-bold ${isPositive ? 'text-emerald-400' : 'text-slate-300'}`}>
-                                                    {isPositive ? `+${entry.amount}` : entry.amount} credits
+                                                    {isPositive ? `+${formatCredits(entry.amount)}` : formatCredits(entry.amount)} credits
                                                 </p>
-                                                <p className="text-xs text-slate-500">Balance: {entry.balanceAfter}</p>
+                                                <p className="text-xs text-slate-500">Balance: {formatCredits(entry.balanceAfter)}</p>
                                             </div>
                                         </div>
                                     )
