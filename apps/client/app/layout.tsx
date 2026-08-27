@@ -2,8 +2,9 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { SessionProvider } from "./session-provider";
-import { ServerWakeupProvider } from "@/lib/server-wakeup-context";
 import { WalletProvider } from "@/context/wallet-context";
+import { ServerStatusProvider } from 'server-active-indicator/react'
+import { API_URL } from '@/lib/api'
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -30,11 +31,11 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-app-bg text-gray-100`}
       >
-        <ServerWakeupProvider>
+        <ServerStatusProvider healthUrl={`${API_URL.replace(/\/$/, '')}/health`}>
           <SessionProvider>
             <WalletProvider>{children}</WalletProvider>
           </SessionProvider>
-        </ServerWakeupProvider>
+        </ServerStatusProvider>
       </body>
     </html>
   );
