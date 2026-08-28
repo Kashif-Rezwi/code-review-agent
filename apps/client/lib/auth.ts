@@ -31,6 +31,11 @@ export const authOptions: NextAuthOptions = {
         GitHubProvider({
             clientId: githubClientId,
             clientSecret: githubClientSecret,
+            // Fix for GitHub's `iss` param (2024+) + openid-client 5.7 issuer validation:
+            // next-auth 4.24.14+ sets issuer: "https://github.com/login/oauth". Pinning here
+            // ensures `issuer must be configured on the issuer` (OAUTH_CALLBACK_ERROR) never
+            // occurs. See cdn.jsdelivr.net/npm/next-auth@4.24.14/providers/github.js
+            issuer: 'https://github.com/login/oauth',
             authorization: {
                 params: {
                     // Identity only — PR fetching uses the server's own GITHUB_TOKEN,
