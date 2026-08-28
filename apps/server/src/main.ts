@@ -24,13 +24,14 @@ async function bootstrap() {
   app.useGlobalPipes(new ValidationPipe({ whitelist: true }))
 
 
-  const frontendUrl = process.env.FRONTEND_URL?.replace(/\/$/, '') || 'http://localhost:3000'
+  const rawFrontendUrl = process.env.FRONTEND_URL?.trim() || 'http://localhost:3000'
+  const frontendUrls = [...new Set(rawFrontendUrl.split(',').map((u) => u.trim().replace(/\/$/, '')).filter(Boolean))]
 
   // localhost is a dev convenience — never trust it in production
   const allowedOrigins =
     process.env.NODE_ENV === 'production'
-      ? [frontendUrl]
-      : [frontendUrl, 'http://localhost:3000']
+      ? frontendUrls
+      : [...new Set([...frontendUrls, 'http://localhost:3000'])]
 
   app.enableCors({
     origin: allowedOrigins,
