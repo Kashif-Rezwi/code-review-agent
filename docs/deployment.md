@@ -94,17 +94,25 @@ A managed Redis instance. The `REDIS_URL` environment variable is automatically 
 
 Configured in [`apps/client/vercel.json`](../apps/client/vercel.json).
 
-The Vercel project's **Root Directory is `apps/client`** — `vercel.json` overrides the install/build commands to run from the monorepo root (`cd ../.. && pnpm …`) so the workspace packages are resolvable. A custom `ignoreCommand` gates builds: a push only triggers a client deploy when the commit ref is `main` **and** the diff touches `apps/client`, `packages/`, or the root manifests.
+The Vercel project's **Root Directory is `apps/client`** — `vercel.json` overrides the install/build commands to run from the monorepo root (`cd ../.. && pnpm …`) so the workspace packages are resolvable. A custom `ignoreCommand` gates builds via `scripts/vercel-ignore.sh`: `main` → Production and `develop` → Preview always build (supports manual Redeploy with `VERCEL_FORCE_NO_BUILD_CACHE`); all other branches are ignored.
 
 ### Required Environment Variables (Vercel Dashboard)
 
-| Variable | Notes |
-|---|---|
-| `NEXTAUTH_URL` | Full public URL of the Vercel deployment |
-| `NEXTAUTH_SECRET` | Random 32+ character secret (generate with `openssl rand -base64 32`) |
-| `GITHUB_CLIENT_ID` | Same GitHub OAuth App as the server |
-| `GITHUB_CLIENT_SECRET` | Same GitHub OAuth App as the server |
-| `NEXT_PUBLIC_API_URL` | The Render.com API URL, e.g. `https://code-review-agent-api.onrender.com` |
+Scope vars per Environment — Production (`main`) and Preview (`develop`) must have **separate values** because GitHub OAuth Apps allow only one callback URL. Do **not** use `All Environments` for `NEXTAUTH_URL`/`GITHUB_*`. `NEXTAUTH_SECRET` and `NEXT_PUBLIC_API_URL` may share a value across both envs or be scoped separately; both work (8 env entries for the 5 vars is correct for separate OAuth Apps).
+
+| Variable | Scope | Notes |
+|---|---|---|
+| `NEXTAUTH_URL` | **Production + Preview separately** | Full public URL of *that* deployment, e.g. `https://code-review-agent-client.vercel.app` for Production, stable preview domain for Preview. No trailing `/`, must be `https://`. Without it NextAuth falls back to `VERCEL_URL` → `redirect_uri_mismatch` → `?error=OAuthCallback` |
+| `NEXTAUTH_SECRET` | Production + Preview (can be same value) | Random 32+ character secret (`openssl rand -base64 32`). Can be shared across envs; can never be empty — missing secret causes `OAuthCallback` with server log `NO_SECRET` |
+| `GITHUB_CLIENT_ID` | **Production + Preview separately** | Production → OAuth App #1 ID, Preview → OAuth App #2 ID. Swapped values cause `invalid_client` → `OAuthCallback` |
+| `GITHUB_CLIENT_SECRET` | **Production + Preview separately** | Paired with the ID above — no whitespace/newline |
+| `NEXT_PUBLIC_API_URL` | Production + Preview (can be same) | The Render.com API URL, e.g. `https://code-review-agent-api.onrender.com`. Inlined at build time — change requires **Redeploy without build cache** |
+
+> **Razorpay note:** The publishable Razorpay `key_id` is delivered to the browser via the `POST /payments/order` response (server-returned `keyId`). No client-side `NEXT_PUBLIC_RAZORPAY_KEY_ID` environment variable is required (R-06 — removed as dead configuration).
+
+> **Preview stable domain:** Vercel Preview URLs are normally unique per commit (`...-git-develop-xxx.vercel.app`). For OAuth to work on Preview, assign a stable domain in Vercel → Settings → Domains → assign to `develop` and use it for Preview `NEXTAUTH_URL` + GitHub App #2 `Authorization callback URL`. Otherwise each new Preview deploy breaks `redirect_uri_mismatch`.
+
+> **Redeploy required:** After changing any env var, redeploy *that* environment without build cache (Vercel → Deployments → … → Redeploy → uncheck "Use existing Build Cache") — see `apps/client/next.config.ts:6-30` fail-fast guards and `apps/client/lib/auth.ts:7-22` which logs real OAuth errors to Function Logs.
 
 > **Razorpay note:** The publishable Razorpay `key_id` is delivered to the browser via the `POST /payments/order` response (server-returned `keyId`). No client-side `NEXT_PUBLIC_RAZORPAY_KEY_ID` environment variable is required (R-06 — removed as dead configuration).
 
@@ -112,14 +120,16 @@ The Vercel project's **Root Directory is `apps/client`** — `vercel.json` overr
 
 ## GitHub OAuth App Setup
 
-Both environments (and local dev) require a GitHub OAuth App.
+You need **separate OAuth Apps** for Production, Preview, and local dev — GitHub allows only **one** Authorization callback URL per App.
 
 1. Go to **GitHub → Settings → Developer settings → OAuth Apps → New OAuth App**
-2. Set **Homepage URL** to your client URL (e.g. `https://your-app.vercel.app`) 
-3. Set **Authorization callback URL** to `{NEXTAUTH_URL}/api/auth/callback/github`
-4. Copy **Client ID** and **Client Secret** into both `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`
+2. Set **Homepage URL** to your client URL (e.g. `https://code-review-agent-client.vercel.app` for Production)
+3. Set **Authorization callback URL** to `{NEXTAUTH_URL}/api/auth/callback/github` — e.g. `https://code-review-agent-client.vercel.app/api/auth/callback/github` (exact, `https`, no trailing slash)
+4. Copy **Client ID** and **Client Secret** into Vercel **Production** `GITHUB_CLIENT_ID`/`SECRET`
+5. Repeat for Preview: create App #2 with Homepage `https://<preview-stable-domain>` and callback `https://<preview-stable-domain>/api/auth/callback/github`, paste into Vercel **Preview** vars
+6. For local dev, create App #3 pointing to `http://localhost:3000` and `http://localhost:3000/api/auth/callback/github`
 
-For local development, create a **separate OAuth App** pointing to `http://localhost:3000`.
+Troubleshooting `?error=OAuthCallback` on `https://code-review-agent-client.vercel.app/login`: check Vercel → Deployments → Production → Function Logs → `.../api/auth/callback/github` for `invalid_client` (wrong `GITHUB_*` pair), `redirect_uri_mismatch` (NEXTAUTH_URL ≠ callback URL), or `NO_SECRET` (missing `NEXTAUTH_SECRET`). All require **Redeploy without build cache** after fixing envs.
 
 ---
 
