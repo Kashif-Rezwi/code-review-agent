@@ -18,3 +18,5 @@ apps/client/package-lock.json
 
 # harness-local state — vendor-neutral repo: local agent/tool settings stay uncommitted
 .claude/
+
+.DS_Store

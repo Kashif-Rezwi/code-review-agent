@@ -1,5 +1,5 @@
 {
     "installCommand": "cd ../.. && pnpm install --frozen-lockfile",
     "buildCommand": "cd ../.. && pnpm --filter client build",
-    "ignoreCommand": "bash -c 'if [ \"$VERCEL_GIT_COMMIT_REF\" != \"main\" ]; then exit 0; else git diff --quiet ${VERCEL_GIT_PREVIOUS_SHA:-HEAD^1} $VERCEL_GIT_COMMIT_SHA ./ ../../packages/ ../../package.json ../../pnpm-lock.yaml ../../pnpm-workspace.yaml; fi'"
+    "ignoreCommand": "bash -c 'if [ \"$VERCEL_FORCE_NO_BUILD_CACHE\" = \"1\" ]; then exit 1; elif [ \"$VERCEL_GIT_COMMIT_REF\" != \"main\" ]; then exit 0; elif [ -z \"$VERCEL_GIT_PREVIOUS_SHA\" ] || [ \"$VERCEL_GIT_PREVIOUS_SHA\" = \"$VERCEL_GIT_COMMIT_SHA\" ]; then exit 1; else git diff --quiet \"$VERCEL_GIT_PREVIOUS_SHA\" \"$VERCEL_GIT_COMMIT_SHA\" -- ./ ../../packages/ ../../package.json ../../pnpm-lock.yaml ../../pnpm-workspace.yaml; fi'"
 }
