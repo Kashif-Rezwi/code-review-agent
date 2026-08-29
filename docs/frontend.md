@@ -10,7 +10,7 @@ The client is a Next.js 16 application using the App Router. It is authenticatio
 
 ```
 apps/client/app/
-├── layout.tsx               # Root layout: font setup, SessionProvider, ServerWakeupProvider, global CSS
+├── layout.tsx               # Root layout: font setup, SessionProvider, ServerStatusProvider, global CSS
 ├── page.tsx                 # Redirect to /review
 ├── session-provider.tsx     # NextAuth SessionProvider wrapper (client component)
 ├── error.tsx                # Route-level error boundary
@@ -195,7 +195,7 @@ Three error boundary levels:
 
 ## Server Wakeup (Render cold starts)
 
-The API runs on Render's free tier, which sleeps after inactivity. To make cold starts feel intentional instead of broken, `ServerWakeupProvider` (`lib/server-wakeup-context.tsx`, mounted in `app/layout.tsx`) and `lib/use-server-wakeup.ts` ping `GET /health` on app load: while the server is unreachable, `components/ui/server-wakeup-banner.tsx` shows a "server is waking up" banner, and a recovery toast confirms when it becomes healthy.
+The API runs on Render's free tier, which sleeps after inactivity. To make cold starts feel intentional instead of broken, the app uses the [`server-active-indicator`](https://www.npmjs.com/package/server-active-indicator) package: `app/layout.tsx` mounts the package's `ServerStatusProvider` (pointed at `GET /health`), and `components/ui/server-wakeup-banner.tsx` (rendered in the app header) consumes the headless `useServerStatus()` hook to show a "server is waking up" banner during a cold start and a brief "server is ready" confirmation on recovery — silent when the backend is already warm.
 
 ---
 
