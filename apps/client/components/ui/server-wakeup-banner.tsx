@@ -1,6 +1,6 @@
 'use client'
 
-/* eslint-disable react-hooks/set-state-in-effect -- dismissed re-arms on waking/offline; mirrors <ServerStatus> default UI (intentional cascading render) */
+/* eslint-disable react-hooks/set-state-in-effect -- intentional cascading render, mirrors <ServerStatus> default UI */
 import { useEffect, useRef, useState } from 'react'
 import { CloudOff, CheckCircle, Loader2, WifiOff, CircleX } from 'lucide-react'
 import { useServerStatus } from 'server-active-indicator/react'
@@ -12,25 +12,14 @@ function formatElapsed(sec: number): string {
 }
 
 /**
- * Inline strip inside AppHeader — powered by `server-active-indicator`.
- * Preserves the exact Render cold-start UX that inspired the npm package:
- *   • silent when warm (unknown/checking or active without a witnessed cold start)
- *   • amber "waking" strip with spinner + live elapsed counter (reveal after 3s)
- *   • green "ready" confirmation for 2.5s after recovery, then auto-dismissed
- *   • extended: red "offline" with Retry (server) or browser-offline message + Retry
- *
- * State lives in `ServerStatusProvider` (root layout) so the timer/dismissed
- * flag survive page navigations. Uses `useServerStatus()` headless hook to
- * keep the original Tailwind markup / colors while gaining the package's
- * backoff, visibility-pause, browser-offline detection and shared registry.
+ * Inline strip in AppHeader: silent when warm, amber "waking" banner with a live
+ * timer, brief green confirmation after recovery, red offline banner with Retry.
+ * Reads the shared monitor from `ServerStatusProvider` (root layout) via the
+ * package's headless hook, keeping the app's own Tailwind styling.
  */
 export function ServerWakeupBanner() {
     const { status, elapsedSeconds, wasCold, offlineKind, refresh } = useServerStatus()
 
-    // Silence-on-success policy mirrors <ServerStatus> default UI:
-    // - initial dismissed=true so a warm first load stays silent
-    // - any waking/offline episode re-arms (dismissed=false, hasSeen=true)
-    // - active && wasCold auto-hides after 2.5s, but only if we witnessed a wake
     const [dismissed, setDismissed] = useState(true)
     const hasSeenWakeOrOfflineRef = useRef(false)
 
@@ -48,7 +37,6 @@ export function ServerWakeupBanner() {
         return () => clearTimeout(t)
     }, [status, wasCold, dismissed])
 
-    // Silence while the monitor hasn't decided, and after a warm start
     if (status === 'unknown' || status === 'checking') return null
     if (status === 'active' && (!wasCold || dismissed)) return null
 
