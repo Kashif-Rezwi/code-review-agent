@@ -19,7 +19,7 @@ Code Review Agent is a monorepo containing two applications (`client` and `serve
 │  │  ┌─────────────────────┐ │    │  ┌───────────┐  ┌──────────────────┐  │  │
 │  │  │  Pages (App Router) │ │    │  │  auth/    │  │  review/         │  │  │
 │  │  │  /review            │ │    │  │           │  │  ├ controller    │  │  │
-│  │  │  /history           │◄├────┤  │  github/  │  │  ├ service       │  │  │
+│  │  │  /history           │ │◄───┤  │  github/  │  │  ├ service       │  │  │
 │  │  │  /standards         │ │    │  │           │  │  ├ processor     │  │  │
 │  │  │  /login             │ │    │  │  rag/     │  │  ├ streamer      │  │  │
 │  │  └─────────────────────┘ │    │  │           │  │  ├ repository    │  │  │

@@ -148,7 +148,7 @@ The Razorpay integration implements a **prepaid credit wallet** model (decision 
 
 ```
                   ┌──────────────────────────────────────────────────────┐
-                  │                  PaymentOrder state machine           │
+                  │                  PaymentOrder state machine          │
                   └──────────────────────────────────────────────────────┘
 
   POST /payments/order                   Razorpay webhook: order.paid

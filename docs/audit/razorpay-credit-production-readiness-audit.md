@@ -42,8 +42,8 @@ Despite the major architectural success on the server and database tiers, this a
 ```
 User (Browser)
      │
-     ├── 1. POST /payments/order ──────────┐
-     │                                     ▼
+     ├── 1. POST /payments/order ───────┐
+     │                                  ▼
      │                          ┌───────────────────────────┐
      │                          │    PaymentsController     │
      │                          │    (UserThrottlerGuard)   │
@@ -236,11 +236,11 @@ $$\text{User.creditBalance} \equiv \sum_{l \in \text{CreditLedger}(\text{userId}
 │ - Request 1 acquires PostgreSQL row lock on User row, decrements balance to 0, count = 1.        │
 │ - Request 2 acquires row lock, checks WHERE creditBalance >= 5 -> evaluates to FALSE (count = 0).│
 │ - Request 2 rolls back and returns HTTP 402 Payment Required.                                    │
-│ - Result: Balance is 0; exactly one review is created. Anti-double-spend lock holds.              │
+│ - Result: Balance is 0; exactly one review is created. Anti-double-spend lock holds.             │
 ├──────────────────────────────────────────────────────────────────────────────────────────────────┤
 │ SCENARIO B: Webhook order.paid arrives twice in a 10ms burst                                     │
 │ - Transaction 1 inserts PaymentEvent (razorpayEventId = 'evt_1') and captures order.             │
-│ - Transaction 2 attempts to insert PaymentEvent with same razorpayEventId -> P2002 violation.     │
+│ - Transaction 2 attempts to insert PaymentEvent with same razorpayEventId -> P2002 violation.    │
 │ - Transaction 2 rolls back; service catches P2002 and returns 'duplicate' (HTTP 200 to Razorpay).│
 │ - Result: Exactly 1 balance increment and 1 PURCHASE ledger entry.                               │
 ├──────────────────────────────────────────────────────────────────────────────────────────────────┤
