@@ -103,13 +103,13 @@ This document defines the system design: payment flow, state machine, database s
    order created ──►│ CREATED │
                     └────┬────┘
                          │
-          ┌──────────────┼──────────────┐
-          │              │              │
-          ▼              ▼              ▼
-    ┌──────────┐  ┌──────────┐  ┌────────────┐
-    │ CAPTURED │  │  FAILED  │  │  EXPIRED   │
-    │ (terminal)│  │(terminal)│  │ (terminal) │
-    └──────────┘  └──────────┘  └────────────┘
+         ┌───────────────┼───────────────┐
+         │               │               │
+         ▼               ▼               ▼
+   ┌────────────┐  ┌────────────┐  ┌────────────┐
+   │  CAPTURED  │  │   FAILED   │  │  EXPIRED   │
+   │ (terminal) │  │ (terminal) │  │ (terminal) │
+   └────────────┘  └────────────┘  └────────────┘
 ```
 
 | Status | Meaning | Transition trigger |

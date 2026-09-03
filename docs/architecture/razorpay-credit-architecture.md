@@ -19,9 +19,9 @@ The **Code Review Agent** employs a **prepaid credit wallet model** to monetize 
 │ 1. Zero Trust in Client Financial State: Pricing, costs, and grants are strictly server-side.    │
 │ 2. Webhook-Exclusive Entitlement: Only HMAC-verified Razorpay webhooks grant credits.            │
 │ 3. Atomic In-Transaction Consumption: Credits are checked and deducted within domain creation    │
-│    transactions, guaranteeing millisecond-zero entity linkage (reviewId) and zero refund churn. │
+│    transactions, guaranteeing millisecond-zero entity linkage (reviewId) and zero refund churn.  │
 │ 4. Single Financial Authority: PaymentsRepository owns all balance & ledger mutations.           │
-│ 5. Universal Client Wallet Synchronization: A single React Context synchronizes wallet state.     │
+│ 5. Universal Client Wallet Synchronization: A single React Context synchronizes wallet state.    │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -74,10 +74,10 @@ The comprehensive audit in [`docs/audit/razorpay-credit-architecture-audit.md`](
          │                         │ Manage Credit Ledger    │ Manage Dispatches
          │                         │ Execute Balance Updates │
          ▼                         ▼                         ▼
-   ┌───────────┐             ┌───────────┐             ┌───────────┐
-   │   User    │             │PaymentOrder│             │  Review   │
-   │           │             │CreditLedger│             │  Dispatch │
-   └───────────┘             └───────────┘             └───────────┘
+   ┌─────────────┐           ┌───────────────┐           ┌─────────────┐
+   │    User     │           │ PaymentOrder  │           │   Review    │
+   │             │           │ CreditLedger  │           │  Dispatch   │
+   └─────────────┘           └───────────────┘           └─────────────┘
 ```
 
 | Entity / Concept | Domain Owner | Authoritative Source of Truth | Who Can Mutate It | Mutation Triggers | External Dependencies |
@@ -197,7 +197,7 @@ flowchart TD
     end
     
     J --> K[Transaction Committed]
-    K --> L[Return { reviewId: review.id }]
+    K --> L["Return { reviewId: review.id }"]
 ```
 
 #### Why Atomic In-Transaction Consumption Is Architecturally Superior:
@@ -279,7 +279,7 @@ For `POST /history/:id/chat` (SSE streaming):
 │ - Two threads process order capture for the same order simultaneously.                           │
 │ - Layer 2 status guard: UPDATE "PaymentOrder" SET status = 'CAPTURED'                            │
 │                         WHERE razorpayOrderId = 'ord_1' AND status IN ('CREATED', 'FAILED').     │
-│ - Only one thread transitions the row; the second sees count = 0 and returns 'already_captured'.│
+│ - Only one thread transitions the row; the second sees count = 0 and returns 'already_captured'. │
 │ - Invariant Guaranteed: Exactly-once credit grant.                                               │
 ├──────────────────────────────────────────────────────────────────────────────────────────────────┤
 │ SCENARIO D: Payment succeeds but database is temporarily unavailable                             │
@@ -295,7 +295,7 @@ For `POST /history/:id/chat` (SSE streaming):
 │ - Invariant Guaranteed: Failed background executions never consume user credits.                 │
 ├──────────────────────────────────────────────────────────────────────────────────────────────────┤
 │ SCENARIO F: User cancels review while worker is running                                          │
-│ - User clicks cancel -> markCancelledAndRefund transitions review PENDING -> CANCELLED.         │
+│ - User clicks cancel -> markCancelledAndRefund transitions review PENDING -> CANCELLED.          │
 │ - 10 credits refunded atomically. Worker checking signal.aborted halts and exits cleanly.        │
 │ - Invariant Guaranteed: Cancelled reviews are refunded exactly once.                             │
 ├──────────────────────────────────────────────────────────────────────────────────────────────────┤
@@ -421,7 +421,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS "CreditLedger_reviewId_type_CONSUMPTION_REFUND
 ```
 CURRENT (Fragmented):
 ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-│  AppHeader   │     │ReviewPageCl. │     │ AccountPage  │
+│  AppHeader   │     │ ReviewPageCl │     │ AccountPage  │
 │ [useWallet]  │     │ [useWallet]  │     │ [useWallet]  │
 └──────┬───────┘     └──────┬───────┘     └──────┬───────┘
        │                    │                    │
@@ -436,12 +436,12 @@ TARGET (Single Shared Context):
 │  - Single active balance, ledger & packages cache      │
 │  - Single polling controller                           │
 │  - Deduplicated initial fetch                          │
-└──────────────┬──────────────────┬──────────────────────┘
-               │                  │
-       ┌───────▼──────┐    ┌──────▼───────┐    ┌──────────▼───┐
-       │  AppHeader   │    │ReviewPageCl. │    │ AccountPage  │
-       │ (useWallet)  │    │ (useWallet)  │    │ (useWallet)  │
-       └──────────────┘    └──────────────┘    └──────────────┘
+└──────┬────────────────────┬────────────────────┬───────┘
+       │                    │                    │
+┌──────▼───────┐     ┌──────▼───────┐     ┌──────▼───────┐
+│  AppHeader   │     │ ReviewPageCl │     │ AccountPage  │
+│ (useWallet)  │     │ (useWallet)  │     │ (useWallet)  │
+└──────────────┘     └──────────────┘     └──────────────┘
 ```
 
 ### 9.2 Reliable Post-Payment Polling (RZC-007 Resolved)
@@ -663,7 +663,7 @@ Option 2: Delegate to `PaymentsRepository.refundCreditsInTx`.
 ├───────────────────┼──────────────────────────────────────────────────────────────────────────────┤
 │ Integration Tests │ • PaymentsController order creation, pending order limit enforcement (F-11)  │
 │                   │ • WebhookController signature check, event dedup, fail-closed amount check   │
-│                   │ • ReviewService.createSession atomic deduction, 402 on insufficient credits │
+│                   │ • ReviewService.createSession atomic deduction, 402 on insufficient credits  │
 │                   │ • ReviewRepository failure refund delegation to PaymentsRepository           │
 ├───────────────────┼──────────────────────────────────────────────────────────────────────────────┤
 │ Concurrency Tests │ • Concurrent review creation on low balance (anti-double-spend lock)         │
@@ -674,7 +674,7 @@ Option 2: Delegate to `PaymentsRepository.refundCreditsInTx`.
 │                   │ • Partial unique index constraints under simulated race conditions           │
 ├───────────────────┼──────────────────────────────────────────────────────────────────────────────┤
 │ End-to-End Tests  │ • Full customer journey in Razorpay Test Mode:                               │
-│                   │   Order -> Checkout Modal -> Webhook -> Polling -> Session -> Completion    │
+│                   │   Order -> Checkout Modal -> Webhook -> Polling -> Session -> Completion     │
 └───────────────────┴──────────────────────────────────────────────────────────────────────────────┘
 ```
 

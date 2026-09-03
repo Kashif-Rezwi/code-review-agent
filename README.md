@@ -54,7 +54,7 @@ Reviews are saved to your history and you can follow up with a chat interface to
 │  │  RAG Retrieval ──► AI Pipeline ──► emit events      │  │     │
 │  │       ▲                │                  │         │  │     │
 │  │  pgvector         streamText()        Redis Streams │  │     │
-│  │  (Neon DB)     (AI Gateway)       event log          │  │     │
+│  │  (Neon DB)     (AI Gateway)       event log         │  │     │
 │  └──────────────────────────────────────┬──────────────┘  │     │
 │                                         │                 │     │
 │                                   Redis ◄─────────────────┘     │

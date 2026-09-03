@@ -128,19 +128,19 @@ The repository is a TypeScript monorepo managed with `pnpm` workspaces:
 
 ### 4.2 Payment State Machine
 ```
-   ┌────────────────────────────────────────────────────────┐
-   │                        CREATED                         │
-   └───────┬───────────────────┬────────────────────┬───────┘
-           │                   │                    │
-  Webhook: │          Webhook: │            Lazy 30m│ timeout
-order.paid │    payment.failed │        check on new│ order
-           ▼                   ▼                    ▼
-   ┌───────────────┐   ┌───────────────┐   ┌────────────────┐
-   │   CAPTURED    │   │    FAILED     │   │    EXPIRED     │
-   │  (Terminal)   │   └───────┬───────┘   └────────┬───────┘
-   └───────▲───────┘           │                    │
-           │                   │ Retry payment      │ Late payment
-           └───────────────────┴────────────────────┘
+         ┌────────────────────────────────────────────────────────┐
+         │                        CREATED                         │
+         └───────┬───────────────────┬────────────────────┬───────┘
+                 │                   │                    │
+        Webhook: │          Webhook: │       Background / │ 30m TTL
+      order.paid │    payment.failed │        Lazy Sweeper│
+                 ▼                   ▼                    ▼
+         ┌───────────────┐   ┌───────────────┐   ┌────────────────┐
+         │   CAPTURED    │   │    FAILED     │   │    EXPIRED     │
+         │  (Terminal)   │   └───────┬───────┘   └────────┬───────┘
+         └───────▲───────┘           │                    │
+                 │                   │ Retry payment      │ Late payment
+                 └───────────────────┴────────────────────┘
 ```
 - **Supported Transitions:**
   - `CREATED -> CAPTURED` (via `order.paid` webhook)
@@ -167,7 +167,7 @@ order.paid │    payment.failed │        check on new│ order
 ├────────────────────────────────────────┬───────────────────────────────────────────────┤
 │ Operation                              │ Mechanism / Source                            │
 ├────────────────────────────────────────┼───────────────────────────────────────────────┤
-│ Welcome Gift (25 credits)              │ `UsersService.findOrCreate` -> `FREE_GRANT`    │
+│ Welcome Gift (25 credits)              │ `UsersService.findOrCreate` -> `FREE_GRANT`   │
 │ Pack Purchase (50 / 200 / 500 credits) │ Razorpay `order.paid` webhook -> `PURCHASE`   │
 │ Review Failure Refund (5 / 10 credits) │ `ReviewRepository.markFailedAndRefund`        │
 │ Review Cancel Refund (5 / 10 credits)  │ `ReviewRepository.markCancelledAndRefund`     │
@@ -175,9 +175,9 @@ order.paid │    payment.failed │        check on new│ order
 └────────────────────────────────────────┴───────────────────────────────────────────────┘
                                          │
                                          ▼
-                               ┌───────────────────┐
-                               │ User.creditBalance│
-                               └─────────┬─────────┘
+                              ┌──────────────────────┐
+                              │  User.creditBalance  │
+                              └──────────┬───────────┘
                                          │
                                          ▼
 ┌────────────────────────────────────────────────────────────────────────────────────────┐

@@ -20,7 +20,7 @@ This implementation plan translates the target architecture into **8 strictly or
 │ Phase 2: Database Integrity, Indexes & Reconciliation Routines (RZC-003, RZC-010)                │
 │ Phase 3: Service-Level Atomic Credit Consumption & Review Session Integration (ADR-001, ADR-007) │
 │ Phase 4: Chat Consumption & Stream Error Refactoring (RZC-011)                                   │
-│ Phase 5: Webhooks, Background Sweeper & Operational Telemetry (RZC-009, RZC-012, RZC-014)       │
+│ Phase 5: Webhooks, Background Sweeper & Operational Telemetry (RZC-009, RZC-012, RZC-014)        │
 │ Phase 6: Frontend Shared Wallet Context & Polling Optimization (ADR-005, RZC-006, RZC-007)       │
 │ Phase 7: Dead Code Removal & Obsolete Guard Elimination (RZC-002, RZC-004, RZC-005)              │
 │ Phase 8: End-to-End Verification, Monorepo Lint & Production Sign-off                            │
