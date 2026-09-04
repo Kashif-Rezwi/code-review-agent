@@ -195,7 +195,7 @@ Three error boundary levels:
 
 ## Server Wakeup (Render cold starts)
 
-The API runs on Render's free tier, which sleeps after inactivity. To make cold starts feel intentional instead of broken, the app uses the [`server-active-indicator`](https://www.npmjs.com/package/server-active-indicator) package: `app/layout.tsx` mounts the package's `ServerStatusProvider` (pointed at `GET /health`), and `components/ui/server-wakeup-banner.tsx` (rendered in the app header) consumes the headless `useServerStatus()` hook to show a "server is waking up" banner during a cold start and a brief "server is ready" confirmation on recovery — silent when the backend is already warm.
+The API runs on Render's free tier, which sleeps after inactivity. To make cold starts feel intentional instead of broken, the app uses the [`server-active-indicator`](https://www.npmjs.com/package/server-active-indicator) package: `app/layout.tsx` mounts the package's `ServerStatusProvider` (pointed at `GET /health`), and `components/layout/app-header.tsx` renders the package's own `<ServerStatus>` banner component (default `banner` variant) inside the sticky app header — mounted on the navbar, not the page body — to show a "server is starting up" banner with a live timer during a cold start, a brief "server is ready" confirmation on recovery, and a red offline banner with a Retry button — silent when the backend is already warm.
 
 ---
 

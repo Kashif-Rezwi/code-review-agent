@@ -55,8 +55,8 @@ importers:
         specifier: ^10.1.0
         version: 10.1.0(@types/react@19.2.14)(react@19.2.3)
       server-active-indicator:
-        specifier: ^0.2.3
-        version: 0.2.3(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
+        specifier: ^0.3.1
+        version: 0.3.1(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
       tailwind-merge:
         specifier: ^3.5.0
         version: 3.5.0
@@ -5383,8 +5383,9 @@ packages:
     resolution: {integrity: sha512-xRXBn0pPqQTVQiC8wyQrKs2MOlX24zQ0POGaj0kultvoOCstBQM5yvOhAVSUwOMjQtTvsPWoNCHfPGwaaQJhTw==}
     engines: {node: '>= 18'}
 
-  server-active-indicator@0.2.3:
-    resolution: {integrity: sha512-+SHoa3odK+tw9D2bUrmfKro/MJnc1bJs+gTrDznHf8F2J/BuoHbDX9q29ZU4s5tSrFZ3z+W7ybP0PDuDpLTD0A==}
+  server-active-indicator@0.3.1:
+    resolution: {integrity: sha512-gOio6yPYT03WZVw+Abox+QGI/+Vsrw5eNH2mFaKkJJrJ/p9t6PnhrpB9GqzqzDKIrHYF5laX+Srt1+bvYQIkSA==}
+    engines: {node: '>=20.3.0'}
     peerDependencies:
       react: ^17.0.0 || ^18.0.0 || ^19.0.0
       react-dom: ^17.0.0 || ^18.0.0 || ^19.0.0
@@ -11916,7 +11917,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  server-active-indicator@0.2.3(react-dom@19.2.3(react@19.2.3))(react@19.2.3):
+  server-active-indicator@0.3.1(react-dom@19.2.3(react@19.2.3))(react@19.2.3):
     optionalDependencies:
       react: 19.2.3
       react-dom: 19.2.3(react@19.2.3)
