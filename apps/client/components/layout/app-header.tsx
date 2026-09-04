@@ -7,7 +7,7 @@ import { Code2, BookOpen, History, Wallet, LogOut } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useSession, signOut } from 'next-auth/react'
 import { useState, useRef, useEffect } from 'react'
-import { ServerWakeupBanner } from '@/components/ui/server-wakeup-banner'
+import { ServerStatus } from 'server-active-indicator/react'
 import { useWallet } from '@/lib/use-wallet'
 import { formatCredits } from '@/lib/format-credits'
 
@@ -107,96 +107,96 @@ export function AppHeader() {
 
                                     {/* Profile menu */}
                                     <div className="relative" ref={menuRef}>
-                                <button
-                                    id="user-menu-btn"
-                                    onClick={() => setMenuOpen(o => !o)}
-                                    className="group flex items-center justify-center h-8 w-8 rounded-full cursor-pointer"
-                                    aria-label="Account menu"
-                                    aria-haspopup="menu"
-                                    aria-expanded={menuOpen}
-                                >
-                                    {session.user.image ? (
-                                        <Image
-                                            src={session.user.image}
-                                            alt={session.user.name ?? 'User'}
-                                            width={28}
-                                            height={28}
-                                            className={cn(
-                                                'rounded-full ring-2 transition-all duration-200',
-                                                menuOpen
-                                                    ? 'ring-blue-400 opacity-100 shadow-[0_0_12px_rgba(59,130,246,0.35)]'
-                                                    : 'ring-slate-600/60 opacity-90 group-hover:ring-blue-400/70 group-hover:opacity-100',
-                                            )}
-                                        />
-                                    ) : (
-                                        <div
-                                            className={cn(
-                                                'w-7 h-7 rounded-full bg-blue-500/20 flex items-center justify-center text-xs text-blue-300 font-semibold ring-2 transition-all duration-200',
-                                                menuOpen
-                                                    ? 'ring-blue-400 opacity-100 shadow-[0_0_12px_rgba(59,130,246,0.35)]'
-                                                    : 'ring-slate-600/60 opacity-90 group-hover:ring-blue-400/70 group-hover:opacity-100',
-                                            )}
+                                        <button
+                                            id="user-menu-btn"
+                                            onClick={() => setMenuOpen(o => !o)}
+                                            className="group flex items-center justify-center h-8 w-8 rounded-full cursor-pointer"
+                                            aria-label="Account menu"
+                                            aria-haspopup="menu"
+                                            aria-expanded={menuOpen}
                                         >
-                                            {session.user.name?.[0] ?? '?'}
-                                        </div>
-                                    )}
-                                </button>
+                                            {session.user.image ? (
+                                                <Image
+                                                    src={session.user.image}
+                                                    alt={session.user.name ?? 'User'}
+                                                    width={28}
+                                                    height={28}
+                                                    className={cn(
+                                                        'rounded-full ring-2 transition-all duration-200',
+                                                        menuOpen
+                                                            ? 'ring-blue-400 opacity-100 shadow-[0_0_12px_rgba(59,130,246,0.35)]'
+                                                            : 'ring-slate-600/60 opacity-90 group-hover:ring-blue-400/70 group-hover:opacity-100',
+                                                    )}
+                                                />
+                                            ) : (
+                                                <div
+                                                    className={cn(
+                                                        'w-7 h-7 rounded-full bg-blue-500/20 flex items-center justify-center text-xs text-blue-300 font-semibold ring-2 transition-all duration-200',
+                                                        menuOpen
+                                                            ? 'ring-blue-400 opacity-100 shadow-[0_0_12px_rgba(59,130,246,0.35)]'
+                                                            : 'ring-slate-600/60 opacity-90 group-hover:ring-blue-400/70 group-hover:opacity-100',
+                                                    )}
+                                                >
+                                                    {session.user.name?.[0] ?? '?'}
+                                                </div>
+                                            )}
+                                        </button>
 
-                                {menuOpen && (
-                                    <div
-                                        role="menu"
-                                        aria-label="Account"
-                                        className="absolute right-0 mt-2 w-64 z-20 bg-[#0f1117] border border-white/10 rounded-2xl shadow-2xl overflow-hidden shadow-black/80 animate-in fade-in zoom-in-95 slide-in-from-top-1 duration-150"
-                                    >
-                                        {session.user && (
-                                            <div className="flex items-center gap-3 px-4 py-4 border-b border-white/5">
-                                                {session.user.image ? (
-                                                    <Image
-                                                        src={session.user.image}
-                                                        alt=""
-                                                        width={36}
-                                                        height={36}
-                                                        className="rounded-full ring-2 ring-blue-400/50 shrink-0"
-                                                    />
-                                                ) : (
-                                                    <div className="w-9 h-9 rounded-full bg-blue-500/20 flex items-center justify-center text-sm text-blue-300 font-semibold ring-2 ring-blue-400/50 shrink-0">
-                                                        {session.user.name?.[0] ?? '?'}
+                                        {menuOpen && (
+                                            <div
+                                                role="menu"
+                                                aria-label="Account"
+                                                className="absolute right-0 mt-2 w-64 z-20 bg-[#0f1117] border border-white/10 rounded-2xl shadow-2xl overflow-hidden shadow-black/80 animate-in fade-in zoom-in-95 slide-in-from-top-1 duration-150"
+                                            >
+                                                {session.user && (
+                                                    <div className="flex items-center gap-3 px-4 py-4 border-b border-white/5">
+                                                        {session.user.image ? (
+                                                            <Image
+                                                                src={session.user.image}
+                                                                alt=""
+                                                                width={36}
+                                                                height={36}
+                                                                className="rounded-full ring-2 ring-blue-400/50 shrink-0"
+                                                            />
+                                                        ) : (
+                                                            <div className="w-9 h-9 rounded-full bg-blue-500/20 flex items-center justify-center text-sm text-blue-300 font-semibold ring-2 ring-blue-400/50 shrink-0">
+                                                                {session.user.name?.[0] ?? '?'}
+                                                            </div>
+                                                        )}
+                                                        <div className="min-w-0">
+                                                            <p className="text-sm font-semibold text-white truncate">{session.user.name}</p>
+                                                            <p className="text-xs text-slate-400 truncate mt-0.5">{session.user.email}</p>
+                                                        </div>
                                                     </div>
                                                 )}
-                                                <div className="min-w-0">
-                                                    <p className="text-sm font-semibold text-white truncate">{session.user.name}</p>
-                                                    <p className="text-xs text-slate-400 truncate mt-0.5">{session.user.email}</p>
+                                                <div className="p-1.5 space-y-1">
+                                                    <Link
+                                                        href="/account"
+                                                        onClick={() => setMenuOpen(false)}
+                                                        className="w-full flex items-center gap-3 px-3.5 py-2.5 text-sm font-medium text-slate-300 hover:text-white hover:bg-white/5 rounded-xl transition-colors cursor-pointer"
+                                                    >
+                                                        <Wallet className="w-4 h-4 text-blue-400" />
+                                                        Account & Credits
+                                                    </Link>
+                                                    <button
+                                                        id="signout-btn"
+                                                        onClick={() => signOut({ callbackUrl: '/login' })}
+                                                        className="w-full flex items-center gap-3 px-3.5 py-2.5 text-sm font-medium text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-xl transition-colors cursor-pointer"
+                                                    >
+                                                        <LogOut className="w-4 h-4" aria-hidden />
+                                                        Sign out
+                                                    </button>
                                                 </div>
                                             </div>
                                         )}
-                                        <div className="p-1.5 space-y-1">
-                                            <Link
-                                                href="/account"
-                                                onClick={() => setMenuOpen(false)}
-                                                className="w-full flex items-center gap-3 px-3.5 py-2.5 text-sm font-medium text-slate-300 hover:text-white hover:bg-white/5 rounded-xl transition-colors cursor-pointer"
-                                            >
-                                                <Wallet className="w-4 h-4 text-blue-400" />
-                                                Account & Credits
-                                            </Link>
-                                            <button
-                                                id="signout-btn"
-                                                onClick={() => signOut({ callbackUrl: '/login' })}
-                                                className="w-full flex items-center gap-3 px-3.5 py-2.5 text-sm font-medium text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-xl transition-colors cursor-pointer"
-                                            >
-                                                <LogOut className="w-4 h-4" aria-hidden />
-                                                Sign out
-                                            </button>
-                                        </div>
                                     </div>
-                                )}
-                                </div>
                                 </div>
                             )
                         )}
                     </div>
                 </div>
             </header>
-            <ServerWakeupBanner />
+            <ServerStatus />
         </>
     )
 }
